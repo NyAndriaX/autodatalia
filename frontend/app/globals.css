@@ -168,6 +168,21 @@ body {
     color 0.3s ease, box-shadow 0.2s ease;
 }
 
+/* Tailwind v4 Preflight no longer sets buttons to a pointer cursor, so
+   buttons styled with inline styles (profile menu, tabs, chips, …) showed a
+   text/default cursor. Restore the affordance globally. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+label[for],
+summary {
+  cursor: pointer;
+}
+
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
 /* Accessible keyboard focus ring (mouse clicks stay clean). */
 :focus-visible {
   outline: 2px solid var(--accent-primary);

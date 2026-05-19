@@ -1,7 +1,7 @@
 "use client";
 
 import { useSelector, useDispatch } from "react-redux";
-import { setContent, togglePlatform, setMode, setTemplate } from "../../store/editorSlice";
+import { setContent, togglePlatform, setMode, setTemplate, selectVariant } from "../../store/editorSlice";
 import {
   generateContentThunk,
   applyQuickActionThunk,
@@ -9,6 +9,7 @@ import {
   submitForValidationThunk,
   publishNowThunk,
 } from "../../store/editorThunks";
+import { schedulePostThunk } from "../../store/calendarThunks";
 import {
   Sparkles,
   ArrowDownToLine,
@@ -21,10 +22,8 @@ import {
   Hash,
   FileText,
   PenLine,
-  Facebook,
-  Instagram,
-  Linkedin,
-  Video,
+  CalendarClock,
+  RefreshCw,
   Loader2,
   Check,
   Type,
@@ -36,13 +35,16 @@ import {
 } from "lucide-react";
 import { useState, useMemo, useRef, useCallback } from "react";
 import MediaUploader from "./MediaUploader";
+import ScheduleModal from "./ScheduleModal";
+import { PLATFORMS } from "../../lib/platforms";
+import { useIsMobile } from "../../lib/useIsMobile";
 
-/* ——— Platform Config ——— */
-const PLATFORMS = [
-  { id: "facebook", label: "Facebook", icon: Facebook, color: "#1877F2", maxChars: 63206, maxHashtags: 30, className: "platform-facebook" },
-  { id: "instagram", label: "Instagram", icon: Instagram, color: "#E1306C", maxChars: 2200, maxHashtags: 30, className: "platform-instagram" },
-  { id: "tiktok", label: "TikTok", icon: Video, color: "var(--platform-tiktok-fg)", maxChars: 2200, maxHashtags: 5, className: "platform-tiktok" },
-  { id: "linkedin", label: "LinkedIn", icon: Linkedin, color: "#0A66C2", maxChars: 3000, maxHashtags: 5, className: "platform-linkedin" },
+/* Suggested hashtags (skeleton — a contextual AI suggester wires here later,
+   plan task HT-T01). */
+const SUGGESTED_HASHTAGS = [
+  "#marketing", "#socialmedia", "#contentcreation", "#branding",
+  "#digitalmarketing", "#growth", "#smallbusiness", "#ai",
+  "#automation", "#strategy", "#engagement", "#trending",
 ];
 
 const MODES = [
@@ -68,6 +70,14 @@ export default function CreationEditor() {
   const dispatch = useDispatch();
   const { currentPost, aiGeneration } = useSelector((state) => state.editor);
   const [currentPreviewIdx, setCurrentPreviewIdx] = useState(0);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [showHashtags, setShowHashtags] = useState(false);
+  const [confirmRegen, setConfirmRegen] = useState(false);
+  const isMobile = useIsMobile();
+
+  // Rough token estimate so the user sees the cost before paying for it.
+  const estTokens = (n) =>
+    Math.ceil(currentPost.content.length / 4) + 180 * n;
 
   const activePlatforms = useMemo(
     () => PLATFORMS.filter((p) => currentPost.platforms[p.id]),
@@ -107,12 +117,16 @@ export default function CreationEditor() {
 
   return (
     <div
-      className="flex h-full min-h-0 animate-fade-in"
+      className={`flex h-full min-h-0 animate-fade-in ${
+        isMobile ? "flex-col overflow-y-auto" : ""
+      }`}
       style={{ gap: "1px", background: "var(--border-default)" }}
     >
       {/* ═══ LEFT PANEL — Input & Controls ═══ */}
       <div
-        className="flex min-w-0 flex-1 flex-col overflow-hidden"
+        className={`flex min-w-0 flex-col ${
+          isMobile ? "w-full" : "flex-1 overflow-hidden"
+        }`}
         style={{ background: "var(--bg-primary)" }}
       >
         {/* Mode Selector */}
@@ -179,7 +193,11 @@ export default function CreationEditor() {
         </div>
 
         {/* Content Editor Area */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5">
+        <div
+          className={`px-6 py-5 ${
+            isMobile ? "" : "flex-1 min-h-0 overflow-y-auto"
+          }`}
+        >
 
           {/* Template selector — only visible in template mode */}
           {currentPost.mode === "template" && (
@@ -262,6 +280,86 @@ export default function CreationEditor() {
             </div>
           </div>
 
+          {/* AI Variants — pick between the alternatives the LLM Router
+              returned (Redux already holds them; CR-T05 in the plan). */}
+          {aiGeneration.variants.length > 0 && (
+            <div className="mt-5 animate-fade-in">
+              <p
+                className="text-xs font-semibold uppercase tracking-wider mb-2"
+                style={{ color: "var(--text-tertiary)" }}
+              >
+                AI Variants
+              </p>
+              <div className="flex gap-2 flex-wrap">
+                {aiGeneration.variants.map((v, i) => {
+                  const active = aiGeneration.selectedVariant === i;
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => dispatch(selectVariant(i))}
+                      className="text-left rounded-lg p-3 transition-all"
+                      style={{
+                        width: 168,
+                        background: active ? "rgba(99,102,241,0.10)" : "var(--bg-tertiary)",
+                        border: `1px solid ${active ? "var(--border-active)" : "var(--border-default)"}`,
+                      }}
+                    >
+                      <span
+                        className="text-[11px] font-semibold block mb-1"
+                        style={{ color: active ? "var(--accent-primary)" : "var(--text-tertiary)" }}
+                      >
+                        Variant {i + 1}
+                        {active ? " • selected" : ""}
+                      </span>
+                      <span
+                        className="text-xs block line-clamp-3"
+                        style={{ color: "var(--text-secondary)" }}
+                      >
+                        {v.text}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Hashtag suggester (skeleton — HT-T01 contextual AI wires here) */}
+          <div className="mt-5">
+            <button
+              onClick={() => setShowHashtags((v) => !v)}
+              className="btn-secondary inline-flex items-center gap-2 text-xs"
+            >
+              <Hash size={14} aria-hidden="true" />
+              Suggest Hashtags
+            </button>
+            {showHashtags && (
+              <div className="flex gap-2 flex-wrap mt-3 animate-fade-in">
+                {SUGGESTED_HASHTAGS.map((tag) => (
+                  <button
+                    key={tag}
+                    onClick={() => {
+                      const c = currentPost.content;
+                      const sep = c === "" || c.endsWith(" ") || c.endsWith("\n") ? "" : " ";
+                      dispatch(setContent(c + sep + tag));
+                    }}
+                    className="text-xs px-2.5 py-1 rounded-full transition-all"
+                    style={{
+                      background: "var(--bg-tertiary)",
+                      border: "1px solid var(--border-default)",
+                      color: "var(--accent-primary)",
+                    }}
+                  >
+                    {tag}
+                  </button>
+                ))}
+                <span className="text-[11px] self-center" style={{ color: "var(--text-muted)" }}>
+                  Mock list — contextual AI suggester wires here (HT-T01)
+                </span>
+              </div>
+            )}
+          </div>
+
           {/* Media upload */}
           <div className="mt-6">
             <MediaUploader />
@@ -326,8 +424,40 @@ export default function CreationEditor() {
               )}
             </button>
             <p className="text-xs text-center mt-2" style={{ color: "var(--text-muted)" }}>
-              Triggers Python FastAPI → LLM Router (falls back to local mock if offline)
+              Unchanged prompt reuses the last result — no tokens spent.
             </p>
+            {aiGeneration.variants.length > 0 && (
+              <div className="flex items-center justify-center gap-4 mt-2">
+                <button
+                  onClick={() => {
+                    if (!confirmRegen) {
+                      setConfirmRegen(true);
+                      setTimeout(() => setConfirmRegen(false), 4000);
+                      return;
+                    }
+                    setConfirmRegen(false);
+                    dispatch(generateContentThunk(true, 1));
+                  }}
+                  disabled={aiGeneration.isGenerating}
+                  className="text-xs font-medium inline-flex items-center gap-1"
+                  style={{ color: confirmRegen ? "var(--status-pending)" : "var(--accent-primary)" }}
+                  title="Force a fresh generation (spends tokens)"
+                >
+                  <RefreshCw size={12} aria-hidden="true" />
+                  {confirmRegen ? `Confirm · ~${estTokens(1)} tokens` : "Regenerate"}
+                </button>
+                <button
+                  onClick={() => dispatch(generateContentThunk(true, 3))}
+                  disabled={aiGeneration.isGenerating}
+                  className="text-xs font-medium inline-flex items-center gap-1"
+                  style={{ color: "var(--accent-primary)" }}
+                  title={`Generate 3 alternatives (~${estTokens(3)} tokens)`}
+                >
+                  <Sparkles size={12} aria-hidden="true" />
+                  + Alternatives
+                </button>
+              </div>
+            )}
             {aiGeneration.error && (
               <p className="text-xs text-center mt-1" style={{ color: "var(--status-error)" }} role="alert">
                 {aiGeneration.error}
@@ -359,6 +489,15 @@ export default function CreationEditor() {
             <MessageSquare size={16} aria-hidden="true" />
             Submit for Validation
           </button>
+          <button
+            id="schedule-btn"
+            className="btn-secondary flex items-center gap-2"
+            onClick={() => setShowSchedule(true)}
+            aria-label="Schedule this post on the calendar"
+          >
+            <CalendarClock size={16} aria-hidden="true" />
+            Schedule…
+          </button>
           <div className="flex-1" />
           <button
             id="publish-now-btn"
@@ -374,37 +513,21 @@ export default function CreationEditor() {
 
       {/* ═══ RIGHT PANEL — Live Multi-Platform Preview ═══ */}
       <div
-        className="relative z-10 flex w-[430px] min-w-[390px] shrink-0 flex-col overflow-hidden"
+        className={`relative z-10 flex shrink-0 flex-col overflow-hidden ${
+          isMobile ? "w-full" : "w-[430px] min-w-[390px]"
+        }`}
         style={{
           background: "var(--bg-elevated)",
           boxShadow: "inset 1px 0 0 var(--border-default), -18px 0 40px rgba(15, 23, 42, 0.08)",
+          minHeight: isMobile ? "70vh" : undefined,
         }}
         aria-label="Live post preview"
       >
-        <div
-          className="px-5 py-4 shrink-0 flex items-center justify-between"
-          style={{
-            borderBottom: "1px solid var(--border-default)",
-            background: "linear-gradient(180deg, rgba(59,130,246,0.07), rgba(59,130,246,0))",
-          }}
-        >
-          <div>
-            <h3 className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
-              Live Preview
-            </h3>
-            <p className="mt-1 text-[11px]" style={{ color: "var(--text-muted)" }}>
-              Updates live as you type
-            </p>
-          </div>
-          <span className="badge badge-draft">
-            {activePlatforms.length} platform{activePlatforms.length !== 1 ? "s" : ""}
-          </span>
-        </div>
-
-        {/* Platform navigation tabs */}
+        {/* No bulky header — the preview itself owns the panel. A compact
+            platform switcher only appears when more than one is selected. */}
         {activePlatforms.length > 1 && (
           <div
-            className="px-4 py-2 shrink-0 flex gap-1 overflow-x-auto"
+            className="px-3 py-1.5 shrink-0 flex gap-1 overflow-x-auto"
             style={{ borderBottom: "1px solid var(--border-default)" }}
             role="tablist"
             aria-label="Platform previews"
@@ -449,11 +572,24 @@ export default function CreationEditor() {
               <p className="text-xs mt-1">Toggle platforms on the left to preview</p>
             </div>
           ) : (
-            <div className="flex min-h-0 flex-1 flex-col items-center justify-center">
+            <div className="flex min-h-0 flex-1 flex-col items-center">
               {activePlatforms.map((platform, idx) => {
                 if (idx !== safePreviewIdx) return null;
+                // Frame width per orientation so the *whole* card keeps the
+                // platform's real proportions: TikTok reads as a 9:16 phone,
+                // Instagram a 1:1 square, Facebook/LinkedIn a 16:9 landscape.
+                const frameWidth =
+                  platform.id === "tiktok"
+                    ? 252
+                    : platform.id === "instagram"
+                    ? 330
+                    : 376;
                 return (
-                  <div key={platform.id} className="w-full max-w-[360px] animate-fade-in">
+                  <div
+                    key={platform.id}
+                    className="mx-auto my-auto animate-fade-in"
+                    style={{ width: frameWidth, maxWidth: "100%" }}
+                  >
                     <PlatformPreview
                       platform={platform}
                       content={currentPost.content}
@@ -467,6 +603,18 @@ export default function CreationEditor() {
           )}
         </div>
       </div>
+
+      {showSchedule && (
+        <ScheduleModal
+          initialContent={currentPost.content}
+          initialPlatforms={currentPost.platforms}
+          onClose={() => setShowSchedule(false)}
+          onSchedule={(post) => {
+            dispatch(schedulePostThunk({ post, date: post.scheduledDate }));
+            setShowSchedule(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -480,7 +628,6 @@ function PlatformPreview({ platform, content, hashtagCount, media = [] }) {
   const isVertical = platform.id === "tiktok";
   const isSquare = platform.id === "instagram";
   const aspectRatio = isVertical ? "9 / 16" : isSquare ? "1 / 1" : "16 / 9";
-  const maxHeight = isVertical ? 320 : isSquare ? 260 : 210;
 
   // TikTok's brand color is a theme var (readable text), so use a fixed dark
   // chip as the avatar background to keep white initials legible.
@@ -514,8 +661,8 @@ function PlatformPreview({ platform, content, hashtagCount, media = [] }) {
       <div
         className="relative flex items-center justify-center"
         style={{
+          width: "100%",
           aspectRatio,
-          maxHeight,
           background: hero
             ? "var(--bg-elevated)"
             : "linear-gradient(135deg, var(--bg-tertiary), var(--bg-elevated))",

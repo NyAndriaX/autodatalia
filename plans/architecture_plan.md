@@ -1,8 +1,8 @@
 # Architecture & Plan Technique — DATALIA Marketing Automation
 
 > **Durée totale :** ~18 jours (144h)  
-> **Version :** v1.1 — Mai 2026  
-> **Statut :** 📝 Planification
+> **Version :** v1.2 — Mai 2026  
+> **Statut :** 🚧 En cours — Jour 1 complété (Dashboard UI)
 
 ---
 
@@ -162,6 +162,24 @@
 | **INF-T09** | **⚠ CLIENT : Valider charte graphique / brand kit** | — |
 | **INF-T10** | **⚠ CLIENT : Accès au serveur / VPS de production** | — |
 
+### Récapitulatif des heures
+
+| Module | Heures |
+|---|---|
+| Création de Contenu | 18h |
+| Templates & Brand Kit | 7h |
+| Validation Telegram | 21h |
+| Calendrier & Drag-Drop | 7h |
+| Posting & Publication | 11h |
+| Plateformes Connectées | 17h |
+| Médias & Hashtags | 6.5h |
+| Utilisateurs & Workflow | 7h |
+| Analytics & Config | 6.5h |
+| Front-End Dashboard | 21h |
+| Intégration Vidéo IA | 10h |
+| Infra & Déploiement | 11h |
+| **Total** | **~144h** |
+
 ---
 
 ## 3. Workflows Clés
@@ -267,7 +285,7 @@
 
 ## 6. Prérequis Client (Bloquants)
 
-Ces éléments doivent être fournis **avant le démarrage** pour ne pas impacter le planning de 14 jours :
+Ces éléments doivent être fournis **avant le démarrage** pour ne pas impacter le planning de 18 jours :
 
 | # | Prérequis | Impact si absent |
 |---|---|---|

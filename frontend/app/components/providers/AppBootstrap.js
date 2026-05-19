@@ -3,8 +3,10 @@
 import { useEffect, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { setTheme } from "../../store/uiSlice";
+import { hydrateScheduledPosts } from "../../store/calendarSlice";
 import { restoreSessionThunk } from "../../store/authThunks";
 import { loadMessagesThunk } from "../../store/searchThunks";
+import { loadScheduledPosts, saveScheduledPosts } from "../../lib/calendarStorage";
 import {
   getStoredThemePref,
   storeThemePref,
@@ -17,6 +19,7 @@ import {
 export default function AppBootstrap() {
   const dispatch = useDispatch();
   const theme = useSelector((s) => s.ui.theme);
+  const scheduledPosts = useSelector((s) => s.calendar.scheduledPosts);
   const didInit = useRef(false);
 
   // One-time hydration.
@@ -26,7 +29,15 @@ export default function AppBootstrap() {
     dispatch(setTheme(getStoredThemePref()));
     dispatch(restoreSessionThunk());
     dispatch(loadMessagesThunk());
+    const storedPosts = loadScheduledPosts();
+    if (storedPosts) dispatch(hydrateScheduledPosts(storedPosts));
   }, [dispatch]);
+
+  // Persist scheduled posts whenever they change (after first init tick).
+  useEffect(() => {
+    if (!didInit.current) return;
+    saveScheduledPosts(scheduledPosts);
+  }, [scheduledPosts]);
 
   // Keep <html data-theme> + storage in sync with the preference, and follow
   // the OS when the preference is "system".

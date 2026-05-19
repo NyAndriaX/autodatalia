@@ -48,36 +48,42 @@ docker compose up --build
 
 Compose reads these from `infra/.env` automatically.
 
-## n8n workflow setup
+## n8n workflows — native nodes only
+
+We **do not use the Instagram node** (or any 3rd-party upload node). All
+external calls are plain **HTTP Request** nodes. See
+[`n8n/README.md`](n8n/README.md) for the full setup and import
+[`n8n/webhook-template.json`](n8n/webhook-template.json) as the starter.
 
 ```
-Trigger ─▶ HTTP Request (POST /captions/generate) ─▶ Code (Base64→Binary) ─▶ Instagram (Upload)
+Webhook ─▶ Code (normalize) ─▶ HTTP Request (Graph API / Telegram / backend) ─▶ Respond
 ```
 
-1. **HTTP Request node** — `POST http://caption-api:8000/captions/generate`
-   (use the compose service name `caption-api`, not `localhost`, from inside n8n).
-2. **Code node** — convert `image_base64` → binary:
+- **AI captions/generation**: HTTP Request → `POST http://caption-api:8000/generate`
+  (or `/captions/generate`). From inside n8n use the compose service name
+  `caption-api`, not `localhost`.
+- **Media**: uploaded via the backend `POST /upload`, which returns a public
+  URL. n8n forwards that URL to the platform API — no upload node needed.
+- **Publish to Instagram**: 2 HTTP Request nodes (create container →
+  `media_publish`) against `graph.facebook.com` — details in
+  [`n8n/README.md`](n8n/README.md).
 
-   ```javascript
-   const newItems = [];
-   for (const inputItem of $input.all()) {
-     for (const dataItem of inputItem.json?.items ?? []) {
-       if (!dataItem.image_base64) continue;
-       const buf = Buffer.from(dataItem.image_base64.split(',')[1], 'base64');
-       newItems.push({
-         json: dataItem,
-         binary: { data: await this.helpers.prepareBinaryData(buf, dataItem.filename, 'image/png') },
-       });
-     }
-   }
-   return newItems;
-   ```
+## Frontend webhooks
 
-3. **Instagram node** — upload using binary field `data`.
+The dashboard's Save / Submit-for-Validation / Publish / **Schedule** buttons
+POST the post JSON to n8n webhooks when configured. Import the template once
+per endpoint (paths & env-var mapping in [`n8n/README.md`](n8n/README.md)),
+then set the matching `NEXT_PUBLIC_N8N_*` vars in
+[`../frontend/.env.local`](../frontend/). Until set, the frontend updates
+status locally and notifies the user — no breakage.
 
-## Frontend webhooks (not built yet)
+## Backend endpoints available to n8n / the dashboard
 
-The dashboard's Save / Submit-for-Validation / Publish buttons POST the post JSON
-to n8n webhooks when configured. Create the webhook workflows here, then set the
-matching `NEXT_PUBLIC_N8N_*` vars in [`../frontend/.env.local`](../frontend/). Until
-then the frontend updates status locally and notifies the user — no breakage.
+| Method | Path | Purpose |
+|---|---|---|
+| `GET`  | `/health` | Liveness (Topbar status dot) |
+| `POST` | `/generate` | Prompt-driven content (editor "Generate via AI") |
+| `POST` | `/transform` | Quick AI actions (shorten/expand/tone) |
+| `POST` | `/upload` | Store image/video, returns public URL |
+| `GET`  | `/search?q=` | Search media in the content dir |
+| `POST` | `/captions/generate` | Caption server-side `content/` images |

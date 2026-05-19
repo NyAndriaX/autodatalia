@@ -11,7 +11,8 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
     depends_on:
-      - caption-api
+      caption-api:
+        condition: service_healthy
 
   caption-api:
     build:
@@ -20,11 +21,19 @@ services:
     restart: always
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     environment:
       AI_API_BASE_URL: ${AI_API_BASE_URL:-https://openrouter.ai/api/v1}
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-google/gemini-2.0-flash-lite-001}
-      AI_INCLUDE_IMAGES: ${AI_INCLUDE_IMAGES:-true}
+      AI_MODEL_FAST: ${AI_MODEL_FAST:-google/gemini-2.0-flash-lite-001}
+      AI_INCLUDE_IMAGES: ${AI_INCLUDE_IMAGES:-false}
+      AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-200}
       CONTENT_DIR: /app/content
     volumes:
       - ../backend/content:/app/content

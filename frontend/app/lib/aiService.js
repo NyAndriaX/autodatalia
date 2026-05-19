@@ -23,25 +23,98 @@ function mockDelay(ms = 1200) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Entry point for prompt-driven generation.
-// Currently falls back to mock because the backend only captions server-side images.
-// When a /generate endpoint is added, replace this one function.
-export async function generateContent({ prompt, platforms, template } = {}) {
+// ── Token conservation ─────────────────────────────────────────────────
+// Every real AI call costs money. We never call the model when the request
+// is identical to the previous one — the result is memoized and returned
+// instantly with zero tokens spent. A `force` flag lets the user explicitly
+// pay for a fresh generation.
+
+const MAX_PROMPT_CHARS = 2000; // bound input tokens regardless of textarea size
+const ZERO_USAGE = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+const CACHE_KEY = "datalia.ai.genCache";
+
+// Normalize so cosmetic edits (extra spaces, case, trailing newline) map to
+// the SAME signature → trivial changes reuse the cached result, no re-prompt.
+function generationSignature({ prompt, platforms, template, variants = 1 } = {}) {
+  const active = Object.keys(platforms || {})
+    .filter((k) => platforms[k])
+    .sort()
+    .join(",");
+  const norm = (prompt || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_PROMPT_CHARS);
+  return `${norm}|${active}|${template || ""}|${variants}`;
+}
+
+// Cache persists across reloads so a refresh never re-bills a prompt.
+function loadGenCache() {
+  if (typeof window === "undefined") return { sig: null, variants: null };
+  try {
+    return JSON.parse(window.localStorage.getItem(CACHE_KEY)) || { sig: null, variants: null };
+  } catch {
+    return { sig: null, variants: null };
+  }
+}
+let _genCache = loadGenCache();
+function saveGenCache() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(CACHE_KEY, JSON.stringify(_genCache));
+  } catch {
+    /* quota/private mode — in-memory cache still works */
+  }
+}
+
+/** True when generate() would return a cached result (no tokens). */
+export function isGenerationCached(args) {
+  return _genCache.sig !== null && _genCache.sig === generationSignature(args);
+}
+
+// Prompt-driven generation. Short-circuits to the cached result for an
+// unchanged (or only cosmetically-changed) request; only hits the backend
+// on first run, a real change, more variants, or an explicit `force`.
+// Returns { variants, usage, cached }.
+export async function generateContent({
+  prompt,
+  platforms,
+  template,
+  variants: variantCount = 1,
+  force = false,
+} = {}) {
+  const sig = generationSignature({ prompt, platforms, template, variants: variantCount });
+  if (!force && _genCache.sig === sig && _genCache.variants) {
+    return { variants: _genCache.variants, usage: ZERO_USAGE, cached: true };
+  }
+
+  let variants;
+  let usage = ZERO_USAGE;
   if (!config.apiBaseUrl) {
     await mockDelay();
-    return MOCK_VARIANTS;
+    variants = MOCK_VARIANTS.slice(0, variantCount);
+  } else {
+    try {
+      const data = await apiFetch("/generate", {
+        method: "POST",
+        body: JSON.stringify({
+          prompt: (prompt || "").slice(0, MAX_PROMPT_CHARS),
+          platforms,
+          template,
+          variants: variantCount,
+        }),
+      });
+      if (!Array.isArray(data?.variants) || !data.variants.length) throw new Error("empty");
+      variants = data.variants;
+      usage = data.usage || ZERO_USAGE;
+    } catch {
+      await mockDelay();
+      variants = MOCK_VARIANTS.slice(0, variantCount);
+    }
   }
-  try {
-    const data = await apiFetch("/generate", {
-      method: "POST",
-      body: JSON.stringify({ prompt, platforms, template }),
-    });
-    if (!Array.isArray(data?.variants) || !data.variants.length) throw new Error("empty");
-    return data.variants;
-  } catch {
-    await mockDelay();
-    return MOCK_VARIANTS;
-  }
+  _genCache = { sig, variants };
+  saveGenCache();
+  return { variants, usage, cached: false };
 }
 
 // Transform existing content with a quick AI action.
@@ -56,8 +129,21 @@ const TRANSFORMS = {
     t.replace(/!/g, ".").replace(/🚀|👀|💬|📩|😊/g, "").replace(/\n{3,}/g, "\n\n").trim(),
 };
 
+// Quick actions run LOCALLY (zero tokens) by design — spamming shorten/
+// expand/tone costs nothing. Results are also memoized per (action, text)
+// so repeats are instant, and so this stays free if it's ever pointed at
+// the backend /transform endpoint.
+const _qaCache = new Map();
+
 export async function applyQuickAction(content, action) {
+  const key = `${action}::${content}`;
+  if (_qaCache.has(key)) return _qaCache.get(key);
+
   await mockDelay(600);
   const fn = TRANSFORMS[action];
-  return fn ? fn(content) : content;
+  const result = fn ? fn(content) : content;
+
+  if (_qaCache.size > 50) _qaCache.clear(); // simple bound
+  _qaCache.set(key, result);
+  return result;
 }

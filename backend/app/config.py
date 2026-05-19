@@ -13,7 +13,10 @@ class Settings(BaseModel):
     ai_api_base_url: str
     ai_api_key: str
     ai_model: str
+    ai_model_fast: str
     ai_include_images: bool
+    ai_daily_limit: int
+    cors_allow_origins: list[str]
 
 
 def load_settings() -> Settings:
@@ -26,8 +29,26 @@ def load_settings() -> Settings:
         ).rstrip("/"),
         ai_api_key=os.getenv("AI_API_KEY", ""),
         ai_model=os.getenv("AI_MODEL", "google/gemini-2.0-flash-lite-001"),
-        ai_include_images=os.getenv("AI_INCLUDE_IMAGES", "true").lower()
+        # Cheap/fast model for quick actions & low-stakes calls (LLM Router
+        # cost strategy). Defaults to the main model if unset.
+        ai_model_fast=os.getenv(
+            "AI_MODEL_FAST",
+            os.getenv("AI_MODEL", "google/gemini-2.0-flash-lite-001"),
+        ),
+        # Default OFF — sending image bytes to a vision model is the single
+        # most expensive input. Opt in per-request or via this env.
+        ai_include_images=os.getenv("AI_INCLUDE_IMAGES", "false").lower()
         in {"1", "true", "yes", "on"},
+        # Hard ceiling on real AI calls per client per day (0 = unlimited).
+        ai_daily_limit=int(os.getenv("AI_DAILY_LIMIT", "200")),
+        cors_allow_origins=[
+            o.strip()
+            for o in os.getenv(
+                "CORS_ALLOW_ORIGINS",
+                "http://localhost:3000,http://127.0.0.1:3000",
+            ).split(",")
+            if o.strip()
+        ],
     )
 
 

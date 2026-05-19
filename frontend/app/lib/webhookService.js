@@ -15,4 +15,5 @@ export const webhookService = {
   saveDraft: (post) => postToWebhook(config.n8nSaveDraftUrl, post),
   submitForValidation: (post) => postToWebhook(config.n8nSubmitValidationUrl, post),
   publishNow: (post) => postToWebhook(config.n8nPublishUrl, post),
+  schedulePost: (post) => postToWebhook(config.n8nScheduleUrl, post),
 };

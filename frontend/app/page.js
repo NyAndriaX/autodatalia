@@ -1,38 +1,62 @@
 "use client";
 
-import { useSelector } from "react-redux";
+import { useSelector, useDispatch } from "react-redux";
+import { setMobileNav } from "./store/uiSlice";
+import { useIsMobile } from "./lib/useIsMobile";
 import Sidebar from "./components/layout/Sidebar";
 import Topbar from "./components/layout/Topbar";
 import CreationEditor from "./components/views/CreationEditor";
-import PlaceholderView from "./components/views/PlaceholderView";
+import CalendarView from "./components/views/CalendarView";
+import MediaLibraryView from "./components/views/MediaLibraryView";
+import AnalyticsView from "./components/views/AnalyticsView";
+import SettingsView from "./components/views/SettingsView";
 
 export default function Home() {
-  const { sidebarCollapsed, activeView } = useSelector((state) => state.ui);
+  const dispatch = useDispatch();
+  const { sidebarCollapsed, activeView, mobileNavOpen } = useSelector(
+    (state) => state.ui
+  );
+  const isMobile = useIsMobile();
 
   const renderView = () => {
     switch (activeView) {
       case "creation":
         return <CreationEditor />;
       case "calendar":
+        return <CalendarView />;
       case "library":
+        return <MediaLibraryView />;
       case "analytics":
+        return <AnalyticsView />;
       case "settings":
-        return <PlaceholderView viewId={activeView} />;
+        return <SettingsView />;
       default:
         return <CreationEditor />;
     }
   };
+
+  const contentOffset = isMobile ? 0 : sidebarCollapsed ? 72 : 260;
 
   return (
     <div className="h-screen overflow-hidden">
       <Sidebar />
       <Topbar />
 
+      {/* Dim backdrop behind the mobile drawer */}
+      {isMobile && mobileNavOpen && (
+        <div
+          className="fixed inset-0 z-[45] animate-fade-in"
+          style={{ background: "rgba(15, 23, 42, 0.5)" }}
+          onClick={() => dispatch(setMobileNav(false))}
+          aria-hidden="true"
+        />
+      )}
+
       {/* Main Content Area */}
       <main
         className="transition-all duration-300 overflow-hidden"
         style={{
-          marginLeft: sidebarCollapsed ? "72px" : "260px",
+          marginLeft: contentOffset,
           marginTop: "var(--topbar-height)",
           height: "calc(100vh - var(--topbar-height))",
         }}

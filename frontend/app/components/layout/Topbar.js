@@ -10,10 +10,12 @@ import {
   setTheme,
   setActiveView,
   clearSearch,
+  toggleMobileNav,
 } from "../../store/uiSlice";
 import { searchThunk } from "../../store/searchThunks";
 import { logoutThunk } from "../../store/authThunks";
 import { apiHealthCheck } from "../../lib/apiClient";
+import { useIsMobile } from "../../lib/useIsMobile";
 import {
   Search,
   Bell,
@@ -29,6 +31,8 @@ import {
   FileText,
   Image as ImageIcon,
   Loader2,
+  Menu,
+  Coins,
 } from "lucide-react";
 
 const VIEW_TITLES = {
@@ -47,6 +51,10 @@ const CONNECTIVITY_DOT = {
 
 const RESULT_ICON = { post: FileText, template: FileText, media: ImageIcon };
 
+// Where each result type takes you when clicked (until a real deep-link /
+// item loader exists, navigating to the owning view is the honest behaviour).
+const RESULT_VIEW = { post: "creation", template: "creation", media: "library" };
+
 // SSR-safe subscription to the OS colour-scheme (no effect / no setState).
 function subscribeSystemTheme(cb) {
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -58,15 +66,17 @@ const getSystemDark = () =>
 
 export default function Topbar() {
   const dispatch = useDispatch();
-  const { activeView, notifications, searchQuery, sidebarCollapsed, connectivity, theme, search, messages } =
+  const { activeView, notifications, searchQuery, sidebarCollapsed, connectivity, theme, search, messages, aiUsage } =
     useSelector((state) => state.ui);
   const authUser = useSelector((state) => state.auth.user);
+  const isMobile = useIsMobile();
 
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
   const [searchView, setSearchView] = useState(activeView);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
 
   const notifRef = useRef(null);
   const userMenuRef = useRef(null);
@@ -129,149 +139,241 @@ export default function Topbar() {
     else dispatch(markNotificationRead(item.id));
   };
 
+  // Clicking a search result navigates to the owning view, then resets search.
+  const onResultClick = (r) => {
+    dispatch(setActiveView(RESULT_VIEW[r.type] || "creation"));
+    dispatch(clearSearch());
+    setShowResults(false);
+    setMobileSearchOpen(false);
+  };
+
+  // Focus the field when the mobile search overlay opens.
+  useEffect(() => {
+    if (mobileSearchOpen) {
+      document.getElementById("global-search")?.focus();
+    }
+  }, [mobileSearchOpen]);
+
   const toggleTheme = () => dispatch(setTheme(resolved === "dark" ? "light" : "dark"));
+
+  // Shared search UI — rendered inline on desktop, in a full-width overlay on
+  // mobile (so the search bar never disappears, just collapses to an icon).
+  const searchPanel = (
+    <div className="relative">
+      <div
+        className="relative flex items-center rounded-lg transition-all duration-200"
+        style={{
+          background: searchFocused ? "var(--bg-tertiary)" : "var(--bg-secondary)",
+          border: searchFocused ? "1px solid var(--accent-primary)" : "1px solid var(--border-default)",
+          boxShadow: searchFocused ? "0 0 0 3px rgba(59, 130, 246, 0.12)" : "none",
+        }}
+      >
+        <Search size={16} className="ml-3" style={{ color: "var(--text-muted)" }} aria-hidden="true" />
+        <input
+          id="global-search"
+          type="text"
+          placeholder="Search posts, templates, media..."
+          value={searchQuery}
+          onChange={(e) => {
+            setSearchView(activeView);
+            dispatch(searchThunk(e.target.value));
+            setShowResults(Boolean(e.target.value.trim()));
+          }}
+          onFocus={() => {
+            setSearchFocused(true);
+            setSearchView(activeView);
+            if (searchQuery.trim()) setShowResults(true);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setShowResults(false);
+              setMobileSearchOpen(false);
+              e.currentTarget.blur();
+            }
+          }}
+          onBlur={() => setSearchFocused(false)}
+          className="flex-1 bg-transparent border-none outline-none px-3 py-2.5 pr-2 text-sm"
+          style={{ color: "var(--text-primary)", outline: "none" }}
+          aria-label="Global search"
+          autoComplete="off"
+          spellCheck={false}
+        />
+        {searchQuery && (
+          <button
+            type="button"
+            className="mr-2 rounded-md p-1 transition-colors duration-200"
+            style={{ color: "var(--text-muted)" }}
+            onClick={() => {
+              dispatch(clearSearch());
+              setShowResults(false);
+            }}
+            aria-label="Clear search"
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        )}
+        <div
+          className="flex items-center gap-1 mr-3 px-2 py-1 rounded text-xs"
+          style={{ background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border-default)" }}
+          aria-hidden="true"
+        >
+          <Command size={11} />
+          <span>K</span>
+        </div>
+      </div>
+
+      {/* Results dropdown */}
+      {resultsVisible && (
+        <div
+          className="absolute left-0 right-0 top-full mt-3 overflow-hidden rounded-2xl animate-fade-in"
+          style={{
+            background: "var(--bg-card)",
+            border: "1px solid var(--border-hover)",
+            boxShadow: "var(--shadow-dropdown)",
+          }}
+        >
+          <div
+            className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]"
+            style={{
+              color: "var(--text-tertiary)",
+              borderBottom: "1px solid var(--border-default)",
+              background: "var(--bg-elevated)",
+            }}
+          >
+            Search results
+          </div>
+          {search.status === "loading" ? (
+            <div className="flex items-center gap-2 px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
+              <Loader2 size={14} className="animate-spin" /> Searching…
+            </div>
+          ) : search.results.length === 0 ? (
+            <div className="px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
+              No results for “{searchQuery}”
+            </div>
+          ) : (
+            <ul className="max-h-72 overflow-y-auto py-1">
+              {search.results.map((r) => {
+                const Icon = RESULT_ICON[r.type] || FileText;
+                return (
+                  <li key={r.id}>
+                    <button
+                      className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-200 hover:bg-[var(--bg-card-hover)]"
+                      onClick={() => onResultClick(r)}
+                      onMouseDown={(e) => e.preventDefault()}
+                    >
+                      <Icon size={15} style={{ color: "var(--text-muted)" }} aria-hidden="true" />
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-sm truncate" style={{ color: "var(--text-primary)" }}>{r.title}</span>
+                        <span className="block text-[11px] truncate" style={{ color: "var(--text-muted)" }}>{r.subtitle}</span>
+                      </span>
+                      <span className="badge badge-draft capitalize">{r.type}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <header
       id="topbar"
-      className="fixed top-0 right-0 z-40 flex items-center justify-between px-6 transition-all duration-300"
+      className="fixed top-0 right-0 z-40 flex items-center justify-between transition-all duration-300"
       style={{
-        left: sidebarCollapsed ? "72px" : "260px",
+        left: isMobile ? 0 : sidebarCollapsed ? "72px" : "260px",
+        paddingLeft: isMobile ? "0.75rem" : "1.5rem",
+        paddingRight: isMobile ? "0.75rem" : "1.5rem",
         height: "var(--topbar-height)",
         background: "var(--glass-bg)",
         backdropFilter: "var(--glass-blur)",
         borderBottom: "1px solid var(--border-default)",
       }}
     >
-      {/* Left: View Title */}
-      <div className="flex items-center gap-4">
-        <h2 className="text-lg font-semibold" style={{ color: "var(--text-primary)" }}>
+      {/* Left: hamburger (mobile) + View Title */}
+      <div className="flex items-center gap-3 min-w-0">
+        {isMobile && (
+          <button
+            id="mobile-nav-toggle"
+            className="btn-ghost shrink-0"
+            style={{ padding: 6 }}
+            onClick={() => dispatch(toggleMobileNav())}
+            aria-label="Open navigation menu"
+          >
+            <Menu size={20} aria-hidden="true" />
+          </button>
+        )}
+        <h2
+          className="text-lg font-semibold truncate"
+          style={{ color: "var(--text-primary)" }}
+        >
           {VIEW_TITLES[activeView] || "Dashboard"}
         </h2>
       </div>
 
-      {/* Center: Search */}
-      <div className="relative z-[55] flex-1 max-w-lg mx-8" ref={searchRef}>
-        <div className="relative">
-          <div
-            className="relative flex items-center rounded-lg transition-all duration-200"
-            style={{
-              background: searchFocused ? "var(--bg-tertiary)" : "var(--bg-secondary)",
-              border: searchFocused ? "1px solid var(--accent-primary)" : "1px solid var(--border-default)",
-              boxShadow: searchFocused ? "0 0 0 3px rgba(59, 130, 246, 0.12)" : "none",
-            }}
-          >
-            <Search size={16} className="ml-3" style={{ color: "var(--text-muted)" }} aria-hidden="true" />
-            <input
-              id="global-search"
-              type="text"
-              placeholder="Search posts, templates, media..."
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchView(activeView);
-                dispatch(searchThunk(e.target.value));
-                setShowResults(Boolean(e.target.value.trim()));
-              }}
-              onFocus={() => {
-                setSearchFocused(true);
-                setSearchView(activeView);
-                if (searchQuery.trim()) setShowResults(true);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  setShowResults(false);
-                  e.currentTarget.blur();
-                }
-              }}
-              onBlur={() => setSearchFocused(false)}
-              className="flex-1 bg-transparent border-none outline-none px-3 py-2.5 pr-2 text-sm"
-              style={{ color: "var(--text-primary)", outline: "none" }}
-              aria-label="Global search"
-              autoComplete="off"
-              spellCheck={false}
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                className="mr-2 rounded-md p-1 transition-colors duration-200"
-                style={{ color: "var(--text-muted)" }}
-                onClick={() => {
-                  dispatch(clearSearch());
-                  setShowResults(false);
-                }}
-                aria-label="Clear search"
-              >
-                <X size={14} aria-hidden="true" />
-              </button>
-            )}
-            <div
-              className="flex items-center gap-1 mr-3 px-2 py-1 rounded text-xs"
-              style={{ background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border-default)" }}
-              aria-hidden="true"
-            >
-              <Command size={11} />
-              <span>K</span>
-            </div>
-          </div>
-
-          {/* Results dropdown */}
-          {resultsVisible && (
-            <div
-              className="absolute left-0 right-0 top-full mt-3 overflow-hidden rounded-2xl animate-fade-in"
-              style={{
-                background: "var(--bg-card)",
-                border: "1px solid var(--border-hover)",
-                boxShadow: "var(--shadow-dropdown)",
-              }}
-            >
-              <div
-                className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]"
-                style={{
-                  color: "var(--text-tertiary)",
-                  borderBottom: "1px solid var(--border-default)",
-                  background: "var(--bg-elevated)",
-                }}
-              >
-                Search results
-              </div>
-              {search.status === "loading" ? (
-                <div className="flex items-center gap-2 px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
-                  <Loader2 size={14} className="animate-spin" /> Searching…
-                </div>
-              ) : search.results.length === 0 ? (
-                <div className="px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
-                  No results for “{searchQuery}”
-                </div>
-              ) : (
-                <ul className="max-h-72 overflow-y-auto py-1">
-                  {search.results.map((r) => {
-                    const Icon = RESULT_ICON[r.type] || FileText;
-                    return (
-                      <li key={r.id}>
-                        <button
-                          className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-200 hover:bg-[var(--bg-card-hover)]"
-                          onClick={() => setShowResults(false)}
-                          onMouseDown={(e) => e.preventDefault()}
-                        >
-                          <Icon size={15} style={{ color: "var(--text-muted)" }} aria-hidden="true" />
-                          <span className="flex-1 min-w-0">
-                            <span className="block text-sm truncate" style={{ color: "var(--text-primary)" }}>{r.title}</span>
-                            <span className="block text-[11px] truncate" style={{ color: "var(--text-muted)" }}>{r.subtitle}</span>
-                          </span>
-                          <span className="badge badge-draft capitalize">{r.type}</span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          )}
+      {/* Center: Search — desktop inline; on mobile it collapses to an
+          icon that opens a full-width overlay (never just disappears). */}
+      {!isMobile && (
+        <div className="relative z-[55] flex-1 max-w-lg mx-8" ref={searchRef}>
+          {searchPanel}
         </div>
-      </div>
+      )}
+
+      {isMobile && mobileSearchOpen && (
+        <div
+          ref={searchRef}
+          className="absolute left-0 right-0 z-[60] flex items-center gap-2 px-3"
+          style={{
+            top: 0,
+            height: "var(--topbar-height)",
+            background: "var(--glass-bg)",
+            backdropFilter: "var(--glass-blur)",
+          }}
+        >
+          <div className="relative flex-1">{searchPanel}</div>
+          <button
+            className="btn-ghost shrink-0"
+            style={{ padding: 6 }}
+            onClick={() => setMobileSearchOpen(false)}
+            aria-label="Close search"
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+      )}
 
       {/* Right: Actions */}
       <div className="flex items-center gap-2">
+        {/* Mobile: open the search overlay */}
+        {isMobile && !mobileSearchOpen && (
+          <button
+            id="mobile-search-toggle"
+            className="btn-ghost"
+            onClick={() => setMobileSearchOpen(true)}
+            aria-label="Open search"
+          >
+            <Search size={18} aria-hidden="true" />
+          </button>
+        )}
+
+        {/* Session AI spend meter — only real (non-cached) calls add to it */}
+        {!isMobile && aiUsage?.totalTokens > 0 && (
+          <span
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold"
+            style={{
+              background: "var(--bg-secondary)",
+              border: "1px solid var(--border-default)",
+              color: "var(--text-tertiary)",
+            }}
+            title={`${aiUsage.totalTokens.toLocaleString()} tokens across ${aiUsage.calls} AI call${aiUsage.calls !== 1 ? "s" : ""} this session`}
+          >
+            <Coins size={13} aria-hidden="true" style={{ color: "var(--status-pending)" }} />
+            {aiUsage.totalTokens.toLocaleString()}
+          </span>
+        )}
+
         {/* Theme toggle */}
         <button
           id="theme-toggle"

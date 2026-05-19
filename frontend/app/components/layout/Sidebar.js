@@ -2,6 +2,7 @@
 
 import { useSelector, useDispatch } from "react-redux";
 import { toggleSidebar, setActiveView } from "../../store/uiSlice";
+import { useIsMobile } from "../../lib/useIsMobile";
 import {
   Sparkles,
   CalendarDays,
@@ -49,16 +50,25 @@ const navItems = [
 
 export default function Sidebar() {
   const dispatch = useDispatch();
-  const { sidebarCollapsed, activeView } = useSelector((state) => state.ui);
+  const { sidebarCollapsed, activeView, mobileNavOpen } = useSelector(
+    (state) => state.ui
+  );
+  const isMobile = useIsMobile();
+  // On mobile the sidebar is a full off-canvas drawer (never the icon-only
+  // collapsed state); on desktop it keeps the collapse behaviour.
+  const collapsed = isMobile ? false : sidebarCollapsed;
 
   return (
     <aside
       id="sidebar-nav"
       className="fixed left-0 top-0 h-full z-50 flex flex-col transition-all duration-300 ease-in-out"
       style={{
-        width: sidebarCollapsed ? "72px" : "260px",
+        width: collapsed ? "72px" : "260px",
         background: "var(--bg-secondary)",
         borderRight: "1px solid var(--border-default)",
+        transform:
+          isMobile && !mobileNavOpen ? "translateX(-100%)" : "translateX(0)",
+        boxShadow: isMobile && mobileNavOpen ? "var(--shadow-dropdown)" : "none",
       }}
     >
       {/* Logo Section */}
@@ -80,7 +90,7 @@ export default function Sidebar() {
         >
           <Zap size={20} color="white" />
         </div>
-        {!sidebarCollapsed && (
+        {!collapsed && (
           <div className="animate-fade-in overflow-hidden">
             <h1
               className="font-bold text-base leading-tight"
@@ -118,7 +128,7 @@ export default function Sidebar() {
                   ? "var(--accent-primary-hover)"
                   : "var(--text-secondary)",
               }}
-              title={sidebarCollapsed ? item.label : undefined}
+              title={collapsed ? item.label : undefined}
             >
               {/* Active indicator */}
               {isActive && (
@@ -142,7 +152,7 @@ export default function Sidebar() {
                 }}
               />
 
-              {!sidebarCollapsed && (
+              {!collapsed && (
                 <div className="overflow-hidden animate-fade-in">
                   <span className="text-sm font-medium block leading-tight">
                     {item.label}
@@ -157,7 +167,7 @@ export default function Sidebar() {
               )}
 
               {/* Hover tooltip when collapsed */}
-              {sidebarCollapsed && (
+              {collapsed && (
                 <div
                   className="absolute left-full ml-3 px-3 py-2 rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-200 whitespace-nowrap z-[60]"
                   style={{
@@ -181,28 +191,30 @@ export default function Sidebar() {
         className="px-3 py-3 shrink-0"
         style={{ borderTop: "1px solid var(--border-default)" }}
       >
-        {/* Collapse Toggle */}
-        <button
-          id="sidebar-toggle"
-          onClick={() => dispatch(toggleSidebar())}
-          className="flex items-center justify-center w-full py-2 rounded-lg transition-all duration-200"
-          style={{
-            background: "var(--bg-tertiary)",
-            color: "var(--text-secondary)",
-          }}
-        >
-          {sidebarCollapsed ? (
-            <ChevronRight size={18} />
-          ) : (
-            <ChevronLeft size={18} />
-          )}
-          {!sidebarCollapsed && (
-            <span className="ml-2 text-xs font-medium">Collapse</span>
-          )}
-        </button>
+        {/* Collapse Toggle — desktop only (mobile uses the drawer) */}
+        {!isMobile && (
+          <button
+            id="sidebar-toggle"
+            onClick={() => dispatch(toggleSidebar())}
+            className="flex items-center justify-center w-full py-2 rounded-lg transition-all duration-200"
+            style={{
+              background: "var(--bg-tertiary)",
+              color: "var(--text-secondary)",
+            }}
+          >
+            {collapsed ? (
+              <ChevronRight size={18} />
+            ) : (
+              <ChevronLeft size={18} />
+            )}
+            {!collapsed && (
+              <span className="ml-2 text-xs font-medium">Collapse</span>
+            )}
+          </button>
+        )}
 
         {/* User avatar */}
-        {!sidebarCollapsed && (
+        {!collapsed && (
           <div
             className="flex items-center gap-3 mt-3 px-3 py-2.5 rounded-lg animate-fade-in"
             style={{ background: "var(--bg-tertiary)" }}

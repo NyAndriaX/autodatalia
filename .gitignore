@@ -78,6 +78,12 @@ env/
 pip-log.txt
 pip-delete-this-directory.txt
 
+# ---------- Backend runtime content ----------
+# Keep the folder, ignore uploads + generated captions + the AI response
+# cache (the cache can contain prompt/response text — never commit it).
+backend/content/*
+!backend/content/.gitkeep
+
 # ---------- Docker ----------
 docker-compose.override.yml
 

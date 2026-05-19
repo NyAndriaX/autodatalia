@@ -2,6 +2,7 @@ import { createSlice } from "@reduxjs/toolkit";
 
 const initialState = {
   sidebarCollapsed: false,
+  mobileNavOpen: false, // off-canvas sidebar drawer on small screens
   activeView: "creation", // "creation" | "calendar" | "library" | "analytics" | "settings"
   notifications: [], // local in-app events (pushed by thunks)
   searchQuery: "",
@@ -20,6 +21,8 @@ const initialState = {
     items: [],
     status: "idle", // "idle" | "loading" | "done" | "error"
   },
+  // Session AI spend meter — only real (non-cached) calls add to this.
+  aiUsage: { totalTokens: 0, calls: 0 },
 };
 
 const uiSlice = createSlice({
@@ -32,8 +35,15 @@ const uiSlice = createSlice({
     setSidebarCollapsed: (state, action) => {
       state.sidebarCollapsed = action.payload;
     },
+    toggleMobileNav: (state) => {
+      state.mobileNavOpen = !state.mobileNavOpen;
+    },
+    setMobileNav: (state, action) => {
+      state.mobileNavOpen = action.payload;
+    },
     setActiveView: (state, action) => {
       state.activeView = action.payload;
+      state.mobileNavOpen = false; // close drawer on navigation
     },
     addNotification: (state, action) => {
       state.notifications.unshift({
@@ -85,12 +95,21 @@ const uiSlice = createSlice({
     setTheme: (state, action) => {
       state.theme = action.payload; // "light" | "dark" | "system"
     },
+    addTokenUsage: (state, action) => {
+      state.aiUsage.totalTokens += action.payload || 0;
+      state.aiUsage.calls += 1;
+    },
+    resetTokenUsage: (state) => {
+      state.aiUsage = { totalTokens: 0, calls: 0 };
+    },
   },
 });
 
 export const {
   toggleSidebar,
   setSidebarCollapsed,
+  toggleMobileNav,
+  setMobileNav,
   setActiveView,
   addNotification,
   markNotificationRead,
@@ -105,6 +124,8 @@ export const {
   toggleCommandPalette,
   setConnectivity,
   setTheme,
+  addTokenUsage,
+  resetTokenUsage,
 } = uiSlice.actions;
 
 export default uiSlice.reducer;
