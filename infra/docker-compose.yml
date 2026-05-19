@@ -1,0 +1,30 @@
+volumes:
+  n8n_data:
+
+services:
+  n8n:
+    image: docker.io/n8nio/n8n
+    container_name: n8n
+    restart: always
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      - caption-api
+
+  caption-api:
+    build:
+      context: ../backend
+    container_name: caption-api
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      AI_API_BASE_URL: ${AI_API_BASE_URL:-https://openrouter.ai/api/v1}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-google/gemini-2.0-flash-lite-001}
+      AI_INCLUDE_IMAGES: ${AI_INCLUDE_IMAGES:-true}
+      CONTENT_DIR: /app/content
+    volumes:
+      - ../backend/content:/app/content

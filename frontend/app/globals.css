@@ -1,0 +1,405 @@
+@import "tailwindcss";
+
+/* ========================================
+   DATALIA MARKETING AUTOMATION — Design System
+   ======================================== */
+
+/* Light is the default theme; [data-theme="dark"] overrides below.
+   The resolved theme attribute is set on <html> by the no-flash script
+   in layout.js before first paint, then kept in sync by AppBootstrap. */
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* — Core Palette — */
+  --bg-primary: #f0f4f8;
+  --bg-secondary: #e2e8f0;
+  --bg-tertiary: #cbd5e1;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f8fafc;
+  --bg-elevated: #ffffff;
+
+  /* — Accent & Brand — */
+  --accent-primary: #3b82f6;
+  --accent-primary-hover: #2563eb;
+  --accent-secondary: #60a5fa;
+  --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 50%, #38bdf8 100%);
+  --accent-glow: 0 0 20px rgba(59, 130, 246, 0.3);
+
+  /* — Text — */
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-tertiary: #475569;
+  --text-muted: #64748b;
+
+  /* — Borders — */
+  --border-default: #cbd5e1;
+  --border-hover: #94a3b8;
+  --border-active: #3b82f6;
+
+  /* — Platform Colors — */
+  --platform-facebook: #1877F2;
+  --platform-instagram: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888);
+  --platform-tiktok: #000000;
+  --platform-tiktok-fg: #0f172a; /* readable TikTok foreground per theme */
+  --platform-linkedin: #0A66C2;
+
+  /* — Status Colors — */
+  --status-draft: #64748b;
+  --status-pending: #f59e0b;
+  --status-approved: #22c55e;
+  --status-error: #ef4444;
+  --status-published: #06b6d4;
+
+  /* — Sizing — */
+  --sidebar-width: 260px;
+  --sidebar-collapsed: 72px;
+  --topbar-height: 64px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+
+  /* — Glass — */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.3);
+  --glass-blur: blur(16px);
+
+  /* — Shadows — */
+  --shadow-dropdown: 0 20px 60px rgba(15, 23, 42, 0.15);
+
+  /* — Foreground / Background tokens for TW — */
+  --background: #f0f4f8;
+  --foreground: #0f172a;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* — Core Palette — */
+  --bg-primary: #0b1120;
+  --bg-secondary: #0f172a;
+  --bg-tertiary: #1e293b;
+  --bg-card: #111a2e;
+  --bg-card-hover: #1a2540;
+  --bg-elevated: #1e293b;
+
+  /* — Accent & Brand — */
+  --accent-primary: #60a5fa;
+  --accent-primary-hover: #93c5fd;
+  --accent-secondary: #38bdf8;
+  --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 50%, #38bdf8 100%);
+  --accent-glow: 0 0 24px rgba(96, 165, 250, 0.35);
+
+  /* — Text — */
+  --text-primary: #f1f5f9;
+  --text-secondary: #cbd5e1;
+  --text-tertiary: #94a3b8;
+  --text-muted: #64748b;
+
+  /* — Borders — */
+  --border-default: #1e293b;
+  --border-hover: #334155;
+  --border-active: #60a5fa;
+
+  /* — Platform Colors — */
+  --platform-tiktok-fg: #f1f5f9;
+
+  /* — Glass — */
+  --glass-bg: rgba(15, 23, 42, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.06);
+
+  /* — Shadows — */
+  --shadow-dropdown: 0 20px 60px rgba(0, 0, 0, 0.55);
+
+  /* — Foreground / Background tokens for TW — */
+  --background: #0b1120;
+  --foreground: #f1f5f9;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* ========================================
+   Base
+   ======================================== */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-hover) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border-hover);
+  border-radius: 3px;
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans, 'Inter', -apple-system, BlinkMacSystemFont, sans-serif);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Theme-aware transition on surfaces so toggling light/dark is smooth,
+   not jarring. Kept off animated transforms to avoid layout cost. */
+.card,
+.glass-card,
+.btn-secondary,
+.btn-ghost,
+.input-field {
+  transition: background-color 0.3s ease, border-color 0.3s ease,
+    color 0.3s ease, box-shadow 0.2s ease;
+}
+
+/* Accessible keyboard focus ring (mouse clicks stay clean). */
+:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Search input's parent already provides focus styling (blue border + glow),
+   so suppress the default ring to avoid a double-outline. */
+#global-search:focus,
+#global-search:focus-visible {
+  outline: none !important;
+  box-shadow: none;
+}
+
+/* Respect users who prefer reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ========================================
+   Utility Classes
+   ======================================== */
+
+.glass-card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  border-radius: var(--radius-md);
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+}
+
+.card:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-hover);
+}
+
+.accent-gradient {
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.btn-primary {
+  background: var(--accent-gradient);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 10px 20px;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-primary:hover {
+  box-shadow: var(--accent-glow);
+  transform: translateY(-1px);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-secondary {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 10px 20px;
+  font-weight: 500;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-secondary:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-hover);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-weight: 500;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-ghost:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.input-field {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+  outline: none;
+  width: 100%;
+}
+
+.input-field::placeholder {
+  color: var(--text-muted);
+}
+
+.input-field:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 100px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.badge-draft {
+  background: rgba(100, 116, 139, 0.15);
+  color: var(--status-draft);
+}
+
+.badge-pending {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--status-pending);
+}
+
+.badge-approved {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--status-approved);
+}
+
+.badge-error {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--status-error);
+}
+
+/* ========================================
+   Animations
+   ======================================== */
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(99, 102, 241, 0); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.4s ease forwards;
+}
+
+.animate-slide-in-left {
+  animation: slideInLeft 0.3s ease forwards;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* ========================================
+   Platform Tag Colors
+   ======================================== */
+
+.platform-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.platform-facebook {
+  background: rgba(24, 119, 242, 0.15);
+  color: var(--platform-facebook);
+}
+
+.platform-instagram {
+  background: rgba(225, 48, 108, 0.15);
+  color: #E1306C;
+}
+
+.platform-tiktok {
+  background: rgba(127, 127, 127, 0.14);
+  color: var(--platform-tiktok-fg);
+}
+
+.platform-linkedin {
+  background: rgba(10, 102, 194, 0.15);
+  color: var(--platform-linkedin);
+}
