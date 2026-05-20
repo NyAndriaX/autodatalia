@@ -1,3 +1,4 @@
+import { apiUpload } from "./apiClient";
 import { config } from "./config";
 
 export const ACCEPTED_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "video/mp4", "video/quicktime"];
@@ -34,18 +35,21 @@ export function revokeMediaItem(item) {
   if (item?.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(item.previewUrl);
 }
 
-// Push a file to the backend. No endpoint exists yet, so this stays a
-// graceful no-op that keeps the local preview. When /upload lands, this is
-// the only function to change.
+// Push a file to the backend /upload endpoint. Falls back to a local-only
+// preview if the backend is offline or rejects the request (e.g. 401 when
+// the auth token is missing).
 export async function uploadToBackend(file) {
   if (!config.apiBaseUrl) return { remoteUrl: null, status: "local" };
   try {
     const body = new FormData();
     body.append("file", file);
-    const res = await fetch(`${config.apiBaseUrl}/upload`, { method: "POST", body });
-    if (!res.ok) throw new Error(`upload ${res.status}`);
-    const data = await res.json();
-    return { remoteUrl: data?.url ?? null, status: "uploaded" };
+    const data = await apiUpload("/upload", body);
+    return {
+      remoteUrl: data?.url ?? null,
+      status: "uploaded",
+      filename: data?.filename ?? file.name,
+      kind: data?.kind ?? (file.type.startsWith("video/") ? "video" : "image"),
+    };
   } catch {
     return { remoteUrl: null, status: "local" };
   }

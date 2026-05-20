@@ -2,9 +2,10 @@
 
 from typing import Any
 
-from fastapi import APIRouter, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Request, UploadFile
 
 from . import tunnel
+from .auth import require_token
 from .models import (
     CaptionRequest,
     ContentItem,
@@ -38,6 +39,10 @@ def _client_id(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 router = APIRouter()
+# Auth dependency applied only to spend-incurring / mutating endpoints
+# (/generate, /transform, /upload, /captions/generate). Read endpoints
+# stay open so the dashboard's health probe still works without a token.
+auth_required = Depends(require_token)
 
 
 # ── Utility endpoints ──────────────────────────────────────────────────
@@ -57,7 +62,11 @@ async def tunnel_status() -> dict[str, Any]:
 
 # ── Generation endpoints ──────────────────────────────────────────────
 
-@router.post("/generate", response_model=GenerateResponse)
+@router.post(
+    "/generate",
+    response_model=GenerateResponse,
+    dependencies=[auth_required],
+)
 async def generate(request: Request, body: GenerateRequest) -> GenerateResponse:
     """Prompt-driven generation for the editor's "Generate via AI" button."""
     client = _client_id(request)
@@ -73,7 +82,11 @@ async def generate(request: Request, body: GenerateRequest) -> GenerateResponse:
     return GenerateResponse(variants=variants, usage=usage)
 
 
-@router.post("/transform", response_model=TransformResponse)
+@router.post(
+    "/transform",
+    response_model=TransformResponse,
+    dependencies=[auth_required],
+)
 async def transform(request: Request, body: TransformRequest) -> TransformResponse:
     """Quick AI actions (shorten / expand / tone) on existing content."""
     client = _client_id(request)
@@ -86,7 +99,11 @@ async def transform(request: Request, body: TransformRequest) -> TransformRespon
 
 # ── Media endpoints ───────────────────────────────────────────────────
 
-@router.post("/upload", response_model=UploadResponse)
+@router.post(
+    "/upload",
+    response_model=UploadResponse,
+    dependencies=[auth_required],
+)
 async def upload(request: Request, file: UploadFile = File(...)) -> UploadResponse:
     """Store an uploaded image/video and return its served URL."""
     meta = await save_upload(file)
@@ -124,7 +141,7 @@ async def list_content(request: Request) -> dict[str, Any]:
     return {"count": len(items), "items": items}
 
 
-@router.post("/captions/generate")
+@router.post("/captions/generate", dependencies=[auth_required])
 async def generate_content_captions(
     request: Request, body: CaptionRequest
 ) -> dict[str, Any]:

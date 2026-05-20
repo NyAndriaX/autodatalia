@@ -1,5 +1,8 @@
 export const config = {
   apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL || "",
+  // Sent as `Authorization: Bearer <token>` to gated routes (/generate,
+  // /transform, /upload, mutating /posts). Empty = backend is in open mode.
+  backendAuthToken: process.env.NEXT_PUBLIC_BACKEND_AUTH_TOKEN || "",
   n8nSaveDraftUrl: process.env.NEXT_PUBLIC_N8N_SAVE_DRAFT_URL || "",
   n8nSubmitValidationUrl: process.env.NEXT_PUBLIC_N8N_SUBMIT_VALIDATION_URL || "",
   n8nPublishUrl: process.env.NEXT_PUBLIC_N8N_PUBLISH_URL || "",

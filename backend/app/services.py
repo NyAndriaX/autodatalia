@@ -377,6 +377,8 @@ _TRANSFORM_INSTRUCTIONS = {
     "tone-pro": "Rewrite the post in a polished, professional, authoritative tone.",
 }
 
+TRANSFORM_ACTIONS = tuple(_TRANSFORM_INSTRUCTIONS.keys())
+
 
 async def transform_content(
     content: str, action: str
@@ -384,8 +386,14 @@ async def transform_content(
     """Apply a quick AI action to existing content; returns the new text."""
     instruction = _TRANSFORM_INSTRUCTIONS.get(action)
     if instruction is None:
-        # Unknown action — return unchanged rather than erroring the editor.
-        return content, dict(_ZERO_USAGE)
+        # Explicit 422 with the allowed values — better than a silent pass.
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Unknown action.",
+                "allowed_actions": list(TRANSFORM_ACTIONS),
+            },
+        )
 
     content = _compress(content)
     cache_key = _cache_key("transform", action, content)

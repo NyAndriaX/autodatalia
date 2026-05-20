@@ -33,4 +33,9 @@ app.include_router(router)
 # ── Lifecycle ──────────────────────────────────────────────────────────
 @app.on_event("startup")
 def on_startup() -> None:
-    threading.Thread(target=start_cloudflared, daemon=True).start()
+    # The free quick-tunnel exposes the API publicly with no auth, so it
+    # only starts when explicitly enabled (e.g. for Instagram publishing).
+    if settings.tunnel_enabled:
+        threading.Thread(target=start_cloudflared, daemon=True).start()
+    else:
+        print("[tunnel] disabled (set TUNNEL_ENABLED=true to enable)")

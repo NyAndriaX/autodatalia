@@ -17,6 +17,8 @@ class Settings(BaseModel):
     ai_include_images: bool
     ai_daily_limit: int
     cors_allow_origins: list[str]
+    backend_auth_token: str
+    tunnel_enabled: bool
 
 
 def load_settings() -> Settings:
@@ -49,6 +51,13 @@ def load_settings() -> Settings:
             ).split(",")
             if o.strip()
         ],
+        # When set, /generate /transform /upload /posts require
+        # `Authorization: Bearer <token>`. Empty = open mode (local dev).
+        backend_auth_token=os.getenv("BACKEND_AUTH_TOKEN", "").strip(),
+        # Quick Cloudflare tunnel is OFF by default — it exposes the API
+        # publicly with no auth. Opt in via env when IG publishing needs it.
+        tunnel_enabled=os.getenv("TUNNEL_ENABLED", "false").lower()
+        in {"1", "true", "yes", "on"},
     )
 
 

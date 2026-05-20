@@ -34,6 +34,9 @@ services:
       AI_MODEL_FAST: ${AI_MODEL_FAST:-google/gemini-2.0-flash-lite-001}
       AI_INCLUDE_IMAGES: ${AI_INCLUDE_IMAGES:-false}
       AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-200}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      BACKEND_AUTH_TOKEN: ${BACKEND_AUTH_TOKEN:-}
+      TUNNEL_ENABLED: ${TUNNEL_ENABLED:-false}
       CONTENT_DIR: /app/content
     volumes:
       - ../backend/content:/app/content
