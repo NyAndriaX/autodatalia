@@ -41,3 +41,21 @@ export async function search(query) {
     return mockSearch(query);
   }
 }
+
+/**
+ * Always hits the backend (or the mock corpus) with the given query, even
+ * when empty — used by the Media Library to list everything by default.
+ */
+export async function listMedia(query = "") {
+  if (!config.apiBaseUrl) {
+    return mockSearch(query).then((r) => r.filter((h) => h.type === "media"));
+  }
+  try {
+    const data = await apiFetch(`/search?q=${encodeURIComponent(query)}`);
+    if (!Array.isArray(data?.results)) throw new Error("bad shape");
+    return data.results.filter((h) => h.type === "media");
+  } catch {
+    const fallback = await mockSearch(query);
+    return fallback.filter((h) => h.type === "media");
+  }
+}

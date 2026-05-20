@@ -472,16 +472,15 @@ async def save_upload(file: UploadFile) -> dict[str, str]:
 
 # ── Search ─────────────────────────────────────────────────────────────
 
-def search_media(query: str) -> list[dict[str, str]]:
+def search_media(query: str, limit: int = 50) -> list[dict[str, str]]:
     """Search the content directory for media matching `query`.
 
-    Posts/templates live in Airtable (not wired yet) so only `media` hits
-    are returned for now — honest partial results, no mock padding.
+    Empty query returns up to `limit` items (acts as a listing endpoint for
+    the Media Library). Posts/templates live in Airtable (not wired yet) so
+    only `media` hits are returned for now — honest partial results, no
+    mock padding.
     """
     q = query.strip().lower()
-    if not q:
-        return []
-
     hits: list[dict[str, str]] = []
     for path in sorted(settings.content_dir.rglob("*")):
         if not path.is_file():
@@ -490,7 +489,7 @@ def search_media(query: str) -> list[dict[str, str]]:
         if suffix not in IMAGE_EXTENSIONS and suffix not in VIDEO_EXTENSIONS:
             continue
         description = read_description(path)
-        if q not in path.name.lower() and q not in description.lower():
+        if q and q not in path.name.lower() and q not in description.lower():
             continue
         kind = "video" if suffix in VIDEO_EXTENSIONS else "image"
         hits.append(
@@ -501,6 +500,8 @@ def search_media(query: str) -> list[dict[str, str]]:
                 "subtitle": f"{kind.capitalize()} · {path.stat().st_size // 1024} KB",
             }
         )
+        if len(hits) >= limit:
+            break
     return hits
 
 
