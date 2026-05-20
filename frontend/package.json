@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@reduxjs/toolkit": "^2.6.1",
@@ -22,6 +24,8 @@
     "@tailwindcss/postcss": "^4",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
-    "tailwindcss": "^4"
+    "jsdom": "^25.0.1",
+    "tailwindcss": "^4",
+    "vitest": "^2.1.9"
   }
 }

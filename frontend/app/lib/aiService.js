@@ -35,7 +35,8 @@ const CACHE_KEY = "datalia.ai.genCache";
 
 // Normalize so cosmetic edits (extra spaces, case, trailing newline) map to
 // the SAME signature → trivial changes reuse the cached result, no re-prompt.
-function generationSignature({ prompt, platforms, template, variants = 1 } = {}) {
+// Exported for unit tests; treat as an implementation detail elsewhere.
+export function generationSignature({ prompt, platforms, template, variants = 1 } = {}) {
   const active = Object.keys(platforms || {})
     .filter((k) => platforms[k])
     .sort()
