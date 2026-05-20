@@ -6,6 +6,7 @@ import { setTheme } from "../../store/uiSlice";
 import { hydrateScheduledPosts } from "../../store/calendarSlice";
 import { restoreSessionThunk } from "../../store/authThunks";
 import { loadMessagesThunk } from "../../store/searchThunks";
+import { loadScheduledPostsThunk } from "../../store/calendarThunks";
 import { loadScheduledPosts, saveScheduledPosts } from "../../lib/calendarStorage";
 import {
   getStoredThemePref,
@@ -22,15 +23,24 @@ export default function AppBootstrap() {
   const scheduledPosts = useSelector((s) => s.calendar.scheduledPosts);
   const didInit = useRef(false);
 
-  // One-time hydration.
+  // One-time hydration. Backend is the source of truth; localStorage is the
+  // offline fallback. If the backend has no posts, we let the CalendarView
+  // demo seed run by *not* dispatching hydrate (the reducer would mark the
+  // store as seeded and suppress the demo).
   useEffect(() => {
     if (didInit.current) return;
     didInit.current = true;
     dispatch(setTheme(getStoredThemePref()));
     dispatch(restoreSessionThunk());
     dispatch(loadMessagesThunk());
-    const storedPosts = loadScheduledPosts();
-    if (storedPosts) dispatch(hydrateScheduledPosts(storedPosts));
+    (async () => {
+      const fromBackend = await dispatch(loadScheduledPostsThunk());
+      if (fromBackend) return;
+      const storedPosts = loadScheduledPosts();
+      if (storedPosts && storedPosts.length > 0) {
+        dispatch(hydrateScheduledPosts(storedPosts));
+      }
+    })();
   }, [dispatch]);
 
   // Persist scheduled posts whenever they change (after first init tick).

@@ -92,3 +92,49 @@ class ContentItem(BaseModel):
     image_base64: str
     instagram_caption: str
     tiktok_caption: str
+
+
+# ── Scheduled posts (calendar persistence) ──────────────────────────────
+# Camel-case field names so the JSON shape matches the frontend store
+# directly — no client-side mapping layer needed.
+
+
+class Post(BaseModel):
+    """One scheduled post as stored / returned."""
+
+    id: str
+    content: str = ""
+    platforms: dict[str, bool] = {}
+    status: str = "draft"
+    scheduledDate: str  # YYYY-MM-DD
+    time: str | None = None
+    media: list[dict] = []
+
+
+class PostCreate(BaseModel):
+    """Body for POST /posts. ``id`` is optional — the server fills it in."""
+
+    id: str | None = None
+    content: str = ""
+    platforms: dict[str, bool] = {}
+    status: str = "draft"
+    scheduledDate: str
+    time: str | None = None
+    media: list[dict] = []
+
+
+class PostUpdate(BaseModel):
+    """Body for PATCH /posts/{id}. All fields optional (partial update)."""
+
+    content: str | None = None
+    platforms: dict[str, bool] | None = None
+    status: str | None = None
+    scheduledDate: str | None = None
+    time: str | None = None
+    media: list[dict] | None = None
+
+
+class PostsResponse(BaseModel):
+    """Response for GET /posts."""
+
+    posts: list[Post]

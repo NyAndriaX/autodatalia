@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from . import tunnel
 from .auth import require_token
@@ -11,6 +11,10 @@ from .models import (
     ContentItem,
     GenerateRequest,
     GenerateResponse,
+    Post,
+    PostCreate,
+    PostUpdate,
+    PostsResponse,
     SearchResponse,
     TransformRequest,
     TransformResponse,
@@ -22,6 +26,10 @@ from .services import (
     generate_captions,
     generate_post_variants,
     iter_content_items,
+    posts_create,
+    posts_delete,
+    posts_list,
+    posts_update,
     rate_guard,
     rate_tick,
     save_caption_file,
@@ -120,6 +128,42 @@ async def upload(request: Request, file: UploadFile = File(...)) -> UploadRespon
 async def search(q: str = "") -> SearchResponse:
     """Search media in the content directory (posts/templates → Airtable TBD)."""
     return SearchResponse(results=search_media(q))
+
+
+# ── Scheduled posts (calendar persistence) ────────────────────────────
+
+@router.get("/posts", response_model=PostsResponse)
+async def list_posts() -> PostsResponse:
+    """Return all scheduled posts. Open so the calendar can hydrate on load."""
+    return PostsResponse(posts=posts_list())
+
+
+@router.post(
+    "/posts",
+    response_model=Post,
+    dependencies=[auth_required],
+)
+async def create_post(body: PostCreate) -> Post:
+    return Post(**posts_create(body.model_dump()))
+
+
+@router.patch(
+    "/posts/{post_id}",
+    response_model=Post,
+    dependencies=[auth_required],
+)
+async def patch_post(post_id: str, body: PostUpdate) -> Post:
+    updated = posts_update(post_id, body.model_dump())
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Post not found.")
+    return Post(**updated)
+
+
+@router.delete("/posts/{post_id}", dependencies=[auth_required])
+async def delete_post(post_id: str) -> dict[str, bool]:
+    if not posts_delete(post_id):
+        raise HTTPException(status_code=404, detail="Post not found.")
+    return {"deleted": True}
 
 
 # ── Content endpoints ─────────────────────────────────────────────────

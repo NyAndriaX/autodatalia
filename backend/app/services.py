@@ -504,6 +504,81 @@ def search_media(query: str) -> list[dict[str, str]]:
     return hits
 
 
+# ── Scheduled posts: JSON-file persistence ─────────────────────────────
+# Single-file store keeps deployment simple. Locking is a single in-process
+# threading.Lock — fine for one uvicorn worker; swap to SQLite if we scale
+# horizontally.
+
+import threading as _threading
+import uuid as _uuid
+
+_POSTS_FILE = settings.content_dir / "posts.json"
+_POSTS_LOCK = _threading.Lock()
+
+
+def _posts_read_raw() -> list[dict[str, Any]]:
+    try:
+        data = json.loads(_POSTS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []  # corrupt → start fresh; never crash the process
+
+
+def _posts_write_raw(posts: list[dict[str, Any]]) -> None:
+    _POSTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _POSTS_FILE.write_text(json.dumps(posts, indent=2), encoding="utf-8")
+
+
+def posts_list() -> list[dict[str, Any]]:
+    """Return every persisted scheduled post."""
+    with _POSTS_LOCK:
+        return list(_posts_read_raw())
+
+
+def posts_create(payload: dict[str, Any]) -> dict[str, Any]:
+    """Persist a new post and return it (auto-fills id if missing)."""
+    with _POSTS_LOCK:
+        posts = _posts_read_raw()
+        post = dict(payload)
+        if not post.get("id"):
+            post["id"] = f"srv-{_uuid.uuid4().hex[:10]}"
+        post.setdefault("content", "")
+        post.setdefault("platforms", {})
+        post.setdefault("status", "draft")
+        post.setdefault("media", [])
+        posts.append(post)
+        _posts_write_raw(posts)
+        return post
+
+
+def posts_update(post_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+    """Apply a partial update (None values are ignored). Returns the post or None."""
+    with _POSTS_LOCK:
+        posts = _posts_read_raw()
+        for post in posts:
+            if post.get("id") == post_id:
+                for key, value in patch.items():
+                    if value is None:
+                        continue
+                    post[key] = value
+                _posts_write_raw(posts)
+                return post
+    return None
+
+
+def posts_delete(post_id: str) -> bool:
+    """Remove the post by id. Returns True if anything was removed."""
+    with _POSTS_LOCK:
+        posts = _posts_read_raw()
+        remaining = [p for p in posts if p.get("id") != post_id]
+        if len(remaining) == len(posts):
+            return False
+        _posts_write_raw(remaining)
+        return True
+
+
 # ── File output ────────────────────────────────────────────────────────
 
 def save_caption_file(item: dict[str, Any], captions: dict[str, str]) -> None:
