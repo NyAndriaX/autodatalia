@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime
 from typing import Any
@@ -28,6 +29,13 @@ from .publish import build_targets_from_post, publish_to_targets
 from .services import messages_append, posts_list, posts_update
 
 log = logging.getLogger("datalia.scheduler")
+
+# Fallback timezone when a post's `timezone` field is missing or unparseable.
+# Datalia operates from France, so Europe/Paris is the sensible default;
+# override via the env if the team moves. UTC is wrong as a default here:
+# users picking "09:00" almost never mean 09:00 UTC, and the old fallback
+# meant scheduled posts fired 1–2 hours later than the user expected.
+DEFAULT_TZ_NAME = os.environ.get("DEFAULT_TIMEZONE", "Europe/Paris")
 
 TICK_SECONDS = 30
 # Brief outages (container restart, deploy) shouldn't strand a post that was
@@ -52,11 +60,16 @@ def _due_at_epoch(post: dict[str, Any]) -> float | None:
     if not date_s:
         return None
     time_s = post.get("time") or "09:00"
-    tz_s = post.get("timezone") or "UTC"
+    tz_s = post.get("timezone") or DEFAULT_TZ_NAME
     try:
         tz = ZoneInfo(tz_s)
     except ZoneInfoNotFoundError:
-        tz = ZoneInfo("UTC")
+        # Bad zone string on the post → fall back to the configured default,
+        # not UTC, for the same reason as above.
+        try:
+            tz = ZoneInfo(DEFAULT_TZ_NAME)
+        except ZoneInfoNotFoundError:
+            tz = ZoneInfo("UTC")
     try:
         y, m, d = [int(x) for x in date_s.split("-")]
         hh, mm = [int(x) for x in time_s.split(":")[:2]]

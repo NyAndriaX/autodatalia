@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { PLATFORMS } from "../../lib/platforms";
 import { isoDateKey, startOfToday, parseDateKey } from "../../lib/dateUtils";
-import { addNotification } from "../../store/uiSlice";
+import { addNotification, addTokenUsage, recordCacheHit } from "../../store/uiSlice";
 import {
   ACCEPTED_TYPES,
   toMediaItem,
@@ -22,8 +22,17 @@ import {
   validateFile,
   revokeMediaItem,
 } from "../../lib/uploadService";
+import { generateContent } from "../../lib/aiService";
 import DatePicker from "./DatePicker";
 import TimePicker from "./TimePicker";
+
+function browserTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Paris";
+  } catch {
+    return "Europe/Paris";
+  }
+}
 
 const MEDIA_SOURCES = [
   { id: "upload-image", kind: "image", source: "upload", label: "Upload Image", icon: Upload },
@@ -152,6 +161,38 @@ export default function ScheduleModal({
 
   const hasPending = media.some((m) => m.status === "uploading");
 
+  // ─── AI generation (local) ───────────────────────────────────────
+  // Same /generate endpoint the editor uses; result goes into the modal's
+  // local content state so opening this modal never disturbs an in-flight
+  // editor draft.
+  const [isGenerating, setIsGenerating] = useState(false);
+  const onGenerate = async () => {
+    if (isGenerating) return;
+    setIsGenerating(true);
+    try {
+      const { variants, usage, cached } = await generateContent({
+        prompt: content,
+        platforms,
+        variants: 1,
+      });
+      const text = variants?.[0]?.text;
+      if (text) setContent(text);
+      if (cached) {
+        dispatch(recordCacheHit());
+        dispatch(addNotification({ message: "Reused last generation — no tokens spent.", type: "info" }));
+      } else if (usage?.total_tokens > 0) {
+        dispatch(addTokenUsage(usage.total_tokens));
+      }
+    } catch (err) {
+      dispatch(addNotification({
+        message: `Generation failed: ${err.message || "unknown error"}`,
+        type: "error",
+      }));
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
   const dayLabel = parseDateKey(date).toLocaleDateString(undefined, {
     weekday: "long",
     month: "long",
@@ -186,11 +227,49 @@ export default function ScheduleModal({
           {dayLabel}
         </p>
 
+        <div className="flex items-center justify-between mb-1.5">
+          <span
+            className="text-xs font-semibold uppercase tracking-wider"
+            style={{ color: "var(--text-tertiary)" }}
+          >
+            Content
+          </span>
+          <button
+            type="button"
+            onClick={onGenerate}
+            disabled={isGenerating}
+            className="text-[11px] inline-flex items-center gap-1 px-2 py-1 rounded-md transition-colors"
+            style={{
+              background: "rgba(99, 102, 241, 0.10)",
+              color: "var(--accent-primary)",
+              border: "1px solid rgba(99, 102, 241, 0.25)",
+              opacity: isGenerating ? 0.6 : 1,
+              cursor: isGenerating ? "not-allowed" : "pointer",
+            }}
+            title={
+              content.trim()
+                ? "Generate a new draft based on the current content"
+                : "Generate a draft from the selected platforms"
+            }
+          >
+            {isGenerating ? (
+              <>
+                <Loader2 size={11} className="animate-spin" />
+                Generating…
+              </>
+            ) : (
+              <>
+                <Sparkles size={11} />
+                {content.trim() ? "Regenerate" : "Generate with AI"}
+              </>
+            )}
+          </button>
+        </div>
         <textarea
           autoFocus
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          placeholder="What do you want to post?"
+          placeholder="What do you want to post? Or click Generate with AI."
           rows={3}
           className="input-field"
           style={{ resize: "none", marginBottom: 14 }}
@@ -323,6 +402,11 @@ export default function ScheduleModal({
                 platforms,
                 scheduledDate: date,
                 time,
+                // Send the browser's IANA timezone explicitly so the
+                // scheduler reads "09:00" in the user's local time, not
+                // UTC. (The thunk also sets this — belt-and-suspenders so
+                // any caller that bypasses the thunk still gets it.)
+                timezone: browserTimezone(),
                 media,
                 ratios: initialRatios || undefined,
               })

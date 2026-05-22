@@ -27,7 +27,7 @@ import {
   activePlatformIds,
 } from "../../lib/platforms";
 import { isoDateKey, parseDateKey, startOfToday } from "../../lib/dateUtils";
-import { addNotification } from "../../store/uiSlice";
+import { addNotification, addTokenUsage, recordCacheHit } from "../../store/uiSlice";
 import {
   ACCEPTED_TYPES,
   toMediaItem,
@@ -35,8 +35,20 @@ import {
   validateFile,
   revokeMediaItem,
 } from "../../lib/uploadService";
+import { generateContent } from "../../lib/aiService";
 import DatePicker from "./DatePicker";
 import TimePicker from "./TimePicker";
+
+// Browser IANA timezone so the scheduler knows what "09:00" means. Falls
+// back to Europe/Paris (Datalia's default) if Intl isn't available, which
+// keeps unit tests / SSR sane.
+function browserTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Paris";
+  } catch {
+    return "Europe/Paris";
+  }
+}
 
 /**
  * Buffer-style edit popup opened from the calendar. Splits the dialog into:
@@ -136,6 +148,38 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
   const hashtagCount = (content.match(/#\w+/g) || []).length;
   const hasPending = media.some((m) => m.status === "uploading");
 
+  // ─── AI generation (local to the popup) ──────────────────────────
+  // Calls the same /generate endpoint CreationEditor uses, but writes the
+  // result into the popup's local content state instead of editor Redux —
+  // so opening this popup never clobbers an in-flight editor draft.
+  const [isGenerating, setIsGenerating] = useState(false);
+  const onGenerate = async () => {
+    if (isGenerating) return;
+    setIsGenerating(true);
+    try {
+      const { variants, usage, cached } = await generateContent({
+        prompt: content,
+        platforms,
+        variants: 1,
+      });
+      const text = variants?.[0]?.text;
+      if (text) setContent(text);
+      if (cached) {
+        dispatch(recordCacheHit());
+        dispatch(addNotification({ message: "Reused last generation — no tokens spent.", type: "info" }));
+      } else if (usage?.total_tokens > 0) {
+        dispatch(addTokenUsage(usage.total_tokens));
+      }
+    } catch (err) {
+      dispatch(addNotification({
+        message: `Generation failed: ${err.message || "unknown error"}`,
+        type: "error",
+      }));
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
   // Status auto-flow: draft + future date → scheduled. Published / error
   // stay as-is (the scheduler manages those). The manual Status dropdown
   // has been removed — "I'm editing a post on the calendar" implies intent
@@ -154,6 +198,11 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
       platforms,
       scheduledDate: date,
       time,
+      // Preserve the post's existing IANA timezone when edits don't change
+      // it; otherwise stamp it with the browser's local zone. Without this
+      // the PATCH path dropped tz and the scheduler treated "09:00" as UTC,
+      // firing posts 1–2h after the user expected.
+      timezone: post.timezone || browserTimezone(),
       media,
       status: computeNextStatus(),
     });
@@ -231,19 +280,51 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
             className="overflow-y-auto p-5"
             style={{ borderRight: "1px solid var(--border-default)" }}
           >
-            <label
-              className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
-              style={{ color: "var(--text-tertiary)" }}
-            >
-              Content
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label
+                className="text-xs font-semibold uppercase tracking-wider"
+                style={{ color: "var(--text-tertiary)" }}
+              >
+                Content
+              </label>
+              <button
+                type="button"
+                onClick={onGenerate}
+                disabled={isGenerating}
+                className="text-[11px] inline-flex items-center gap-1 px-2 py-1 rounded-md transition-colors"
+                style={{
+                  background: "rgba(99, 102, 241, 0.10)",
+                  color: "var(--accent-primary)",
+                  border: "1px solid rgba(99, 102, 241, 0.25)",
+                  opacity: isGenerating ? 0.6 : 1,
+                  cursor: isGenerating ? "not-allowed" : "pointer",
+                }}
+                title={
+                  content.trim()
+                    ? "Generate a new draft based on the current content"
+                    : "Generate a draft from the selected platforms"
+                }
+              >
+                {isGenerating ? (
+                  <>
+                    <Loader2 size={11} className="animate-spin" />
+                    Generating…
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={11} />
+                    {content.trim() ? "Regenerate" : "Generate with AI"}
+                  </>
+                )}
+              </button>
+            </div>
             <textarea
               value={content}
               onChange={(e) => setContent(e.target.value)}
               rows={5}
               className="input-field"
               style={{ resize: "vertical", marginBottom: 16 }}
-              placeholder="What do you want to post?"
+              placeholder="What do you want to post? Or click Generate with AI."
             />
 
             <label

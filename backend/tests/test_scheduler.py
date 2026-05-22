@@ -65,8 +65,9 @@ def test_due_at_epoch_interprets_timezone():
 
 def test_due_at_epoch_defaults_time_and_tz_when_missing():
     post = {"scheduledDate": "2026-06-01"}
-    # No time → 09:00, no tz → UTC. Documenting the assumption.
-    expected = _epoch_in_tz("2026-06-01", "09:00", "UTC")
+    # No time → 09:00, no tz → DEFAULT_TZ_NAME (Europe/Paris). UTC would be
+    # 1–2 hours off for the team that actually uses this app.
+    expected = _epoch_in_tz("2026-06-01", "09:00", sched.DEFAULT_TZ_NAME)
     assert sched._due_at_epoch(post) == pytest.approx(expected)
 
 
@@ -75,10 +76,11 @@ def test_due_at_epoch_returns_none_for_unparseable_date():
     assert sched._due_at_epoch({}) is None
 
 
-def test_due_at_epoch_falls_back_to_utc_for_bad_tz():
+def test_due_at_epoch_falls_back_to_default_for_bad_tz():
     post = {"scheduledDate": "2026-06-01", "time": "09:00", "timezone": "Pluto/Mars"}
+    # Unparseable zone → fall back to DEFAULT_TZ_NAME, not UTC.
     assert sched._due_at_epoch(post) == pytest.approx(
-        _epoch_in_tz("2026-06-01", "09:00", "UTC")
+        _epoch_in_tz("2026-06-01", "09:00", sched.DEFAULT_TZ_NAME)
     )
 
 
