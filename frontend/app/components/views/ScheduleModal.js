@@ -160,18 +160,25 @@ export default function ScheduleModal({
   const hasPending = media.some((m) => m.status === "uploading");
 
   // ─── AI generation (local) ───────────────────────────────────────
-  // Same /generate endpoint the editor uses; result goes into the modal's
-  // local content state so opening this modal never disturbs an in-flight
-  // editor draft.
+  // Same /generate endpoint the editor uses, with the same context — the
+  // uploaded image's filename so the vision model can describe it, and
+  // force: true on explicit Regenerate so the second click actually
+  // produces new text instead of returning a cached result.
   const [isGenerating, setIsGenerating] = useState(false);
   const onGenerate = async () => {
     if (isGenerating) return;
     setIsGenerating(true);
     try {
+      const firstImage = media.find(
+        (m) => m.kind === "image" && m.status === "uploaded" && m.filename
+      );
+      const force = !!content.trim();
       const { variants, usage, cached } = await generateContent({
         prompt: content,
         platforms,
         variants: 1,
+        image: firstImage?.filename || null,
+        force,
       });
       const text = variants?.[0]?.text;
       if (text) setContent(text);

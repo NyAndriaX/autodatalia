@@ -144,18 +144,35 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
   const hasPending = media.some((m) => m.status === "uploading");
 
   // ─── AI generation (local to the popup) ──────────────────────────
-  // Calls the same /generate endpoint CreationEditor uses, but writes the
-  // result into the popup's local content state instead of editor Redux —
-  // so opening this popup never clobbers an in-flight editor draft.
+  // Calls the same /generate endpoint CreationEditor uses, with the same
+  // context shape — including the uploaded image so the vision model can
+  // describe it instead of writing blind. Result lands in the popup's
+  // local content state so opening this popup never clobbers an in-flight
+  // editor draft.
   const [isGenerating, setIsGenerating] = useState(false);
   const onGenerate = async () => {
     if (isGenerating) return;
     setIsGenerating(true);
     try {
+      // First successfully-uploaded image's server-side filename — the
+      // backend routes through a vision model when this is set, so the
+      // generated caption can actually describe what's in the picture.
+      // Local-only previews (no remoteUrl) are skipped because the model
+      // can't fetch them.
+      const firstImage = media.find(
+        (m) => m.kind === "image" && m.status === "uploaded" && m.filename
+      );
+      // Whether the user is calling this as an explicit Regenerate (content
+      // already set) — force-bypass the cache so the second click actually
+      // produces something new instead of silently returning the cached
+      // result that made the button feel dead.
+      const force = !!content.trim();
       const { variants, usage, cached } = await generateContent({
         prompt: content,
         platforms,
         variants: 1,
+        image: firstImage?.filename || null,
+        force,
       });
       const text = variants?.[0]?.text;
       if (text) setContent(text);
@@ -680,6 +697,14 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
                 {activeTabPlatform && (
                   <PostMiniPreview
                     platform={activeTabPlatform}
+                    // Selected ratio from the picker so the preview
+                    // visually reflects the user's choice. Falls back to
+                    // the platform default when the user hasn't picked.
+                    ratio={
+                      ratios[activeTabPlatform.id] ||
+                      RATIOS_BY_PLATFORM[activeTabPlatform.id]?.defaultRatio ||
+                      "1:1"
+                    }
                     content={content}
                     media={media}
                     hashtagCount={hashtagCount}
@@ -740,11 +765,13 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
    but sized to live inside a 480-pixel-wide modal panel. Renders the post
    with platform-appropriate aspect ratio, char/hashtag limits, and chrome.
    ─────────────────────────────────────────────────────────────────────── */
-function PostMiniPreview({ platform, content, media, hashtagCount }) {
+function PostMiniPreview({ platform, content, media, hashtagCount, ratio }) {
   const Icon = platform.icon;
-  const ratio = RATIOS_BY_PLATFORM[platform.id]?.defaultRatio || "1:1";
-  const aspectRatio = ratio.replace(":", " / ");
-  const numericRatio = parseRatio(ratio);
+  // Caller supplies the active ratio; fall back to the platform default
+  // when called without one so the component is still usable elsewhere.
+  const effectiveRatio = ratio || RATIOS_BY_PLATFORM[platform.id]?.defaultRatio || "1:1";
+  const aspectRatio = effectiveRatio.replace(":", " / ");
+  const numericRatio = parseRatio(effectiveRatio);
   const charPercent = Math.min(
     (content.length / platform.maxChars) * 100,
     100
@@ -841,7 +868,7 @@ function PostMiniPreview({ platform, content, media, hashtagCount }) {
               style={{ color: platform.color }}
             />
             <p className="text-[11px]">
-              {ratio} {numericRatio < 0.7 ? "Vertical" : numericRatio > 1.1 ? "Landscape" : "Square"}
+              {effectiveRatio} {numericRatio < 0.7 ? "Vertical" : numericRatio > 1.1 ? "Landscape" : "Square"}
             </p>
           </div>
         )}

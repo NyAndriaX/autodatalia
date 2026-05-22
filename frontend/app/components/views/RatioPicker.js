@@ -1,8 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, Check, Frame } from "lucide-react";
 import { RATIOS_BY_PLATFORM, parseRatio } from "../../lib/platforms";
+
+const POPOVER_WIDTH = 240;
+const POPOVER_HEIGHT_APPROX = 220;
 
 /**
  * Per-platform aspect-ratio popover. Extracted from CreationEditor so the
@@ -19,28 +23,145 @@ import { RATIOS_BY_PLATFORM, parseRatio } from "../../lib/platforms";
  */
 export default function RatioPicker({ platform, value, onChange, compact = false }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+  const [popoverPos, setPopoverPos] = useState(null);
+  const triggerRef = useRef(null);
+  const popoverRef = useRef(null);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
   const spec = RATIOS_BY_PLATFORM[platform.id];
   const options = spec?.options || [];
 
+  // Anchor the popover to the trigger via fixed-position math. The previous
+  // absolute-positioned popover got clipped by the modal's overflow:auto,
+  // so the user only saw the first option (the screenshot showed nothing
+  // but the "DEFAULT" badge). Same fix the TimePicker uses.
+  const reposition = () => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const vpH = window.innerHeight;
+    const vpW = window.innerWidth;
+    const popH = popoverRef.current?.offsetHeight || POPOVER_HEIGHT_APPROX;
+    const flipUp = rect.bottom + popH + 8 > vpH && rect.top - popH - 8 > 0;
+    const top = flipUp ? rect.top - popH - 6 : rect.bottom + 6;
+    // Right-align with the trigger, then clamp into the viewport.
+    const preferredLeft = rect.right - POPOVER_WIDTH;
+    const left = Math.max(8, Math.min(preferredLeft, vpW - POPOVER_WIDTH - 8));
+    setPopoverPos({ top, left });
+  };
+
   useEffect(() => {
     if (!open) return;
-    const away = (e) => !ref.current?.contains(e.target) && setOpen(false);
-    const esc = (e) => e.key === "Escape" && setOpen(false);
-    document.addEventListener("mousedown", away);
-    document.addEventListener("keydown", esc);
-    return () => {
-      document.removeEventListener("mousedown", away);
-      document.removeEventListener("keydown", esc);
+    reposition();
+    const onClickAway = (e) => {
+      if (triggerRef.current?.contains(e.target)) return;
+      if (popoverRef.current?.contains(e.target)) return;
+      setOpen(false);
     };
+    const onKey = (e) => e.key === "Escape" && setOpen(false);
+    const onScrollOrResize = () => reposition();
+    document.addEventListener("mousedown", onClickAway);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      document.removeEventListener("mousedown", onClickAway);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [open]);
+
+  // Re-measure after first paint so the flip-up math uses the real height.
+  useLayoutEffect(() => {
+    if (open) reposition();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   if (!options.length) return null;
   const effective = value || spec.defaultRatio;
 
+  const popover = open && popoverPos && (
+    <div
+      ref={popoverRef}
+      role="listbox"
+      className="rounded-xl p-1.5 shadow-lg animate-fade-in"
+      style={{
+        position: "fixed",
+        top: popoverPos.top,
+        left: popoverPos.left,
+        zIndex: 200,
+        background: "var(--bg-card)",
+        border: "1px solid var(--border-default)",
+        boxShadow: "var(--shadow-dropdown)",
+        minWidth: POPOVER_WIDTH,
+      }}
+    >
+      {options.map((opt) => {
+        const isSelected = opt.value === effective;
+        const isDefault = opt.value === spec.defaultRatio;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            role="option"
+            aria-selected={isSelected}
+            onClick={() => {
+              onChange(opt.value);
+              setOpen(false);
+            }}
+            className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-left text-xs transition-all"
+            style={{
+              background: isSelected ? "rgba(99,102,241,0.12)" : "transparent",
+              color: "var(--text-primary)",
+            }}
+          >
+            <span
+              className="rounded-sm shrink-0"
+              style={{
+                width: 22,
+                height: 22 / parseRatio(opt.value),
+                minHeight: 10,
+                background: isSelected
+                  ? "var(--accent-primary)"
+                  : "var(--bg-tertiary)",
+                border: "1px solid var(--border-default)",
+              }}
+              aria-hidden="true"
+            />
+            <span className="flex-1">
+              <span className="block font-medium">{opt.label}</span>
+              <span
+                className="block text-[10px]"
+                style={{ color: "var(--text-muted)" }}
+              >
+                {opt.hint}
+              </span>
+            </span>
+            {isDefault && (
+              <span
+                className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded"
+                style={{
+                  background: "var(--bg-tertiary)",
+                  color: "var(--text-muted)",
+                }}
+              >
+                default
+              </span>
+            )}
+            {isSelected && (
+              <Check size={12} style={{ color: "var(--accent-primary)" }} />
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+
   return (
-    <div className="relative" ref={ref}>
+    <>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="inline-flex items-center gap-1.5 rounded-lg text-xs font-medium transition-all"
@@ -58,77 +179,10 @@ export default function RatioPicker({ platform, value, onChange, compact = false
         {effective}
         <ChevronDown size={11} aria-hidden="true" />
       </button>
-      {open && (
-        <div
-          role="listbox"
-          className="absolute right-0 z-[120] mt-1 rounded-xl p-1.5 shadow-lg animate-fade-in"
-          style={{
-            background: "var(--bg-card)",
-            border: "1px solid var(--border-default)",
-            boxShadow: "var(--shadow-dropdown)",
-            minWidth: 220,
-          }}
-        >
-          {options.map((opt) => {
-            const isSelected = opt.value === effective;
-            const isDefault = opt.value === spec.defaultRatio;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                role="option"
-                aria-selected={isSelected}
-                onClick={() => {
-                  onChange(opt.value);
-                  setOpen(false);
-                }}
-                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-left text-xs transition-all"
-                style={{
-                  background: isSelected ? "rgba(99,102,241,0.12)" : "transparent",
-                  color: "var(--text-primary)",
-                }}
-              >
-                <span
-                  className="rounded-sm shrink-0"
-                  style={{
-                    width: 22,
-                    height: 22 / parseRatio(opt.value),
-                    minHeight: 10,
-                    background: isSelected
-                      ? "var(--accent-primary)"
-                      : "var(--bg-tertiary)",
-                    border: "1px solid var(--border-default)",
-                  }}
-                  aria-hidden="true"
-                />
-                <span className="flex-1">
-                  <span className="block font-medium">{opt.label}</span>
-                  <span
-                    className="block text-[10px]"
-                    style={{ color: "var(--text-muted)" }}
-                  >
-                    {opt.hint}
-                  </span>
-                </span>
-                {isDefault && (
-                  <span
-                    className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded"
-                    style={{
-                      background: "var(--bg-tertiary)",
-                      color: "var(--text-muted)",
-                    }}
-                  >
-                    default
-                  </span>
-                )}
-                {isSelected && (
-                  <Check size={12} style={{ color: "var(--accent-primary)" }} />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
+      {/* Portal-render so the popover escapes any modal overflow:auto.
+          Without this it gets clipped to the modal scroll area and only
+          the first option is visible — see screenshot the user shared. */}
+      {mounted && popover ? createPortal(popover, document.body) : null}
+    </>
   );
 }
