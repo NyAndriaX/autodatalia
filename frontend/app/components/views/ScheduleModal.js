@@ -1,15 +1,27 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import { useDispatch } from "react-redux";
 import {
   X,
   Upload,
   Film,
   ImagePlus,
   Sparkles,
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
 } from "lucide-react";
 import { PLATFORMS } from "../../lib/platforms";
 import { isoDateKey, startOfToday, parseDateKey } from "../../lib/dateUtils";
+import { addNotification } from "../../store/uiSlice";
+import {
+  ACCEPTED_TYPES,
+  toMediaItem,
+  uploadToBackend,
+  validateFile,
+  revokeMediaItem,
+} from "../../lib/uploadService";
 import DatePicker from "./DatePicker";
 import TimePicker from "./TimePicker";
 
@@ -19,8 +31,6 @@ const MEDIA_SOURCES = [
   { id: "ai-image", kind: "image", source: "ai", label: "Generate Image", icon: ImagePlus },
   { id: "ai-video", kind: "video", source: "ai", label: "Generate Video", icon: Sparkles },
 ];
-
-let mediaUid = 0;
 
 /**
  * Shared scheduling dialog used by both the calendar (quick-create on a day)
@@ -43,39 +53,104 @@ export default function ScheduleModal({
   onClose,
   onSchedule,
 }) {
+  const dispatch = useDispatch();
   const [content, setContent] = useState(initialContent);
   const [platforms, setPlatforms] = useState(
     initialPlatforms ?? { facebook: true, instagram: true }
   );
   const [date, setDate] = useState(initialDate ?? isoDateKey(startOfToday()));
   const [time, setTime] = useState(initialTime ?? "09:00");
-  // Carries through whatever the editor uploaded (status: "uploaded" +
-  // remoteUrl). Quick-creates from the calendar only add metadata-only
-  // descriptors via the picker below; those don't get fired by the
-  // scheduler (no remoteUrl), but that path is intentionally minimal.
+  // Carries uploaded items from the editor (status: "uploaded" + remoteUrl)
+  // straight through, and any newly-picked files get the same shape — see
+  // updateMedia below for the optimistic add → upload → swap dance. Without
+  // this the scheduler would fire text-only because no remoteUrl is set.
   const [media, setMedia] = useState(initialMedia ?? []);
   const imageInputRef = useRef(null);
   const videoInputRef = useRef(null);
 
-  const toggle = (id) => setPlatforms((p) => ({ ...p, [id]: !p[id] }));
-  const addMedia = (m) =>
-    setMedia((list) => [...list, { id: `m${++mediaUid}`, ...m }]);
-  const removeMedia = (id) =>
-    setMedia((list) => list.filter((m) => m.id !== id));
+  // Track which previewUrls *this modal* created so closing the modal can
+  // revoke them. Items pulled in via initialMedia (created by MediaUploader)
+  // stay alive — that uploader owns its own cleanup on unmount.
+  const ownedPreviewIds = useRef(new Set());
 
-  const onPickFile = (kind) => (e) => {
+  useEffect(() => {
+    const owned = ownedPreviewIds.current;
+    return () => {
+      for (const m of media) {
+        if (owned.has(m.id)) revokeMediaItem(m);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const toggle = (id) => setPlatforms((p) => ({ ...p, [id]: !p[id] }));
+  const removeMedia = (id) => {
+    setMedia((list) => {
+      const target = list.find((m) => m.id === id);
+      if (target && ownedPreviewIds.current.has(id)) revokeMediaItem(target);
+      ownedPreviewIds.current.delete(id);
+      return list.filter((m) => m.id !== id);
+    });
+  };
+
+  const updateMedia = (id, patch) =>
+    setMedia((list) => list.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+
+  const ingestFile = async (file, expectedKind) => {
+    const err = validateFile(file);
+    if (err) {
+      dispatch(addNotification({ message: `${file.name}: ${err}`, type: "error" }));
+      return;
+    }
+    const item = toMediaItem(file);
+    if (expectedKind && item.kind !== expectedKind) {
+      // User clicked "Upload Video" then picked a still image (or vice-versa);
+      // accept it but note the mismatch — nicer than silently swapping kind.
+      dispatch(
+        addNotification({
+          message: `${file.name} was added as ${item.kind} (not ${expectedKind}).`,
+          type: "info",
+        })
+      );
+    }
+    ownedPreviewIds.current.add(item.id);
+    setMedia((list) => [...list, item]);
+    updateMedia(item.id, { status: "uploading" });
+    const result = await uploadToBackend(file);
+    updateMedia(item.id, result);
+    if (result.status !== "uploaded") {
+      dispatch(
+        addNotification({
+          message: `${file.name} couldn't be uploaded — the scheduler will fire this post without media.`,
+          type: "error",
+        })
+      );
+    }
+  };
+
+  const onPickFile = (kind) => async (e) => {
     const file = e.target.files?.[0];
-    if (file) addMedia({ kind, source: "upload", name: file.name });
     e.target.value = "";
+    if (!file) return;
+    await ingestFile(file, kind);
   };
 
   const onChooseSource = (s) => {
     if (s.source === "upload") {
       (s.kind === "image" ? imageInputRef : videoInputRef).current?.click();
     } else {
-      addMedia({ kind: s.kind, source: "ai", name: `AI ${s.kind}` });
+      // AI generation isn't wired to a real model yet — flagging it loudly
+      // is better than dropping a placeholder the scheduler can't fire.
+      dispatch(
+        addNotification({
+          message: `AI ${s.kind} generation isn't wired yet — upload a file from your device for now.`,
+          type: "info",
+        })
+      );
     }
   };
+
+  const hasPending = media.some((m) => m.status === "uploading");
 
   const dayLabel = parseDateKey(date).toLocaleDateString(undefined, {
     weekday: "long",
@@ -149,33 +224,50 @@ export default function ScheduleModal({
             );
           })}
         </div>
-        <input ref={imageInputRef} type="file" accept="image/*" className="hidden" onChange={onPickFile("image")} />
-        <input ref={videoInputRef} type="file" accept="video/*" className="hidden" onChange={onPickFile("video")} />
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept={ACCEPTED_TYPES.filter((t) => t.startsWith("image/")).join(",")}
+          className="hidden"
+          onChange={onPickFile("image")}
+        />
+        <input
+          ref={videoInputRef}
+          type="file"
+          accept={ACCEPTED_TYPES.filter((t) => t.startsWith("video/")).join(",")}
+          className="hidden"
+          onChange={onPickFile("video")}
+        />
 
         {media.length > 0 && (
           <div className="flex flex-col gap-1.5 mb-4">
-            {media.map((m) => (
-              <div
-                key={m.id}
-                className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs"
-                style={{ background: "var(--bg-secondary)", color: "var(--text-secondary)" }}
-              >
-                {m.kind === "video" ? <Film size={13} /> : <ImagePlus size={13} />}
-                <span className="flex-1 truncate">{m.name}</span>
-                <span
-                  className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded"
-                  style={{
-                    background: m.source === "ai" ? "rgba(245,158,11,0.15)" : "rgba(99,102,241,0.12)",
-                    color: m.source === "ai" ? "var(--status-pending)" : "var(--accent-primary)",
-                  }}
+            {media.map((m) => {
+              // Status drives the right-hand icon: spinner while uploading,
+              // green check when ready (the scheduler will use remoteUrl),
+              // red warning when the upload failed (post will fire text-only).
+              const statusIcon =
+                m.status === "uploading" ? (
+                  <Loader2 size={11} className="animate-spin" style={{ color: "var(--accent-primary)" }} />
+                ) : m.status === "uploaded" ? (
+                  <CheckCircle2 size={11} style={{ color: "var(--status-approved)" }} />
+                ) : m.status === "error" || (m.status && m.status !== "local" && !m.remoteUrl) ? (
+                  <AlertCircle size={11} style={{ color: "var(--status-error)" }} />
+                ) : null;
+              return (
+                <div
+                  key={m.id}
+                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs"
+                  style={{ background: "var(--bg-secondary)", color: "var(--text-secondary)" }}
                 >
-                  {m.source}
-                </span>
-                <button onClick={() => removeMedia(m.id)} style={{ color: "var(--text-muted)" }} aria-label="Remove media">
-                  <X size={12} />
-                </button>
-              </div>
-            ))}
+                  {m.kind === "video" ? <Film size={13} /> : <ImagePlus size={13} />}
+                  <span className="flex-1 truncate">{m.name}</span>
+                  {statusIcon}
+                  <button onClick={() => removeMedia(m.id)} style={{ color: "var(--text-muted)" }} aria-label="Remove media">
+                    <X size={12} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -223,6 +315,8 @@ export default function ScheduleModal({
           </button>
           <button
             className="btn-primary"
+            disabled={hasPending}
+            title={hasPending ? "Waiting for media to finish uploading…" : undefined}
             onClick={() =>
               onSchedule({
                 content: content.trim(),
@@ -234,7 +328,7 @@ export default function ScheduleModal({
               })
             }
           >
-            {submitLabel}
+            {hasPending ? "Uploading…" : submitLabel}
           </button>
         </div>
       </div>
