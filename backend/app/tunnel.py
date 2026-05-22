@@ -11,11 +11,13 @@ import threading
 
 TUNNEL_URL: str | None = None
 _tunnel_ready = threading.Event()
+_tunnel_started = False  # set True only when start_cloudflared() is launched
 
 
 def start_cloudflared() -> None:
     """Launch cloudflared and capture the generated tunnel URL."""
-    global TUNNEL_URL
+    global TUNNEL_URL, _tunnel_started
+    _tunnel_started = True
     print("[tunnel] Starting cloudflared...")
     try:
         process = subprocess.Popen(
@@ -40,9 +42,16 @@ def start_cloudflared() -> None:
 
 
 async def wait_for_tunnel(timeout: float = 30.0) -> str | None:
-    """Block (async) until the tunnel is ready or *timeout* seconds elapse."""
+    """Block (async) until the tunnel is ready or *timeout* seconds elapse.
+
+    If the tunnel was never started (TUNNEL_ENABLED=false) this returns
+    immediately — otherwise every /upload, /search etc. would block for the
+    full timeout on every request, making the media library appear frozen.
+    """
     if TUNNEL_URL:
         return TUNNEL_URL
+    if not _tunnel_started:
+        return None
     try:
         loop = asyncio.get_event_loop()
         await asyncio.wait_for(

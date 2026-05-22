@@ -35,22 +35,69 @@ export function revokeMediaItem(item) {
   if (item?.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(item.previewUrl);
 }
 
-// Push a file to the backend /upload endpoint. Falls back to a local-only
-// preview if the backend is offline or rejects the request (e.g. 401 when
-// the auth token is missing).
+// Push a file to the backend /upload endpoint.
+//
+// IMPORTANT: We post to `/api/upload` (a Next.js Route Handler in
+// app/api/upload/route.js), NOT through `${apiBaseUrl}/upload` which
+// goes via the rewrite proxy. The dev rewrite buffers the entire
+// multipart body in memory and times out at 30s on files larger than
+// ~5-10MB — confirmed via curl. The Route Handler streams the body
+// directly to the backend without buffering, so a 48MB video uploads
+// in ~4s instead of failing after 30s.
+//
+// All other endpoints (small JSON requests) continue using the rewrite
+// proxy via apiBaseUrl — that path works fine for them.
 export async function uploadToBackend(file) {
-  if (!config.apiBaseUrl) return { remoteUrl: null, status: "local" };
   try {
     const body = new FormData();
     body.append("file", file);
-    const data = await apiUpload("/upload", body);
+    const headers = {};
+    if (config.backendAuthToken) {
+      headers.Authorization = `Bearer ${config.backendAuthToken}`;
+    }
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      headers,
+      body,
+    });
+    if (!res.ok) {
+      const err = new Error(`API ${res.status} /upload`);
+      err.status = res.status;
+      throw err;
+    }
+    const data = await res.json();
     return {
       remoteUrl: data?.url ?? null,
       status: "uploaded",
       filename: data?.filename ?? file.name,
       kind: data?.kind ?? (file.type.startsWith("video/") ? "video" : "image"),
     };
+  } catch (e) {
+    const status = e?.status;
+    let error;
+    if (!status) error = "Backend offline";
+    else if (status === 401) error = "Auth required (set token)";
+    else if (status === 413) error = "File too large";
+    else if (status === 415) error = "Unsupported type";
+    else if (status >= 500) error = `Server error (${status})`;
+    else error = `Upload failed (${status})`;
+    return { remoteUrl: null, status: "local", error };
+  }
+}
+
+/** Delete a media item by its server-side relative path (the `id` field
+ *  search returns). Resolves to { ok, status } so callers can show a toast. */
+export async function deleteFromBackend(relativePath) {
+  if (!config.apiBaseUrl) return { ok: false, status: 0 };
+  try {
+    const headers = {};
+    if (config.backendAuthToken) headers.Authorization = `Bearer ${config.backendAuthToken}`;
+    const res = await fetch(
+      `${config.apiBaseUrl}/media/${encodeURI(relativePath)}`,
+      { method: "DELETE", headers },
+    );
+    return { ok: res.ok, status: res.status };
   } catch {
-    return { remoteUrl: null, status: "local" };
+    return { ok: false, status: 0 };
   }
 }

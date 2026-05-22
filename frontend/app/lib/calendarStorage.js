@@ -1,5 +1,5 @@
 // Lightweight localStorage mirror for scheduled posts so the calendar
-// survives a refresh until the n8n/Airtable backend takes over hydration.
+// survives a refresh when the backend is unreachable.
 // Same spirit as lib/theme.js (persisted UI preference).
 
 const KEY = "datalia.calendar.posts";

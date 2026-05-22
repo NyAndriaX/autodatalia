@@ -137,9 +137,7 @@ export function submitForValidationThunk() {
 
 export function publishNowThunk() {
   return async (dispatch, getState) => {
-    const state = getState();
-    const { currentPost } = state.editor;
-    const cooldownUntil = state.ui.publishCooldownUntil || 0;
+    const cooldownUntil = getState().ui.publishCooldownUntil || 0;
     const now = Date.now();
 
     // Frontend cooldown guard — purely a UX nicety; backend has its own
@@ -149,6 +147,46 @@ export function publishNowThunk() {
       dispatch(addNotification({ message: `Wait ${wait}s before publishing again.`, type: "error" }));
       return;
     }
+
+    // Wait for any in-flight uploads before publishing — sending a publish
+    // request while a video is still uploading guarantees a "requires_media"
+    // failure on TikTok/IG. Poll the store for up to 60s; if uploads are
+    // still pending after that, bail with a clear message instead of firing
+    // a doomed publish call.
+    const isUploadDone = () => {
+      const st = getState().editor.currentPost;
+      return !(st.media || []).some((m) => m.status === "uploading");
+    };
+    if (!isUploadDone()) {
+      dispatch(
+        addNotification({
+          message: "Waiting for upload + transcode to finish before publishing…",
+          type: "info",
+        })
+      );
+      // Backend transcodes videos to H.264/AAC MP4 on upload — a 5-min
+      // input at veryfast preset is ~90s on a modern CPU. Give it 5 min
+      // before giving up (covers the worst realistic short-form video).
+      const deadline = Date.now() + 5 * 60_000;
+      while (Date.now() < deadline && !isUploadDone()) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      if (!isUploadDone()) {
+        dispatch(setStatus("error"));
+        dispatch(
+          addNotification({
+            message: "Upload + transcode didn't finish in 5min. Check the file and retry.",
+            type: "error",
+          })
+        );
+        return;
+      }
+    }
+
+    // Re-read currentPost AFTER the upload-wait so we pick up the now-
+    // populated remoteUrl on each uploaded media item.
+    const { currentPost } = getState().editor;
 
     // Build the list of (platform, target_id) pairs from currentPost.platforms
     // crossed with the live connections list. The user's `platforms` toggle
@@ -198,19 +236,78 @@ export function publishNowThunk() {
     }
 
     // Pick the first successfully-uploaded media's public URL. Anything
-    // still local-only (no remoteUrl) can't be fetched by Meta/IG, so we
-    // skip it and let the FB text-only path through.
+    // still local-only (no remoteUrl) can't be fetched by Meta/IG.
     const uploadedMedia = currentPost.media.find(
       (m) => m.status === "uploaded" && m.remoteUrl
     );
     const mediaUrl = uploadedMedia?.remoteUrl || null;
-    // IG needs to know whether to treat the media as image vs video so the
-    // publish step can wait for video processing.
-    if (uploadedMedia?.kind === "video") {
+    const mediaKind = uploadedMedia?.kind || null;
+    // Tag every target with the actual media kind so each platform handler
+    // routes correctly. Without this, Facebook defaults to /photos for
+    // videos (Meta 324), and TikTok auto-detects from extension — both
+    // brittle compared to "the editor said it's a video, trust it".
+    if (mediaKind) {
       for (const t of targets) {
-        if (t.platform === "instagram") t.media_kind = "video";
+        t.media_kind = mediaKind;
       }
     }
+
+    // Diagnostic — when publish gets media_url=MISSING despite a media
+    // preview showing in the editor, this tells us exactly what's in the
+    // store: which items, what status, what remoteUrl.
+    // eslint-disable-next-line no-console
+    console.log(
+      "[publish-thunk] media state:",
+      (currentPost.media || []).map((m) => ({
+        id: m.id,
+        kind: m.kind,
+        status: m.status,
+        remoteUrl: m.remoteUrl ? `${m.remoteUrl.slice(0, 60)}…` : null,
+        filename: m.filename,
+      })),
+      "→ picked mediaUrl:",
+      mediaUrl
+    );
+
+    // If the user has media in the post but NONE of it actually uploaded
+    // successfully, refuse to publish. The previous behaviour silently
+    // posted text-only to platforms that accept it (FB) and reported
+    // `requires_media` for the rest — confusing because the editor showed
+    // the video preview the whole time (rendered from the local blob URL).
+    const hasMediaItems = (currentPost.media || []).length > 0;
+    const platformsNeedingMedia = targets.some(
+      (t) => t.platform === "instagram" || t.platform === "tiktok"
+    );
+    if (hasMediaItems && !mediaUrl) {
+      const broken = (currentPost.media || []).filter(
+        (m) => m.status !== "uploaded" || !m.remoteUrl
+      );
+      const why =
+        broken.find((b) => b.error)?.error ||
+        (broken.some((b) => b.status === "uploading")
+          ? "upload still in progress"
+          : "upload didn't complete");
+      dispatch(setStatus("error"));
+      dispatch(
+        addNotification({
+          message: `Can't publish: ${why}. Remove the failed file and re-add it.`,
+          type: "error",
+        })
+      );
+      return;
+    }
+    if (platformsNeedingMedia && !mediaUrl) {
+      dispatch(setStatus("error"));
+      dispatch(
+        addNotification({
+          message:
+            "Instagram and TikTok need a media file. Add an image or video before publishing.",
+          type: "error",
+        })
+      );
+      return;
+    }
+    // (media_kind for every target is set above — old IG-only loop removed)
 
     // TikTok compose flags — only forward when TikTok is actually in
     // the publish set. The backend treats `tiktok` as optional and
@@ -221,10 +318,10 @@ export function publishNowThunk() {
           disclose_video_branded: !!currentPost.tiktok?.disclose_video_branded,
           disclose_video_your_brand: !!currentPost.tiktok?.disclose_video_your_brand,
           music_confirmed: !!currentPost.tiktok?.music_confirmed,
-          // Frontend can't know if the audit cleared — backend reads
-          // from its own audit state. Default to `inbox` until the
-          // env explicitly flips it (TIKTOK_AUDIT_MODE=direct).
-          audit_mode: currentPost.tiktok?.audit_mode || "inbox",
+          // Direct-post writes straight to the user's profile (no inbox
+          // draft). Requires `video.publish` in the OAuth scopes — set
+          // TIKTOK_SCOPES on the backend and reconnect TikTok.
+          audit_mode: currentPost.tiktok?.audit_mode || "direct",
         }
       : null;
 

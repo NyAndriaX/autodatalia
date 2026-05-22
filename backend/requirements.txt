@@ -1,6 +1,10 @@
 aiofiles==24.1.0
 fastapi==0.115.12
 httpx==0.28.1
+# imageio-ffmpeg: bundles a static ffmpeg binary so video uploads can be
+# transcoded to H.264 + AAC MP4 (TikTok/Meta requirement) without needing
+# the host to install ffmpeg system-wide.
+imageio-ffmpeg==0.6.0
 pillow==11.0.0
 pydantic==2.11.3
 python-multipart==0.0.20

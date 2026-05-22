@@ -325,7 +325,12 @@ export default function MediaLibraryView() {
                     ...p,
                     _file: null,
                     status: result.status === "uploaded" ? "uploaded" : "error",
-                    error: result.status === "uploaded" ? null : "Backend offline",
+                    // Surface the actual reason (size / auth / network)
+                    // instead of always saying "Backend offline".
+                    error:
+                      result.status === "uploaded"
+                        ? null
+                        : result.error || "Upload failed",
                     remoteUrl: result.remoteUrl,
                   }
                 : p

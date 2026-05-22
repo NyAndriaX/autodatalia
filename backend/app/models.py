@@ -184,6 +184,11 @@ class PublishTarget(BaseModel):
     # IG only: when media_kind is "video" the publish call waits for IG
     # to finish processing before publishing the container.
     media_kind: str | None = None  # "image" | "video"
+    # Optional per-target media override. When set, takes precedence over
+    # the top-level PublishRequest.media_url for THIS target only — so the
+    # frontend can send an image URL to Facebook and a video URL to TikTok
+    # in the same publish call.
+    media_url: str | None = None
 
 
 class TikTokOptions(BaseModel):
@@ -202,9 +207,11 @@ class TikTokOptions(BaseModel):
     # a field by that name), but we record it on /publish so the audit
     # trail shows the user ticked the consent.
     music_confirmed: bool = False
-    # Until TikTok approves video.publish we have to use the inbox flow.
-    # Frontend sets this once we know the audit cleared.
-    audit_mode: str = "inbox"  # "inbox" | "direct"
+    # "direct" goes straight to the user's TikTok profile (no inbox draft
+    # step). Requires `video.publish` in the OAuth scopes — set
+    # TIKTOK_SCOPES="user.info.basic,video.upload,video.publish" and
+    # reconnect TikTok if you switch from inbox to direct.
+    audit_mode: str = "direct"  # "inbox" | "direct"
 
 
 class PublishRequest(BaseModel):

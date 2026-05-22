@@ -92,7 +92,12 @@ PROVIDERS: dict[str, ProviderSpec] = {
         client_secret_env="TIKTOK_CLIENT_SECRET",
         authorize_url="https://www.tiktok.com/v2/auth/authorize/",
         token_url="https://open.tiktokapis.com/v2/oauth/token/",
-        scopes=("user.info.basic", "video.upload", "video.publish"),
+        # Default to the sandbox-safe set. `video.publish` (Direct Post)
+        # only grants post-audit — requesting it in sandbox makes TikTok
+        # reject the whole authorize URL with a "client_key" error that's
+        # actually a scope problem. After the audit clears, override via
+        # the TIKTOK_SCOPES env (comma-separated) to add `video.publish`.
+        scopes=("user.info.basic", "video.upload"),
     ),
     "linkedin": ProviderSpec(
         id="linkedin",
@@ -238,11 +243,16 @@ async def oauth_start(provider_id: str) -> dict[str, str]:
     # with commas instead of spaces. Every other provider follows the
     # standard `client_id` + space-separated scopes.
     if p.id == "tiktok":
+        # Direct-post requires `video.publish`. Sandbox normally rejects
+        # the scope at authorize time UNLESS the app's connected account
+        # is the developer's own (which is always true in sandbox). Allow
+        # an env override so the user can pick: TIKTOK_SCOPES="user.info.basic,video.upload,video.publish"
+        scope_str = os.environ.get("TIKTOK_SCOPES", ",".join(p.scopes))
         params = {
             "client_key": client_id,
             "redirect_uri": _redirect_uri(p.id),
             "response_type": "code",
-            "scope": ",".join(p.scopes),
+            "scope": scope_str,
             "state": state,
         }
     else:
@@ -394,6 +404,14 @@ async def oauth_callback(
     """Exchange the authorization code for an access token, persist it,
     then return a tiny HTML page that closes the popup and notifies the
     opener via postMessage."""
+    # Diagnostic log so we can see what the provider actually sent when
+    # things fail. Truncated so a leaked code isn't pasted whole into logs.
+    print(
+        f"[oauth] {provider_id} callback received: "
+        f"code={'present' if code else 'MISSING'} "
+        f"state={'present' if state else 'MISSING'} "
+        f"error={error or 'none'}"
+    )
     if provider_id not in PROVIDERS:
         return HTMLResponse(
             _popup_close_html(provider_id, False, "Unknown provider."),

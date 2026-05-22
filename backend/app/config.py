@@ -12,8 +12,17 @@ class Settings(BaseModel):
     content_dir: Path
     ai_api_base_url: str
     ai_api_key: str
+    # Three-tier model routing — pick the cheapest model that's good enough
+    # for the task to keep operational cost down (CDC §4):
+    #   ai_model_fast    : SIMPLE   — hashtags, reformulations, image
+    #                      descriptions. Free-tier or sub-cent models.
+    #   ai_model         : STANDARD — default for variant generation /
+    #                      transforms where quality still matters.
+    #   ai_model_premium : PREMIUM  — reserved for the rare complex jobs
+    #                      where the cheaper models clearly fall short.
     ai_model: str
     ai_model_fast: str
+    ai_model_premium: str
     ai_include_images: bool
     ai_daily_limit: int
     cors_allow_origins: list[str]
@@ -35,6 +44,13 @@ def load_settings() -> Settings:
         # cost strategy). Defaults to the main model if unset.
         ai_model_fast=os.getenv(
             "AI_MODEL_FAST",
+            os.getenv("AI_MODEL", "google/gemini-2.0-flash-lite-001"),
+        ),
+        # Premium model reserved for the rare complex jobs where the
+        # default model produces obviously worse output. Defaults to the
+        # standard model so unset env never escalates spend silently.
+        ai_model_premium=os.getenv(
+            "AI_MODEL_PREMIUM",
             os.getenv("AI_MODEL", "google/gemini-2.0-flash-lite-001"),
         ),
         # Default OFF — sending image bytes to a vision model is the single

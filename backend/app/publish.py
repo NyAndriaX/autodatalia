@@ -176,21 +176,42 @@ async def publish_facebook_page(
     content: str,
     media_url: str | None = None,
     link: str | None = None,
+    media_kind: str = "image",
 ) -> PublishResult:
     """Publish a post to a Facebook Page.
 
-    - Text-only / link share → POST /{page_id}/feed
-    - With an image (public URL) → POST /{page_id}/photos (Facebook's photo
-      endpoint also accepts a caption via `message`, so we don't need a
-      separate /feed call).
+    Three branches:
+      - Text-only / link share → POST /{page_id}/feed
+      - Image (public URL)     → POST /{page_id}/photos
+      - Video (public URL)     → POST /{page_id}/videos
 
-    Multi-image carousels are a separate, more complex flow (create
-    unpublished photos, then reference them in a /feed call). Not built
-    yet — single-image is what 95% of users need first.
+    Facebook accepts a caption alongside both photos and videos, so we
+    don't need a separate /feed call to attach text. Multi-image carousels
+    are a separate, more complex flow (create unpublished photos, then
+    reference them in a /feed call). Not built yet — single-asset covers
+    95% of use.
+
+    Both /photos and /videos accept a public `file_url` (image) or
+    `file_url` (video) without any URL-prefix verification — unlike
+    TikTok's PULL_FROM_URL which requires the prefix to be pre-verified.
     """
     base = "https://graph.facebook.com/v21.0"
     try:
-        if media_url:
+        if media_url and media_kind == "video":
+            # /videos accepts `file_url` for URL ingest. Returns {id} —
+            # the post-id needed to build a permalink isn't surfaced
+            # the same way as /photos, so we fetch it separately.
+            data = await _post_json(
+                f"{base}/{page_id}/videos",
+                data={
+                    "file_url": media_url,
+                    "description": content,
+                    "access_token": page_access_token,
+                    "published": "true",
+                },
+            )
+            post_id = data.get("post_id") or data.get("id")
+        elif media_url:
             data = await _post_json(
                 f"{base}/{page_id}/photos",
                 data={
@@ -273,8 +294,17 @@ async def publish_instagram(
             "access_token": page_access_token,
         }
         if media_kind == "video":
-            container_params["media_type"] = "VIDEO"
+            # Prefer REELS over legacy VIDEO — REELS allows up to 15min
+            # and is the only path Meta still actively develops. Legacy
+            # VIDEO returns `Meta 100: Invalid parameter` for clips that
+            # exceed 60s; REELS goes up to 15min so the same upload that
+            # would fail as a feed video posts cleanly as a reel.
+            container_params["media_type"] = "REELS"
             container_params["video_url"] = media_url
+            # Also surface in feed (default is reels-tab-only). Without
+            # this flag the post is technically published but invisible
+            # in the regular profile timeline.
+            container_params["share_to_feed"] = "true"
         else:
             container_params["image_url"] = media_url
 
@@ -377,6 +407,169 @@ def _resolve_media_to_disk_path(media_url: str | None) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+async def publish_tiktok_photo(
+    open_id: str,
+    access_token: str,
+    *,
+    handle_label: str,
+    content: str,
+    photo_url: str,
+    privacy_level: str = "SELF_ONLY",
+    disclose_video_branded: bool = False,
+    disclose_video_your_brand: bool = False,
+    audit_mode: str = "inbox",
+) -> PublishResult:
+    """Publish a photo to TikTok via /v2/post/publish/content/init/.
+
+    TikTok's photo flow ONLY supports PULL_FROM_URL (no FILE_UPLOAD), so
+    the photo_url's prefix must be pre-verified under "URL Properties"
+    in the TikTok Developer Portal. If verification is pending the init
+    call comes back with `url_ownership_unverified` — we surface that
+    verbatim so the user knows what to fix.
+
+    `post_mode`:
+      - "MEDIA_UPLOAD"  → draft / inbox. The user opens TikTok and taps
+                          Publish manually. Works with the sandbox
+                          `video.upload` scope.
+      - "DIRECT_POST"   → posts directly. Requires post-audit
+                          `video.publish` scope.
+    """
+    base = "https://open.tiktokapis.com/v2/post/publish"
+    init_path = f"{base}/content/init/"
+    post_mode = "DIRECT_POST" if audit_mode == "direct" else "MEDIA_UPLOAD"
+
+    body = {
+        "post_info": {
+            "title": (content or "")[:90],
+            "description": (content or "")[:2200],
+            "disable_comment": False,
+            "privacy_level": privacy_level,
+            "auto_add_music": True,
+            "brand_content_toggle": bool(disclose_video_branded),
+            "brand_organic_toggle": bool(disclose_video_your_brand),
+        },
+        "source_info": {
+            "source": "PULL_FROM_URL",
+            "photo_cover_index": 0,
+            "photo_images": [photo_url],
+        },
+        "post_mode": post_mode,
+        "media_type": "PHOTO",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            init_resp = await client.post(
+                init_path,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json; charset=UTF-8",
+                },
+                json=body,
+            )
+        if init_resp.status_code >= 400:
+            # Try to surface TikTok's structured error.
+            try:
+                err = init_resp.json().get("error") or {}
+                code = err.get("code") or ""
+                msg = err.get("message") or init_resp.text[:200]
+            except ValueError:
+                code = ""
+                msg = init_resp.text[:200]
+            hint = ""
+            if "url_ownership" in code or "url_ownership" in msg.lower():
+                hint = (
+                    " — verify the host prefix under TikTok Developer Portal "
+                    "→ URL Properties before retrying"
+                )
+            return PublishResult(
+                target_id=open_id,
+                target_label=handle_label,
+                platform="tiktok",
+                ok=False,
+                error=f"tiktok_photo_init_failed: {code or 'HTTP ' + str(init_resp.status_code)}: {msg}{hint}",
+                raw={"response": init_resp.text[:800]},
+            )
+        init_data = init_resp.json().get("data") or {}
+        publish_id = init_data.get("publish_id")
+        if not publish_id:
+            return PublishResult(
+                target_id=open_id,
+                target_label=handle_label,
+                platform="tiktok",
+                ok=False,
+                error="tiktok_init_returned_no_publish_id",
+                raw=init_resp.json(),
+            )
+
+        # Poll the status endpoint for terminal state, just like video.
+        terminal_success = {"SEND_TO_USER_INBOX", "PUBLISH_COMPLETE"}
+        terminal_failure = {"FAILED"}
+        status_url = f"{base}/status/fetch/"
+        permalink: str | None = None
+        last_status: str | None = None
+        last_payload: dict[str, Any] | None = None
+        for _ in range(30):
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                status_resp = await client.post(
+                    status_url,
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/json; charset=UTF-8",
+                    },
+                    json={"publish_id": publish_id},
+                )
+            if status_resp.status_code >= 400:
+                return PublishResult(
+                    target_id=open_id,
+                    target_label=handle_label,
+                    platform="tiktok",
+                    ok=False,
+                    error=f"tiktok_status_failed: HTTP {status_resp.status_code}",
+                    raw={"response": status_resp.text[:800]},
+                )
+            last_payload = status_resp.json().get("data") or {}
+            last_status = last_payload.get("status")
+            permalink = last_payload.get("publicaly_available_post_id") or last_payload.get(
+                "publicly_available_post_id"
+            )
+            if last_status in terminal_success:
+                break
+            if last_status in terminal_failure:
+                return PublishResult(
+                    target_id=open_id,
+                    target_label=handle_label,
+                    platform="tiktok",
+                    ok=False,
+                    error=f"tiktok_publish_failed: {last_payload.get('fail_reason') or last_status}",
+                    raw=last_payload,
+                )
+            await asyncio.sleep(2)
+
+        permalink_url = (
+            f"https://www.tiktok.com/@{handle_label.lstrip('@')}/video/{permalink}"
+            if permalink
+            else None
+        )
+        return PublishResult(
+            target_id=open_id,
+            target_label=handle_label,
+            platform="tiktok",
+            ok=True,
+            platform_post_id=permalink or publish_id,
+            permalink_url=permalink_url,
+            raw={"status": last_status, "data": last_payload},
+        )
+    except Exception as exc:
+        return PublishResult(
+            target_id=open_id,
+            target_label=handle_label,
+            platform="tiktok",
+            ok=False,
+            error=f"tiktok_exception: {exc}",
+        )
+
+
 async def publish_tiktok(
     open_id: str,
     access_token: str,
@@ -431,20 +624,29 @@ async def publish_tiktok(
         mode = "file"
 
     base = "https://open.tiktokapis.com/v2/post/publish"
-    init_path = f"{base}/inbox/video/init/" if audit_mode == "inbox" else f"{base}/video/init/"
+    # Effective audit_mode can be downgraded mid-flow (see auto-retry block
+    # below) so we use a local var instead of mutating the parameter.
+    effective_audit = audit_mode
+    init_path = f"{base}/inbox/video/init/" if effective_audit == "inbox" else f"{base}/video/init/"
 
-    post_info = {
-        "title": content[:2200] if content else "",
-        "privacy_level": privacy_level,
-        "disable_duet": False,
-        "disable_comment": False,
-        "disable_stitch": False,
-        "video_cover_timestamp_ms": 1000,
-        # Two branded-content flags TikTok specifically requires the UI
-        # to surface separately; we forward whatever the editor sent.
-        "brand_content_toggle": bool(disclose_video_branded),
-        "brand_organic_toggle": bool(disclose_video_your_brand),
-    }
+    # Inbox endpoint rejects `post_info` entirely — it only accepts
+    # source_info. Direct endpoint needs the full post_info. Build the
+    # right shape for each.
+    def _build_post_info(_privacy: str) -> dict[str, Any]:
+        return {
+            "title": content[:2200] if content else "",
+            "privacy_level": _privacy,
+            "disable_duet": False,
+            "disable_comment": False,
+            "disable_stitch": False,
+            "video_cover_timestamp_ms": 1000,
+            # Two branded-content flags TikTok specifically requires the UI
+            # to surface separately; we forward whatever the editor sent.
+            "brand_content_toggle": bool(disclose_video_branded),
+            "brand_organic_toggle": bool(disclose_video_your_brand),
+        }
+
+    post_info = _build_post_info(privacy_level)
 
     # Build the source_info block based on upload mode.
     if mode == "pull":
@@ -475,31 +677,110 @@ async def publish_tiktok(
             "total_chunk_count": total_chunk_count,
         }
 
-    init_body: dict[str, Any] = {
-        "post_info": post_info,
-        "source_info": source_info,
-    }
+    init_body: dict[str, Any] = (
+        # Direct endpoint expects post_info + source_info; inbox endpoint
+        # ONLY accepts source_info (TikTok throws "invalid params" if you
+        # send post_info to the inbox URL).
+        {"post_info": post_info, "source_info": source_info}
+        if effective_audit == "direct"
+        else {"source_info": source_info}
+    )
 
-    try:
+    async def _do_init(path: str, body: dict[str, Any]) -> tuple[int, str, dict[str, Any]]:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            init_resp = await client.post(
-                init_path,
+            r = await client.post(
+                path,
                 headers={
                     "Authorization": f"Bearer {access_token}",
                     "Content-Type": "application/json; charset=UTF-8",
                 },
-                json=init_body,
+                json=body,
             )
-        if init_resp.status_code >= 400:
+        try:
+            j = r.json()
+        except ValueError:
+            j = {}
+        return r.status_code, r.text, j
+
+    try:
+        init_status, init_text, init_json = await _do_init(init_path, init_body)
+
+        # Auto-retry as inbox when direct post hits the unaudited-client
+        # account-privacy wall. Sandbox/unaudited apps can only direct-post
+        # to TikTok accounts that have "Private account" turned on inside
+        # the TikTok mobile app — post-level SELF_ONLY isn't enough. Rather
+        # than failing the publish, we fall back to the inbox draft flow
+        # so the video still reaches TikTok (user confirms in-app).
+        if init_status == 403 and effective_audit == "direct":
+            err_code_lower = ((init_json.get("error") or {}).get("code") or "").lower()
+            if (
+                "unaudited" in err_code_lower
+                or "privacy_level" in err_code_lower
+            ):
+                print(
+                    f"[tiktok] direct→inbox auto-retry: {err_code_lower}. "
+                    "Tip: turn ON Private account in TikTok app to unblock direct post in sandbox."
+                )
+                effective_audit = "inbox"
+                init_path = f"{base}/inbox/video/init/"
+                init_body = {"source_info": source_info}
+                init_status, init_text, init_json = await _do_init(init_path, init_body)
+
+        # Use the renamed locals from here on.
+        init_resp_status = init_status
+        init_resp_text = init_text
+        init_resp_json = init_json
+
+        if init_resp_status >= 400:
+            # Unpack TikTok's structured error so the bell shows the
+            # actual cause, not just "HTTP 403". TikTok returns
+            # {"error": {"code": "...", "message": "...", "log_id": "..."}}
+            # — the code is the only thing that maps to a fix:
+            #   url_ownership_unverified       → verify URL prefix in portal
+            #   spam_risk_user_banned          → account flagged, wait it out
+            #   spam_risk_too_many_posts       → daily quota hit
+            #   privacy_level_option_mismatch  → privacy_level not allowed
+            #                                    for unaudited apps (must be
+            #                                    SELF_ONLY in sandbox)
+            #   unaudited_client_can_only_post_to_private_accounts → same
+            #   access_token_invalid           → token expired/revoked
+            err_body = init_resp_json if isinstance(init_resp_json, dict) else {}
+            err_obj = err_body.get("error") or {}
+            err_code = err_obj.get("code") or ""
+            err_msg = err_obj.get("message") or init_resp_text[:300]
+            hint = ""
+            cl = err_code.lower()
+            if "url_ownership" in cl:
+                hint = " — verify your ngrok host under TikTok Developer Portal → URL Properties"
+            elif "unaudited" in cl:
+                hint = (
+                    " — unaudited apps can only direct-post to PRIVATE TikTok accounts. "
+                    "Toggle 'Private account' ON in your TikTok app "
+                    "(Settings & Privacy → Privacy) to unblock direct post. "
+                    "Already retried as inbox draft."
+                )
+            elif "privacy_level" in cl:
+                hint = " — sandbox / unaudited apps must use privacy_level=SELF_ONLY"
+            elif "spam_risk" in cl:
+                hint = " — TikTok has rate-limited this account; wait before retrying"
+            elif "access_token" in cl:
+                hint = " — reconnect TikTok in Settings (token expired or revoked)"
+            print(
+                f"[tiktok] init {init_resp_status} code={err_code or '?'} "
+                f"msg={err_msg[:200] if err_msg else init_resp_text[:200]}"
+            )
             return PublishResult(
                 target_id=open_id,
                 target_label=handle_label,
                 platform="tiktok",
                 ok=False,
-                error=f"tiktok_init_failed: HTTP {init_resp.status_code}",
-                raw={"response": init_resp.text[:800]},
+                error=(
+                    f"tiktok_init_failed: {err_code or 'HTTP ' + str(init_resp_status)}"
+                    f"{': ' + err_msg if err_msg else ''}{hint}"
+                ),
+                raw={"response": init_resp_text[:800], "error": err_obj if err_body else None},
             )
-        init_data = init_resp.json().get("data") or {}
+        init_data = init_resp_json.get("data") or {}
         publish_id = init_data.get("publish_id")
         if not publish_id:
             return PublishResult(
@@ -508,7 +789,7 @@ async def publish_tiktok(
                 platform="tiktok",
                 ok=False,
                 error="tiktok_init_returned_no_publish_id",
-                raw=init_resp.json(),
+                raw=init_resp_json,
             )
 
         # FILE_UPLOAD bytes step. Init returned an `upload_url`; we PUT the
@@ -593,12 +874,24 @@ async def publish_tiktok(
             if last_status in terminal_success:
                 break
             if last_status in terminal_failure:
+                fail_reason = last_payload.get("fail_reason") or last_status
+                # file_format_check_failed on a video upload usually means
+                # codec/container mismatch (TikTok wants H.264 + AAC in MP4).
+                # snaptik / re-encoded downloads sometimes ship with HEVC or
+                # AV1; the audit reviewer also rejects out-of-range
+                # resolutions (min 540x960) and durations (3-60s for inbox).
+                hint = ""
+                if "file_format" in str(fail_reason).lower():
+                    hint = (
+                        " — TikTok needs H.264/AAC MP4, ≥540×960, 3-60s. "
+                        "Re-encode with ffmpeg if a downloader stripped the codec."
+                    )
                 return PublishResult(
                     target_id=open_id,
                     target_label=handle_label,
                     platform="tiktok",
                     ok=False,
-                    error=f"tiktok_publish_failed: {last_payload.get('fail_reason') or last_status}",
+                    error=f"tiktok_publish_failed: {fail_reason}{hint}",
                     raw=last_payload,
                 )
             await asyncio.sleep(2)
@@ -795,12 +1088,21 @@ async def publish_to_targets(
                 error=guard,
             )
         if platform == "facebook":
+            # Auto-detect image vs video from URL extension if the caller
+            # didn't set media_kind. Without this the default routes to
+            # /photos for video URLs and Meta replies with `324: Missing
+            # or invalid image file`.
+            fb_kind = (t.get("media_kind") or "").lower()
+            if fb_kind not in ("image", "video"):
+                ext = (t.get("media_url") or "").lower().rsplit(".", 1)[-1]
+                fb_kind = "video" if ext in {"mp4", "mov", "webm", "m4v"} else "image"
             return await publish_facebook_page(
                 t["id"], t["access_token"],
                 page_label=t.get("label") or t["id"],
                 content=content,
                 media_url=t.get("media_url"),
                 link=t.get("link"),
+                media_kind=fb_kind,
             )
         if platform == "instagram":
             media = t.get("media_url")
@@ -820,6 +1122,20 @@ async def publish_to_targets(
                 media_kind=t.get("media_kind", "image"),
             )
         if platform == "tiktok":
+            # Route image vs video to the correct TikTok endpoint —
+            # /video/init/ rejects non-video bytes with
+            # `file_format_check_failed` during processing.
+            if t.get("media_kind") == "image":
+                return await publish_tiktok_photo(
+                    t["id"], t["access_token"],
+                    handle_label=t.get("label") or t["id"],
+                    content=content,
+                    photo_url=t.get("media_url") or "",
+                    privacy_level=t.get("privacy_level", "SELF_ONLY"),
+                    disclose_video_branded=t.get("disclose_video_branded", False),
+                    disclose_video_your_brand=t.get("disclose_video_your_brand", False),
+                    audit_mode=t.get("audit_mode", "inbox"),
+                )
             return await publish_tiktok(
                 t["id"], t["access_token"],
                 handle_label=t.get("label") or t["id"],

@@ -11,7 +11,7 @@ import {
   uploadToBackend,
   ACCEPTED_TYPES,
 } from "../../lib/uploadService";
-import { UploadCloud, X, Film, ImageIcon, Loader2, CheckCircle2 } from "lucide-react";
+import { UploadCloud, X, Film, ImageIcon, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 
 export default function MediaUploader() {
   const dispatch = useDispatch();
@@ -135,22 +135,71 @@ export default function MediaUploader() {
               style={{ aspectRatio: "1 / 1", background: "var(--bg-elevated)", border: "1px solid var(--border-default)" }}
             >
               {item.kind === "video" ? (
-                <video src={item.previewUrl} className="w-full h-full object-cover" muted />
+                <video
+                  src={item.remoteUrl || item.previewUrl}
+                  className="w-full h-full object-cover"
+                  muted
+                  onError={(e) => {
+                    if (item.previewUrl && e.currentTarget.src !== item.previewUrl) {
+                      e.currentTarget.src = item.previewUrl;
+                    }
+                  }}
+                />
               ) : (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={item.previewUrl} alt={item.name} className="w-full h-full object-cover" />
+                <img
+                  src={item.remoteUrl || item.previewUrl}
+                  alt={item.name}
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    if (item.previewUrl && e.currentTarget.src !== item.previewUrl) {
+                      e.currentTarget.src = item.previewUrl;
+                    }
+                  }}
+                />
               )}
 
-              {/* status chip */}
+              {/* status chip — must distinguish 4 states with VISIBLE
+                  difference, not just a tooltip:
+                    uploading → spinner
+                    uploaded  → green check
+                    error/local (upload failed) → red alert + full-tile
+                                overlay so the user can't miss it
+                    initial   → kind icon */}
+              {(item.status === "error" || item.status === "local") && (
+                <div
+                  className="absolute inset-0 flex items-center justify-center text-[10px] font-semibold px-2 text-center pointer-events-none"
+                  style={{ background: "rgba(220,38,38,0.65)", color: "#fff" }}
+                >
+                  {item.error || "Upload failed — re-add this file"}
+                </div>
+              )}
               <span
                 className="absolute top-1 left-1 flex items-center justify-center w-5 h-5 rounded-full"
-                style={{ background: "rgba(0,0,0,0.55)" }}
-                title={item.status}
+                style={{
+                  background:
+                    item.status === "error" || item.status === "local"
+                      ? "rgba(220,38,38,0.95)"
+                      : "rgba(0,0,0,0.55)",
+                }}
+                title={
+                  item.status === "uploading"
+                    ? item.kind === "video"
+                      ? "Uploading + optimizing for TikTok/Meta…"
+                      : "Uploading…"
+                    : item.status === "uploaded"
+                    ? "Uploaded — ready to publish"
+                    : item.status === "error" || item.status === "local"
+                    ? `Upload failed: ${item.error || "unknown error"}`
+                    : item.status
+                }
               >
                 {item.status === "uploading" ? (
                   <Loader2 size={11} className="animate-spin text-white" />
                 ) : item.status === "uploaded" ? (
                   <CheckCircle2 size={11} className="text-white" />
+                ) : item.status === "error" || item.status === "local" ? (
+                  <AlertCircle size={11} className="text-white" />
                 ) : item.kind === "video" ? (
                   <Film size={11} className="text-white" />
                 ) : (

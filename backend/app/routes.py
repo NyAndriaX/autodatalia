@@ -20,6 +20,7 @@ from .models import (
     PublishResponse,
     PublishResultModel,
     SearchResponse,
+    TikTokOptions,
     TransformRequest,
     TransformResponse,
     UploadResponse,
@@ -147,6 +148,13 @@ async def publish(body: PublishRequest) -> PublishResponse:
     if len(body.targets) > 20:
         # Sanity ceiling — nobody legitimately fans one post to >20 places.
         raise HTTPException(400, "too_many_targets (max 20 per publish call)")
+    # Diagnostic — when targets that require media reject with
+    # `requires_media`, the first question is "did the frontend even send
+    # a URL?". This line answers it without us needing tcpdump.
+    print(
+        f"[publish] media_url={'present' if body.media_url else 'MISSING'} "
+        f"targets={[(t.platform, t.media_kind, 'with-media' if t.media_url else 'no-media') for t in body.targets]}"
+    )
     if not (body.content or "").strip() and not body.media_url:
         # Don't let an empty post reach the platforms — Meta returns a
         # cryptic "param message is required" otherwise.
@@ -170,6 +178,10 @@ async def publish(body: PublishRequest) -> PublishResponse:
     resolved: list[dict[str, Any]] = []
     for t in body.targets:
         platform = t.platform
+        # Per-target media override (frontend can send video for tiktok,
+        # image for facebook in the same call). Falls back to body.media_url
+        # when not set, so the old single-media path keeps working.
+        t_media_url = t.media_url or body.media_url
         if platform in ("facebook", "instagram"):
             if not user_meta_token:
                 resolved.append({
@@ -177,7 +189,7 @@ async def publish(body: PublishRequest) -> PublishResponse:
                     "id": t.id,
                     "label": t.label or t.id,
                     "access_token": "",
-                    "media_url": body.media_url,
+                    "media_url": t_media_url,
                     "link": body.link,
                     "media_kind": t.media_kind or "image",
                     "_unresolved_reason": "meta_not_connected",
@@ -204,7 +216,7 @@ async def publish(body: PublishRequest) -> PublishResponse:
                     "id": t.id,
                     "label": t.label or t.id,
                     "access_token": "",
-                    "media_url": body.media_url,
+                    "media_url": t_media_url,
                     "link": body.link,
                     "media_kind": t.media_kind or "image",
                     "_unresolved_reason": "target_not_found_in_meta_pages",
@@ -215,7 +227,7 @@ async def publish(body: PublishRequest) -> PublishResponse:
                 "id": t.id,
                 "label": t.label or page["page_name"],
                 "access_token": page["page_access_token"],
-                "media_url": body.media_url,
+                "media_url": t_media_url,
                 "link": body.link,
                 "media_kind": t.media_kind or "image",
             })
@@ -228,34 +240,59 @@ async def publish(body: PublishRequest) -> PublishResponse:
                     "id": t.id,
                     "label": t.label or t.id,
                     "access_token": "",
-                    "media_url": body.media_url,
+                    "media_url": t_media_url,
                     "media_kind": "video",
                     "_unresolved_reason": "tiktok_not_connected",
                 })
                 continue
             handle = record.get("username") or record.get("display_name")
+            # body.tiktok is a TikTokOptions Pydantic model (not a dict) —
+            # fall back to its defaults when the frontend didn't send one.
+            tk = body.tiktok or TikTokOptions()
+            # TikTok supports BOTH photo and video posts (different endpoints).
+            # Auto-detect from the URL extension when the frontend didn't
+            # explicitly tag the target — photo files go through the
+            # content/init/ endpoint, videos through video/init/.
+            tk_kind = (t.media_kind or "").lower()
+            if tk_kind not in ("image", "video"):
+                tk_kind = "image" if (t_media_url or "").lower().rsplit(".", 1)[-1] in {
+                    "png", "jpg", "jpeg", "webp", "gif"
+                } else "video"
+            # Scope-aware audit_mode downgrade — direct-post (/video/init/)
+            # returns HTTP 401 when the token's granted scope doesn't
+            # include `video.publish`. Falling back to inbox automatically
+            # means a user who hasn't yet reconnected to grant the new
+            # scope still gets the video to their TikTok (as a draft they
+            # confirm in-app), instead of seeing a cryptic 401.
+            granted_scope = (record.get("scope") or "").lower()
+            requested_audit = tk.audit_mode
+            effective_audit = requested_audit
+            if requested_audit == "direct" and "video.publish" not in granted_scope:
+                effective_audit = "inbox"
+                print(
+                    "[tiktok] downgrading direct→inbox: "
+                    f"token scope='{granted_scope}' lacks video.publish. "
+                    "Reconnect TikTok after setting "
+                    "TIKTOK_SCOPES=user.info.basic,video.upload,video.publish "
+                    "to enable direct posting."
+                )
             resolved.append({
                 "platform": "tiktok",
                 "id": t.id,
                 "label": t.label or (f"@{handle}" if handle else t.id),
                 "access_token": token,
-                "media_url": body.media_url,
-                # TikTok is video-only; ignore whatever the caller passed.
-                "media_kind": "video",
+                "media_url": t_media_url,
+                "media_kind": tk_kind,
                 # Forward the compose-screen choices the publish handler
                 # needs. PublishRequest carries these as a tiktok-shaped
                 # sub-object (see models.py PublishRequest.tiktok).
-                "privacy_level": (
-                    (body.tiktok or {}).get("privacy_level", "SELF_ONLY")
-                ),
-                "disclose_video_branded": (
-                    (body.tiktok or {}).get("disclose_video_branded", False)
-                ),
-                "disclose_video_your_brand": (
-                    (body.tiktok or {}).get("disclose_video_your_brand", False)
-                ),
-                # Default to inbox flow until the audit unlocks direct-post.
-                "audit_mode": (body.tiktok or {}).get("audit_mode", "inbox"),
+                "privacy_level": tk.privacy_level,
+                "disclose_video_branded": tk.disclose_video_branded,
+                "disclose_video_your_brand": tk.disclose_video_your_brand,
+                "audit_mode": effective_audit,
+                # Stash whether we downgraded so the publish handler can
+                # surface it in the response message.
+                "audit_downgraded": requested_audit != effective_audit,
             })
         else:
             # LinkedIn — stub for now; still flow through so the response
@@ -266,7 +303,7 @@ async def publish(body: PublishRequest) -> PublishResponse:
                 "id": t.id,
                 "label": t.label or t.id,
                 "access_token": record.get("access_token", ""),
-                "media_url": body.media_url,
+                "media_url": t_media_url,
                 "media_kind": t.media_kind or "image",
             })
 
@@ -395,12 +432,21 @@ async def delete_media_route(path: str) -> dict[str, Any]:
 async def search(request: Request, q: str = "") -> SearchResponse:
     """Search media in the content directory (posts/templates → Airtable TBD).
 
-    Each media hit now carries a `url` and `kind` so the frontend Media
-    Library can render thumbnails for *already-uploaded* assets — not
-    just the ones from the current session.
+    Each media hit carries a `url` and `kind` so the frontend Media Library
+    can render thumbnails AND the publish path can use the same URL Meta /
+    TikTok will actually be able to fetch.
+
+    URL precedence mirrors /upload — must be a publicly fetchable host,
+    otherwise picking a Library asset for a Meta / TikTok publish would
+    send `http://localhost:8000/...` and upstream would refuse it.
     """
-    url = await tunnel.wait_for_tunnel(timeout=5.0)
-    base = url or str(request.base_url).rstrip("/")
+    base = (
+        os.environ.get("PUBLIC_BASE_URL")
+        or os.environ.get("OAUTH_REDIRECT_BASE")
+        or await tunnel.wait_for_tunnel(timeout=5.0)
+        or str(request.base_url).rstrip("/")
+    )
+    base = base.rstrip("/")
     hits = []
     for hit in search_media(q):
         hits.append(

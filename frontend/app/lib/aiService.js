@@ -36,7 +36,14 @@ const CACHE_KEY = "datalia.ai.genCache";
 // Normalize so cosmetic edits (extra spaces, case, trailing newline) map to
 // the SAME signature → trivial changes reuse the cached result, no re-prompt.
 // Exported for unit tests; treat as an implementation detail elsewhere.
-export function generationSignature({ prompt, platforms, template, variants = 1 } = {}) {
+export function generationSignature({
+  prompt,
+  platforms,
+  template,
+  variants = 1,
+  image = null,
+  tone = null,
+} = {}) {
   const active = Object.keys(platforms || {})
     .filter((k) => platforms[k])
     .sort()
@@ -46,7 +53,7 @@ export function generationSignature({ prompt, platforms, template, variants = 1 
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, MAX_PROMPT_CHARS);
-  return `${norm}|${active}|${template || ""}|${variants}`;
+  return `${norm}|${active}|${template || ""}|${variants}|${image || ""}|${tone || ""}`;
 }
 
 // Cache persists across reloads so a refresh never re-bills a prompt.
@@ -82,15 +89,25 @@ export async function generateContent({
   platforms,
   template,
   variants: variantCount = 1,
+  image = null,
+  tone = null,
   force = false,
 } = {}) {
-  const sig = generationSignature({ prompt, platforms, template, variants: variantCount });
+  const sig = generationSignature({
+    prompt,
+    platforms,
+    template,
+    variants: variantCount,
+    image,
+    tone,
+  });
   if (!force && _genCache.sig === sig && _genCache.variants) {
     return { variants: _genCache.variants, usage: ZERO_USAGE, cached: true };
   }
 
   let variants;
   let usage = ZERO_USAGE;
+  let model = null;
   if (!config.apiBaseUrl) {
     await mockDelay();
     variants = MOCK_VARIANTS.slice(0, variantCount);
@@ -102,12 +119,15 @@ export async function generateContent({
           prompt: (prompt || "").slice(0, MAX_PROMPT_CHARS),
           platforms,
           template,
+          tone, // backend may forward to the LLM Router as a style hint
           variants: variantCount,
+          image_filename: image,
         }),
       });
       if (!Array.isArray(data?.variants) || !data.variants.length) throw new Error("empty");
       variants = data.variants;
       usage = data.usage || ZERO_USAGE;
+      model = data.model || null;
     } catch {
       await mockDelay();
       variants = MOCK_VARIANTS.slice(0, variantCount);
@@ -115,7 +135,7 @@ export async function generateContent({
   }
   _genCache = { sig, variants };
   saveGenCache();
-  return { variants, usage, cached: false };
+  return { variants, usage, model, cached: false };
 }
 
 // Transform existing content with a quick AI action.

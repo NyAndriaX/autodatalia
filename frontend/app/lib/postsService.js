@@ -1,6 +1,6 @@
 // Backend CRUD for scheduled posts. Used by calendarThunks. Each function
 // returns null on network/backend failure so callers can fall back to the
-// local Redux store (same graceful-degradation pattern as webhookService).
+// local Redux store.
 
 import { apiFetch } from "./apiClient";
 import { config } from "./config";

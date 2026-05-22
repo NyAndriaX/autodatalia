@@ -99,17 +99,20 @@ export default function PublishConfirmModal({
       aria-label="Confirm publish"
     >
       <div
-        className="w-full max-w-md rounded-2xl overflow-hidden"
+        className="w-full max-w-md rounded-2xl overflow-hidden flex flex-col"
         style={{
           background: "var(--bg-card)",
           border: "1px solid var(--border-default)",
           boxShadow: "0 24px 48px rgba(15,23,42,0.4)",
+          // Cap modal height so the body scrolls instead of pushing
+          // header/footer off-screen on small viewports.
+          maxHeight: "calc(100vh - 2rem)",
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
+        {/* Header — fixed at top */}
         <div
-          className="flex items-center justify-between px-5 py-4"
+          className="flex items-center justify-between px-5 py-4 shrink-0"
           style={{ borderBottom: "1px solid var(--border-default)" }}
         >
           <h2 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
@@ -125,8 +128,8 @@ export default function PublishConfirmModal({
           </button>
         </div>
 
-        {/* Body */}
-        <div className="px-5 py-4 space-y-3">
+        {/* Body — scrolls when content exceeds available space */}
+        <div className="px-5 py-4 space-y-3 overflow-y-auto flex-1 min-h-0">
           {/* Duplicate warning — surfaces a frontend-only hint before the
               backend would reject the same content. */}
           {isDuplicate && (
@@ -361,9 +364,9 @@ export default function PublishConfirmModal({
           )}
         </div>
 
-        {/* Footer */}
+        {/* Footer — pinned to bottom */}
         <div
-          className="flex items-center justify-end gap-2 px-5 py-3"
+          className="flex items-center justify-end gap-2 px-5 py-3 shrink-0"
           style={{ borderTop: "1px solid var(--border-default)" }}
         >
           <button

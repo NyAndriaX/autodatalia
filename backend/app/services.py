@@ -1,5 +1,6 @@
 """Core business logic — content scanning, AI caption generation, file I/O."""
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -13,6 +14,14 @@ import httpx
 from fastapi import HTTPException, UploadFile
 
 from .config import settings
+
+# Optional dependency — falls back to "no transcode" if the package failed
+# to install (e.g. the bundled ffmpeg binary couldn't be unpacked). Upload
+# still works in that case; the video just goes out as-uploaded.
+try:
+    from imageio_ffmpeg import get_ffmpeg_exe as _get_ffmpeg_exe
+except Exception:  # pragma: no cover — environmental
+    _get_ffmpeg_exe = None  # type: ignore[assignment]
 
 # ── Constants ──────────────────────────────────────────────────────────
 
@@ -573,8 +582,173 @@ def delete_media(relative_path: str) -> bool:
     return True
 
 
+async def _probe_video_codec(src: Path, exe: str) -> dict[str, str | None]:
+    """Quick ffmpeg probe — returns {video, audio, pix_fmt} codecs.
+
+    Uses ffmpeg's `-t 0.1 -f null -` to read just the headers (no decode);
+    typically returns in ~50-200ms even for huge files. Lets us avoid a
+    pointless re-encode when the file is already H.264 + AAC in MP4 —
+    the case for most snaptik / Instagram-Reels-download / native-share
+    inputs.
+    """
+    cmd = [exe, "-hide_banner", "-i", str(src), "-t", "0.1", "-f", "null", "-"]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+    except Exception:
+        return {"video": None, "audio": None, "pix_fmt": None}
+    text = (stderr or b"").decode("utf-8", errors="replace")
+    video_codec = None
+    audio_codec = None
+    pix_fmt = None
+    for line in text.split("\n"):
+        if "Video:" in line and video_codec is None:
+            m = re.search(r"Video:\s+([a-z0-9_]+)", line)
+            if m:
+                video_codec = m.group(1).lower()
+            # pix_fmt sits later on the same line: "Video: h264 (...), yuv420p(...)"
+            m2 = re.search(r",\s*(yuv\w+)", line)
+            if m2:
+                pix_fmt = m2.group(1).lower()
+        if "Audio:" in line and audio_codec is None:
+            m = re.search(r"Audio:\s+([a-z0-9_]+)", line)
+            if m:
+                audio_codec = m.group(1).lower()
+    return {"video": video_codec, "audio": audio_codec, "pix_fmt": pix_fmt}
+
+
+async def _normalize_video_for_publishing(src: Path) -> Path:
+    """Transcode a video to a universal H.264 + AAC MP4 — but SKIP the
+    re-encode entirely when the source is already compatible.
+
+    Every social platform we publish to accepts H.264 + AAC in an MP4
+    container (TikTok requires it; FB/IG accept it). Inputs from snaptik /
+    phone exports / screen recorders sometimes ship with HEVC, VP9, or
+    AV1 — TikTok rejects those at processing time with the cryptic
+    `file_format_check_failed`. So we probe first; only re-encode when
+    the source actually needs it.
+
+    Fast-path (no re-encode): MP4 container + H.264 video + AAC audio +
+    yuv420p pixel format. Probe is ~100ms, so this is essentially free
+    for the common case.
+
+    Transcode path settings (when needed):
+      - libx264 with `ultrafast` preset + CRF 23 → ~5× realtime on a
+        modern CPU; the snaptik / phone-export sources we re-encode are
+        already low-bitrate so the visual cost is negligible
+      - yuv420p pixel format → matches every consumer player; some
+        phone cameras shoot yuv444 which TikTok also refuses
+      - even dimensions via `scale=trunc(iw/2)*2:trunc(ih/2)*2` →
+        libx264 requires even width/height
+      - +faststart → moov atom at the front so the platform can start
+        streaming before the full file arrives
+      - 44.1 kHz / 128 kbps AAC → TikTok rejects 48 kHz mono in some cases
+
+    Returns the path to the normalised file. On any failure (ffmpeg not
+    available, decode error, output empty) the original file is returned
+    untouched so the upload still goes through — better to attempt a
+    publish that might fail than to lose the upload entirely.
+    """
+    if _get_ffmpeg_exe is None:
+        return src
+    try:
+        exe = _get_ffmpeg_exe()
+    except Exception:
+        return src
+
+    # Fast path: if the source is already H.264 + AAC + yuv420p in an MP4
+    # container, skip transcoding. Saves ~90s for a 3-minute snaptik clip.
+    probe = await _probe_video_codec(src, exe)
+    if (
+        src.suffix.lower() == ".mp4"
+        and probe["video"] == "h264"
+        and probe["audio"] in {"aac", None}  # silent videos have no audio stream
+        and probe["pix_fmt"] in {"yuv420p", None}
+    ):
+        print(f"[transcode] {src.name}: already compatible, skipping re-encode")
+        return src
+
+    print(
+        f"[transcode] {src.name}: probe v={probe['video']} a={probe['audio']} "
+        f"pix={probe['pix_fmt']} ext={src.suffix} — re-encoding"
+    )
+
+    # Output always lands at <stem>.mp4 — even if input was .mov / .webm.
+    # If the source already has that name, transcode to a sibling and swap.
+    out = src.with_name(f"{src.stem}__norm.mp4")
+    cmd = [
+        exe,
+        "-y",
+        "-i", str(src),
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-ar", "44100",
+        "-movflags", "+faststart",
+        # Cap to TikTok's hard max (10 min). Anything longer would be
+        # cut off by TikTok anyway — better to be explicit.
+        "-t", "600",
+        str(out),
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            tail = (stderr or b"")[-400:].decode("utf-8", errors="replace")
+            print(f"[transcode] ffmpeg exit {proc.returncode}: {tail}")
+            try:
+                if out.exists():
+                    out.unlink()
+            except OSError:
+                pass
+            return src
+        if not out.exists() or out.stat().st_size == 0:
+            return src
+    except Exception as exc:
+        print(f"[transcode] subprocess failed: {exc}")
+        return src
+
+    # Swap files: replace original with normalised, normalise filename to
+    # .mp4 so the URL Meta/TikTok eventually see has a sane extension.
+    final = src.with_suffix(".mp4")
+    try:
+        src.unlink()
+    except OSError:
+        pass
+    try:
+        out.rename(final)
+    except OSError:
+        # Cross-volume rename can fail on some Windows setups; fall back
+        # to copy + delete.
+        final.write_bytes(out.read_bytes())
+        try:
+            out.unlink()
+        except OSError:
+            pass
+    return final
+
+
 async def save_upload(file: UploadFile) -> dict[str, str]:
-    """Persist an uploaded file to the content dir; return its metadata."""
+    """Persist an uploaded file to the content dir; return its metadata.
+
+    For videos, also normalise the codec to H.264 + AAC MP4 so the publish
+    path doesn't trip over TikTok's `file_format_check_failed` later.
+    Transcoding is synchronous — the user already sees an "Uploading…"
+    spinner, and we'd rather the upload take 5-30s extra than return a
+    file that fails at publish time.
+    """
     settings.content_dir.mkdir(parents=True, exist_ok=True)
     safe = _safe_filename(file.filename or "upload")
     dest = _unique_path(settings.content_dir, safe)
@@ -587,6 +761,9 @@ async def save_upload(file: UploadFile) -> dict[str, str]:
         kind = "video"
     else:
         kind = "image"
+
+    if kind == "video":
+        dest = await _normalize_video_for_publishing(dest)
 
     return {
         "filename": dest.name,

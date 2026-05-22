@@ -58,6 +58,17 @@ const calendarSlice = createSlice({
       const post = state.scheduledPosts.find((p) => p.id === id);
       if (post) post.scheduledDate = date;
     },
+    updateScheduledPost: (state, action) => {
+      // Partial update — undefined values are ignored so callers can patch
+      // a subset without clobbering the rest. Mirrors the backend PATCH.
+      const { id, patch } = action.payload;
+      const post = state.scheduledPosts.find((p) => p.id === id);
+      if (!post) return;
+      Object.entries(patch || {}).forEach(([key, value]) => {
+        if (value === undefined) return;
+        post[key] = value;
+      });
+    },
     removeScheduledPost: (state, action) => {
       state.scheduledPosts = state.scheduledPosts.filter(
         (p) => p.id !== action.payload
@@ -102,6 +113,7 @@ export const {
   hydrateScheduledPosts,
   addScheduledPost,
   reschedulePost,
+  updateScheduledPost,
   removeScheduledPost,
   togglePlatformFilter,
   toggleStatusFilter,

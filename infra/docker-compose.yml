@@ -1,19 +1,4 @@
-volumes:
-  n8n_data:
-
 services:
-  n8n:
-    image: docker.io/n8nio/n8n
-    container_name: n8n
-    restart: always
-    ports:
-      - "5678:5678"
-    volumes:
-      - n8n_data:/home/node/.n8n
-    depends_on:
-      caption-api:
-        condition: service_healthy
-
   caption-api:
     build:
       context: ../backend
@@ -32,11 +17,25 @@ services:
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-google/gemini-2.0-flash-lite-001}
       AI_MODEL_FAST: ${AI_MODEL_FAST:-google/gemini-2.0-flash-lite-001}
+      AI_MODEL_PREMIUM: ${AI_MODEL_PREMIUM:-}
       AI_INCLUDE_IMAGES: ${AI_INCLUDE_IMAGES:-false}
       AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-200}
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       BACKEND_AUTH_TOKEN: ${BACKEND_AUTH_TOKEN:-}
       TUNNEL_ENABLED: ${TUNNEL_ENABLED:-false}
+      # OAuth — provider credentials (paste into infra/.env, not here)
+      OAUTH_REDIRECT_BASE: ${OAUTH_REDIRECT_BASE:-http://localhost:8000}
+      META_APP_ID: ${META_APP_ID:-}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-}
+      INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:-}
+      TIKTOK_CLIENT_KEY: ${TIKTOK_CLIENT_KEY:-}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
+      TIKTOK_DOMAIN_VERIFY: ${TIKTOK_DOMAIN_VERIFY:-}
+      LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
+      LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       CONTENT_DIR: /app/content
     volumes:
       - ../backend/content:/app/content

@@ -76,13 +76,15 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  /* — Core Palette — */
-  --bg-primary: #0b1120;
-  --bg-secondary: #0f172a;
-  --bg-tertiary: #1e293b;
-  --bg-card: #111a2e;
-  --bg-card-hover: #1a2540;
-  --bg-elevated: #1e293b;
+  /* — Core Palette —
+     Slightly lifted backgrounds + softened text so the contrast is
+     comfortable (~9:1 instead of ~15:1) without losing legibility. */
+  --bg-primary: #131a2c;
+  --bg-secondary: #1a2236;
+  --bg-tertiary: #232c41;
+  --bg-card: #1a2236;
+  --bg-card-hover: #232c41;
+  --bg-elevated: #2a3247;
 
   /* — Accent & Brand — */
   --accent-primary: #60a5fa;
@@ -91,30 +93,32 @@
   --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 50%, #38bdf8 100%);
   --accent-glow: 0 0 24px rgba(96, 165, 250, 0.35);
 
-  /* — Text — */
-  --text-primary: #f1f5f9;
-  --text-secondary: #cbd5e1;
-  --text-tertiary: #94a3b8;
-  --text-muted: #64748b;
+  /* — Text —
+     Off-white primary instead of near-white so headlines / body don't punch
+     a hole through the dark surfaces. Secondary/tertiary trail accordingly. */
+  --text-primary: #d4dce8;
+  --text-secondary: #a3afc0;
+  --text-tertiary: #828d9d;
+  --text-muted: #5c6573;
 
   /* — Borders — */
-  --border-default: #1e293b;
-  --border-hover: #334155;
+  --border-default: #2a3247;
+  --border-hover: #3a4361;
   --border-active: #60a5fa;
 
   /* — Platform Colors — */
-  --platform-tiktok-fg: #f1f5f9;
+  --platform-tiktok-fg: #d4dce8;
 
   /* — Glass — */
-  --glass-bg: rgba(15, 23, 42, 0.72);
-  --glass-border: rgba(255, 255, 255, 0.06);
+  --glass-bg: rgba(23, 32, 54, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.05);
 
   /* — Shadows — */
-  --shadow-dropdown: 0 20px 60px rgba(0, 0, 0, 0.55);
+  --shadow-dropdown: 0 20px 60px rgba(0, 0, 0, 0.45);
 
   /* — Foreground / Background tokens for TW — */
-  --background: #0b1120;
-  --foreground: #f1f5f9;
+  --background: #131a2c;
+  --foreground: #d4dce8;
 }
 
 @theme inline {

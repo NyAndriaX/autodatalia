@@ -13,9 +13,16 @@ import {
   ChevronRight,
   Zap,
   LayoutDashboard,
+  Coins,
 } from "lucide-react";
 
 const navItems = [
+  {
+    id: "dashboard",
+    label: "Dashboard",
+    icon: LayoutDashboard,
+    description: "Today at a glance",
+  },
   {
     id: "creation",
     label: "Creation & Editor",
@@ -39,6 +46,12 @@ const navItems = [
     label: "Analytics",
     icon: BarChart3,
     description: "KPIs & API costs",
+  },
+  {
+    id: "credits",
+    label: "Credits",
+    icon: Coins,
+    description: "Balance & rates",
   },
   {
     id: "settings",
