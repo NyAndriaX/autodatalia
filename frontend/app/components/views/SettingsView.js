@@ -7,6 +7,8 @@ import { loadSettings, saveSettings } from "../../lib/settingsStorage";
 import { addNotification } from "../../store/uiSlice";
 import {
   fetchConnections,
+  invalidateConnectionsCache,
+  readCachedConnections,
   startConnect,
   disconnect as oauthDisconnect,
 } from "../../lib/oauthService";
@@ -152,19 +154,31 @@ export default function SettingsView() {
     setS(loadSettings());
   }, []);
 
-  const refreshConnections = useCallback(async () => {
+  // `force: true` bypasses the localStorage cache; the Refresh button
+  // uses this so the user can always trigger an authoritative re-fetch.
+  // Normal mounts pass force: false and fall back to the cache when it's
+  // fresh, so bouncing between views doesn't re-hit Meta every time.
+  const refreshConnections = useCallback(async ({ force = false } = {}) => {
     setRefreshing(true);
     try {
-      const data = await fetchConnections();
+      const data = await fetchConnections({ force });
       setConnections(data?.providers || {});
     } finally {
       setRefreshing(false);
     }
   }, []);
 
-  // Pull live connection state on mount and every time the user comes back
-  // to this view (mounted again). One round trip, all four providers.
+  // Mount: paint instantly from cache if we have one, then validate in the
+  // background. This is the pattern the user asked for — Settings should
+  // remember the signed-in accounts instead of refreshing on every visit.
   useEffect(() => {
+    const cached = readCachedConnections();
+    if (cached?.providers) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setConnections(cached.providers);
+    }
+    // Still run a (possibly cache-served) fetch so we refresh anything
+    // older than the TTL without blocking the initial paint.
     refreshConnections();
   }, [refreshConnections]);
 
@@ -185,7 +199,10 @@ export default function SettingsView() {
       dispatch(
         addNotification({ message: `${platformId} connected.`, type: "success" })
       );
-      await refreshConnections();
+      // Connect just changed the truth on the backend; force a fresh
+      // fetch so the new pages/IGs appear immediately (no stale cache).
+      invalidateConnectionsCache();
+      await refreshConnections({ force: true });
     } catch (err) {
       dispatch(
         addNotification({
@@ -207,7 +224,9 @@ export default function SettingsView() {
       dispatch(
         addNotification({ message: `${platformId} disconnected.`, type: "info" })
       );
-      await refreshConnections();
+      // disconnect() already invalidates the cache server-side; force a
+      // re-fetch so the row updates to "Not connected" immediately.
+      await refreshConnections({ force: true });
     } catch (err) {
       dispatch(
         addNotification({
@@ -260,7 +279,7 @@ export default function SettingsView() {
             </span>
             <button
               type="button"
-              onClick={refreshConnections}
+              onClick={() => refreshConnections({ force: true })}
               disabled={refreshing}
               className="btn-ghost text-[11px] inline-flex items-center gap-1"
               style={{ padding: "2px 6px" }}

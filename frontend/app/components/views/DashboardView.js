@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSelector, useDispatch } from "react-redux";
-import { fetchConnections } from "../../lib/oauthService";
+import { fetchConnections, readCachedConnections } from "../../lib/oauthService";
 import {
   Sparkles,
   CalendarDays,
@@ -75,8 +75,14 @@ export default function DashboardView() {
   const todayKey = isoDateKey(today);
 
   // Live OAuth state — same source the Settings view uses, so the Dashboard
-  // never lies about what's actually wired. Refreshed on mount.
-  const [oauthState, setOauthState] = useState(null);
+  // never lies about what's actually wired. Paint from cache instantly
+  // (avoids a "0 connected" flash + a slow Meta round-trip on every visit),
+  // then validate in the background. Both views share the same localStorage
+  // cache so flipping between them is free of upstream calls.
+  const [oauthState, setOauthState] = useState(() => {
+    const cached = typeof window !== "undefined" ? readCachedConnections() : null;
+    return cached?.providers || null;
+  });
   useEffect(() => {
     fetchConnections().then((d) => setOauthState(d?.providers || {}));
   }, []);
