@@ -26,6 +26,7 @@ import { generateContent } from "../../lib/aiService";
 import { getScheduleTimezone } from "../../lib/timezone";
 import DatePicker from "./DatePicker";
 import TimePicker from "./TimePicker";
+import RatioPicker from "./RatioPicker";
 
 const MEDIA_SOURCES = [
   { id: "upload-image", kind: "image", source: "upload", label: "Upload Image", icon: Upload },
@@ -67,6 +68,10 @@ export default function ScheduleModal({
   // updateMedia below for the optimistic add → upload → swap dance. Without
   // this the scheduler would fire text-only because no remoteUrl is set.
   const [media, setMedia] = useState(initialMedia ?? []);
+  // Per-platform aspect ratio map ({facebook: "1:1", instagram: "4:5", …}).
+  // Seeded from initialRatios (whatever the editor was using) so reopening
+  // a Schedule flow preserves the user's framing choices.
+  const [ratios, setRatios] = useState(initialRatios || {});
   const imageInputRef = useRef(null);
   const videoInputRef = useRef(null);
 
@@ -347,7 +352,7 @@ export default function ScheduleModal({
         <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--text-tertiary)" }}>
           Platforms
         </p>
-        <div className="flex flex-wrap gap-2 mb-4">
+        <div className="flex flex-wrap gap-2 mb-3">
           {PLATFORMS.map((p) => {
             const Icon = p.icon;
             const on = !!platforms[p.id];
@@ -368,6 +373,39 @@ export default function ScheduleModal({
             );
           })}
         </div>
+
+        {/* Per-platform aspect ratio — only shown for enabled platforms so
+            the form doesn't grow when nothing's selected. Same picker the
+            editor uses; the resulting `ratios` map is fed to the backend
+            so the scheduler crops correctly per destination. */}
+        {PLATFORMS.some((p) => platforms[p.id]) && (
+          <>
+            <p
+              className="text-xs font-semibold uppercase tracking-wider mb-2"
+              style={{ color: "var(--text-tertiary)" }}
+            >
+              Aspect ratio
+            </p>
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              {PLATFORMS.filter((p) => platforms[p.id]).map((p) => {
+                const Icon = p.icon;
+                return (
+                  <div key={p.id} className="inline-flex items-center gap-1.5">
+                    <Icon size={12} style={{ color: p.color }} aria-hidden="true" />
+                    <RatioPicker
+                      platform={p}
+                      value={ratios[p.id]}
+                      onChange={(next) =>
+                        setRatios((r) => ({ ...r, [p.id]: next }))
+                      }
+                      compact
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
 
         {/* Date + time — custom calendar popover for the date so the modal
             doesn't pop the OS-native date dialog (which looks foreign and
@@ -402,7 +440,10 @@ export default function ScheduleModal({
                 // Settings override is what protects against that.
                 timezone: getScheduleTimezone(),
                 media,
-                ratios: initialRatios || undefined,
+                // Send the user's current per-platform ratio map (empty
+                // entries fall back to RATIOS_BY_PLATFORM defaults server-
+                // side, so we don't need to pre-fill anything here).
+                ratios: Object.keys(ratios).length ? ratios : undefined,
               })
             }
           >

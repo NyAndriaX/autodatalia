@@ -39,6 +39,7 @@ import { generateContent } from "../../lib/aiService";
 import { getScheduleTimezone } from "../../lib/timezone";
 import DatePicker from "./DatePicker";
 import TimePicker from "./TimePicker";
+import RatioPicker from "./RatioPicker";
 
 /**
  * Buffer-style edit popup opened from the calendar. Splits the dialog into:
@@ -60,6 +61,10 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
   );
   const [time, setTime] = useState(post.time ?? "09:00");
   const [media, setMedia] = useState(post.media ?? []);
+  // Per-platform aspect ratio map. Seeded from the persisted post so the
+  // crop the scheduler will apply is the same one the user sees in this
+  // dialog; missing entries default server-side via RATIOS_BY_PLATFORM.
+  const [ratios, setRatios] = useState(post.ratios ?? {});
   // Status is derived/auto-set at save time rather than user-picked — see
   // handleSave below. The header badge below still reads from `post.status`
   // so the user can see what the current persisted status is.
@@ -196,6 +201,10 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
       // is on a non-local clock or behind a VPN.
       timezone: post.timezone || getScheduleTimezone(),
       media,
+      // Per-platform crop choices — when empty the backend falls back to
+      // RATIOS_BY_PLATFORM defaults, so we only need to send what the
+      // user touched.
+      ratios: Object.keys(ratios).length ? ratios : undefined,
       status: computeNextStatus(),
     });
   };
@@ -432,7 +441,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
             >
               Platforms
             </label>
-            <div className="flex flex-wrap gap-2 mb-4">
+            <div className="flex flex-wrap gap-2 mb-3">
               {PLATFORMS.map((p) => {
                 const Icon = p.icon;
                 const on = !!platforms[p.id];
@@ -459,6 +468,41 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
                 );
               })}
             </div>
+
+            {/* Per-platform aspect ratio — same picker the editor uses.
+                Only shown for currently-enabled platforms; the chosen
+                ratios are sent in handleSave below and the scheduler
+                crops accordingly when the post fires. */}
+            {activeIds.length > 0 && (
+              <>
+                <label
+                  className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
+                  style={{ color: "var(--text-tertiary)" }}
+                >
+                  Aspect ratio
+                </label>
+                <div className="flex flex-wrap items-center gap-2 mb-4">
+                  {activeIds.map((id) => {
+                    const p = PLATFORM_MAP[id];
+                    if (!p) return null;
+                    const Icon = p.icon;
+                    return (
+                      <div key={id} className="inline-flex items-center gap-1.5">
+                        <Icon size={12} style={{ color: p.color }} aria-hidden="true" />
+                        <RatioPicker
+                          platform={p}
+                          value={ratios[id]}
+                          onChange={(next) =>
+                            setRatios((r) => ({ ...r, [id]: next }))
+                          }
+                          compact
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
 
             <label
               className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
