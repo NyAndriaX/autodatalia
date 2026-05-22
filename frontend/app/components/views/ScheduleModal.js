@@ -23,16 +23,9 @@ import {
   revokeMediaItem,
 } from "../../lib/uploadService";
 import { generateContent } from "../../lib/aiService";
+import { getScheduleTimezone } from "../../lib/timezone";
 import DatePicker from "./DatePicker";
 import TimePicker from "./TimePicker";
-
-function browserTimezone() {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Paris";
-  } catch {
-    return "Europe/Paris";
-  }
-}
 
 const MEDIA_SOURCES = [
   { id: "upload-image", kind: "image", source: "upload", label: "Upload Image", icon: Upload },
@@ -402,11 +395,12 @@ export default function ScheduleModal({
                 platforms,
                 scheduledDate: date,
                 time,
-                // Send the browser's IANA timezone explicitly so the
-                // scheduler reads "09:00" in the user's local time, not
-                // UTC. (The thunk also sets this — belt-and-suspenders so
-                // any caller that bypasses the thunk still gets it.)
-                timezone: browserTimezone(),
+                // Stamp the team-configured scheduling timezone (falls
+                // back to the browser TZ if unset). VPNs don't change
+                // this — Intl reads OS settings, not IP geolocation —
+                // but a misconfigured laptop / traveller would; the
+                // Settings override is what protects against that.
+                timezone: getScheduleTimezone(),
                 media,
                 ratios: initialRatios || undefined,
               })

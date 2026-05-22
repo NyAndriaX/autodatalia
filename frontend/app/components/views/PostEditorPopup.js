@@ -36,19 +36,9 @@ import {
   revokeMediaItem,
 } from "../../lib/uploadService";
 import { generateContent } from "../../lib/aiService";
+import { getScheduleTimezone } from "../../lib/timezone";
 import DatePicker from "./DatePicker";
 import TimePicker from "./TimePicker";
-
-// Browser IANA timezone so the scheduler knows what "09:00" means. Falls
-// back to Europe/Paris (Datalia's default) if Intl isn't available, which
-// keeps unit tests / SSR sane.
-function browserTimezone() {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Paris";
-  } catch {
-    return "Europe/Paris";
-  }
-}
 
 /**
  * Buffer-style edit popup opened from the calendar. Splits the dialog into:
@@ -199,10 +189,12 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
       scheduledDate: date,
       time,
       // Preserve the post's existing IANA timezone when edits don't change
-      // it; otherwise stamp it with the browser's local zone. Without this
-      // the PATCH path dropped tz and the scheduler treated "09:00" as UTC,
-      // firing posts 1–2h after the user expected.
-      timezone: post.timezone || browserTimezone(),
+      // it; otherwise stamp it with the team-configured scheduling zone.
+      // Without this, PATCHes dropped tz and the scheduler defaulted to
+      // UTC, firing posts 1–2h off. getScheduleTimezone() respects the
+      // Settings override so this stays correct even when the operator
+      // is on a non-local clock or behind a VPN.
+      timezone: post.timezone || getScheduleTimezone(),
       media,
       status: computeNextStatus(),
     });

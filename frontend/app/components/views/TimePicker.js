@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Clock } from "lucide-react";
+import { getScheduleTimezone } from "../../lib/timezone";
 
 /**
  * Compact popover time picker — replaces `<input type="time">` in dialogs.
@@ -196,9 +197,11 @@ function PopoverBody({ selectedH, snappedM, minutes, commit, close }) {
   return (
     <>
       {/* Big readout — tall enough that the picker reads as "I'm a clock",
-          not "I'm another grid". */}
+          not "I'm another grid". The tiny line below names the active
+          scheduling timezone so the user can never be surprised about
+          what "09:00" will actually mean to the scheduler. */}
       <div
-        className="text-center mb-3 tabular-nums leading-none"
+        className="text-center mb-1 tabular-nums leading-none"
         style={{
           color: "var(--text-primary)",
           fontWeight: 700,
@@ -210,6 +213,13 @@ function PopoverBody({ selectedH, snappedM, minutes, commit, close }) {
         {pad(selectedH)}
         <span style={{ color: "var(--text-muted)" }}>:</span>
         {pad(snappedM)}
+      </div>
+      <div
+        className="text-center text-[10px] mb-3"
+        style={{ color: "var(--text-muted)" }}
+        title="Set this in Settings → Scheduling timezone"
+      >
+        {getScheduleTimezone()}
       </div>
 
       {/* Twin scrollable columns. The selected row sits in the centred

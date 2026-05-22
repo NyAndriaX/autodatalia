@@ -19,6 +19,15 @@ const EMPTY = Object.freeze({
   brandToneOfVoice: "",
   // OAuth connection state (per platform id → "connected" | "disconnected")
   connections: {},
+  // IANA timezone the scheduler interprets "09:00" in. Empty string means
+  // "use the browser's OS timezone" (`Intl.DateTimeFormat().resolvedOptions().timeZone`).
+  // Set this to the brand's posting timezone (e.g. "Europe/Paris") so a
+  // team member scheduling from a different time zone — or hopping on via
+  // a laptop set to a non-local clock — doesn't accidentally publish at
+  // 03:00 in the audience's market. VPNs do NOT change this: the browser
+  // reads OS settings, not IP geolocation, so a VPN to a different
+  // country still reports the laptop's actual timezone.
+  scheduleTimezone: "",
 });
 
 export function loadSettings() {

@@ -41,23 +41,24 @@ export function loadScheduledPostsThunk({ refresh = false } = {}) {
  *
  * Sets `status: "scheduled"` so the backend scheduler picks it up at fire
  * time — without this it would persist as a "draft" and never auto-publish.
- * Tags the post with the browser's IANA timezone so the server interprets
- * `time` ("09:00") in the user's local time, not UTC.
+ * Tags the post with the *team's* configured scheduling timezone (or the
+ * browser's if no override is set) so the server interprets `time`
+ * ("09:00") consistently regardless of which device fired the call. See
+ * lib/timezone.getScheduleTimezone for the resolution order.
  *
  * Optimistic: the post appears immediately. On backend failure the post
  * stays in the local store but won't actually be fired by anything.
  */
 export function schedulePostThunk({ post, date }) {
   return async (dispatch) => {
-    const tz =
-      typeof Intl !== "undefined"
-        ? Intl.DateTimeFormat().resolvedOptions().timeZone
-        : "UTC";
+    // Local import keeps the thunk SSR-safe (settingsStorage touches
+    // window.localStorage; importing it at module top would break tests).
+    const { getScheduleTimezone } = await import("../lib/timezone");
     const scheduled = {
       ...post,
       scheduledDate: date,
       status: post.status === "draft" ? "scheduled" : post.status ?? "scheduled",
-      timezone: post.timezone || tz,
+      timezone: post.timezone || getScheduleTimezone(),
     };
     dispatch(addScheduledPost(scheduled));
     const persisted = await createPost(scheduled);
