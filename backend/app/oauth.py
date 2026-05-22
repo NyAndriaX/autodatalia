@@ -233,13 +233,26 @@ async def oauth_start(provider_id: str) -> dict[str, str]:
     tokens.setdefault("_pending_state", {})[state] = provider_id
     _save_tokens(tokens)
 
-    params = {
-        "client_id": client_id,
-        "redirect_uri": _redirect_uri(p.id),
-        "response_type": "code",
-        "scope": " ".join(p.scopes),
-        "state": state,
-    }
+    # TikTok diverges from the OAuth2 norm in two ways: the authorize URL
+    # takes `client_key` instead of `client_id`, and scopes are joined
+    # with commas instead of spaces. Every other provider follows the
+    # standard `client_id` + space-separated scopes.
+    if p.id == "tiktok":
+        params = {
+            "client_key": client_id,
+            "redirect_uri": _redirect_uri(p.id),
+            "response_type": "code",
+            "scope": ",".join(p.scopes),
+            "state": state,
+        }
+    else:
+        params = {
+            "client_id": client_id,
+            "redirect_uri": _redirect_uri(p.id),
+            "response_type": "code",
+            "scope": " ".join(p.scopes),
+            "state": state,
+        }
     for k, v in p.extra_authorize_params:
         params[k] = v
 
@@ -285,6 +298,36 @@ async def _exchange_code(
             },
         )
     return resp.json()
+
+
+async def _fetch_tiktok_user_info(access_token: str) -> dict[str, Any]:
+    """Pull the connected TikTok user's display_name + avatar_url.
+
+    Required so the Compose-screen creator card can show the actual
+    avatar and @handle of the account a post will fire to — TikTok's
+    audit reviewers reject submissions where the user info is missing
+    from the publish flow.
+
+    Returns {} on any upstream failure so the callback stays graceful;
+    the row will just lack `display_name` / `avatar_url` until the user
+    reconnects.
+    """
+    if not access_token:
+        return {}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(
+                "https://open.tiktokapis.com/v2/user/info/",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={
+                    "fields": "open_id,union_id,avatar_url,display_name,username",
+                },
+            )
+    except Exception:
+        return {}
+    if resp.status_code >= 400:
+        return {}
+    return (resp.json().get("data") or {}).get("user") or {}
 
 
 async def _exchange_long_lived_meta(short_token: str) -> dict[str, Any]:
@@ -402,6 +445,14 @@ async def oauth_callback(
             data = {**data, **long_lived}
             access_token = long_lived["access_token"]
 
+    # TikTok-specific: the token-exchange response includes `open_id` but
+    # not the user's display name or avatar. Fetch those right after the
+    # exchange so the connection record carries everything the compose
+    # screen needs (avatar + @handle are reject-on-sight required).
+    user_info: dict[str, Any] = {}
+    if provider_id == "tiktok":
+        user_info = await _fetch_tiktok_user_info(access_token)
+
     expires_in = data.get("expires_in")
     record = {
         "access_token": access_token,
@@ -413,6 +464,14 @@ async def oauth_callback(
         # so provider-specific fields like TikTok's open_id are recoverable.
         "raw": data,
     }
+    if user_info:
+        # Promote the common fields to top-level so callers don't have to
+        # dig through `raw` to render an avatar.
+        record["open_id"] = user_info.get("open_id")
+        record["union_id"] = user_info.get("union_id")
+        record["display_name"] = user_info.get("display_name")
+        record["username"] = user_info.get("username")
+        record["avatar_url"] = user_info.get("avatar_url")
     tokens[provider_id] = record
     _save_tokens(tokens)
 
@@ -561,8 +620,27 @@ async def connections() -> dict[str, Any]:
                         }
                     )
 
-        # TikTok / LinkedIn / Google target listing will land when their
-        # OAuth flows produce real tokens. The shape stays the same.
+        if connected and p.id == "tiktok":
+            # One target per connected TikTok account. We persisted
+            # display_name / username / avatar_url on the token record at
+            # callback time, so no extra round-trip here. open_id is what
+            # the publish API takes as the target identifier — same field
+            # the publish handler expects.
+            open_id = record.get("open_id") or (record.get("raw") or {}).get("open_id")
+            if open_id:
+                handle = record.get("username") or record.get("display_name") or open_id
+                entry["targets"].append(
+                    {
+                        "id": open_id,
+                        "label": f"@{handle}" if not handle.startswith("@") else handle,
+                        "kind": "tiktok_account",
+                        "display_name": record.get("display_name"),
+                        "profile_picture_url": record.get("avatar_url"),
+                    }
+                )
+
+        # LinkedIn / Google target listing will land when their OAuth flows
+        # produce real tokens. Shape stays the same.
 
         out["providers"][p.id] = entry
 

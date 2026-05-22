@@ -219,9 +219,47 @@ async def publish(body: PublishRequest) -> PublishResponse:
                 "link": body.link,
                 "media_kind": t.media_kind or "image",
             })
+        elif platform == "tiktok":
+            record = tokens.get("tiktok") or {}
+            token = record.get("access_token")
+            if not token:
+                resolved.append({
+                    "platform": "tiktok",
+                    "id": t.id,
+                    "label": t.label or t.id,
+                    "access_token": "",
+                    "media_url": body.media_url,
+                    "media_kind": "video",
+                    "_unresolved_reason": "tiktok_not_connected",
+                })
+                continue
+            handle = record.get("username") or record.get("display_name")
+            resolved.append({
+                "platform": "tiktok",
+                "id": t.id,
+                "label": t.label or (f"@{handle}" if handle else t.id),
+                "access_token": token,
+                "media_url": body.media_url,
+                # TikTok is video-only; ignore whatever the caller passed.
+                "media_kind": "video",
+                # Forward the compose-screen choices the publish handler
+                # needs. PublishRequest carries these as a tiktok-shaped
+                # sub-object (see models.py PublishRequest.tiktok).
+                "privacy_level": (
+                    (body.tiktok or {}).get("privacy_level", "SELF_ONLY")
+                ),
+                "disclose_video_branded": (
+                    (body.tiktok or {}).get("disclose_video_branded", False)
+                ),
+                "disclose_video_your_brand": (
+                    (body.tiktok or {}).get("disclose_video_your_brand", False)
+                ),
+                # Default to inbox flow until the audit unlocks direct-post.
+                "audit_mode": (body.tiktok or {}).get("audit_mode", "inbox"),
+            })
         else:
-            # TikTok / LinkedIn — stubs for now, still flow through so
-            # the response includes one row per requested target.
+            # LinkedIn — stub for now; still flow through so the response
+            # includes one row per requested target.
             record = tokens.get(platform) or {}
             resolved.append({
                 "platform": platform,

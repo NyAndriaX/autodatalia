@@ -201,6 +201,7 @@ export async function publishToTargets({
   link = null,
   targets,
   ratios = null,
+  tiktok = null,
 }) {
   if (!targets?.length) throw new Error("publish requires at least one target");
   return apiFetch("/publish", {
@@ -211,6 +212,10 @@ export async function publishToTargets({
       link,
       targets,
       ratios: ratios || undefined,
+      // TikTok compose flags (visibility, branded toggles, music
+      // consent). Only sent when TikTok is in the publish set;
+      // otherwise omitted so the backend's default schema kicks in.
+      tiktok: tiktok || undefined,
     }),
   });
 }

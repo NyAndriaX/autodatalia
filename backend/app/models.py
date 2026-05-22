@@ -186,6 +186,27 @@ class PublishTarget(BaseModel):
     media_kind: str | None = None  # "image" | "video"
 
 
+class TikTokOptions(BaseModel):
+    """Per-publish TikTok flags the compose UI surfaces.
+
+    These map to the fields TikTok's audit reviewers verify the editor
+    exposes (visibility, disclose-branded toggles, music consent) before
+    they'll grant `video.publish`.
+    """
+
+    privacy_level: str = "SELF_ONLY"  # PUBLIC_TO_EVERYONE | MUTUAL_FOLLOW_FRIENDS | FOLLOWER_OF_CREATOR | SELF_ONLY
+    disclose_video_branded: bool = False
+    disclose_video_your_brand: bool = False
+    # The frontend sets `music_confirmed` purely as a gate for the
+    # Publish button; we don't forward it to TikTok (they don't accept
+    # a field by that name), but we record it on /publish so the audit
+    # trail shows the user ticked the consent.
+    music_confirmed: bool = False
+    # Until TikTok approves video.publish we have to use the inbox flow.
+    # Frontend sets this once we know the audit cleared.
+    audit_mode: str = "inbox"  # "inbox" | "direct"
+
+
 class PublishRequest(BaseModel):
     """Body for POST /publish."""
 
@@ -198,6 +219,10 @@ class PublishRequest(BaseModel):
     # changes what gets published, not just the preview frame.
     ratios: dict[str, str] | None = None
     targets: list[PublishTarget]
+    # TikTok-specific compose flags (visibility, branded toggles, music
+    # confirmation). Optional — defaults match what the audit checklist
+    # wants when not specified.
+    tiktok: TikTokOptions | None = None
 
 
 class PublishResultModel(BaseModel):

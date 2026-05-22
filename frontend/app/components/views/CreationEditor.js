@@ -48,6 +48,10 @@ import ScheduleModal from "./ScheduleModal";
 import PublishConfirmModal from "./PublishConfirmModal";
 import { publishHashKey } from "../../lib/publishHash";
 import {
+  fetchConnections,
+  readCachedConnections,
+} from "../../lib/oauthService";
+import {
   PLATFORMS,
   RATIOS_BY_PLATFORM,
   TONES,
@@ -100,6 +104,47 @@ export default function CreationEditor() {
   const [showHashtags, setShowHashtags] = useState(false);
   const [confirmRegen, setConfirmRegen] = useState(false);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
+
+  /* Connected accounts → per-platform creator lookup, so the preview
+     card shows the real avatar + handle of the account a post would
+     fire to. TikTok specifically requires this on the compose screen
+     (reject-on-sight during audit). Initial value lazily pulls the
+     cache; useEffect refreshes from the backend. */
+  const [creatorByPlatform, setCreatorByPlatform] = useState({});
+  useEffect(() => {
+    const apply = (providers) => {
+      const next = {};
+      const meta = providers?.meta?.targets || [];
+      const fbPage = meta.find((t) => t.kind === "facebook_page");
+      if (fbPage) {
+        next.facebook = {
+          handle: fbPage.label,
+          displayName: fbPage.label,
+          avatarUrl: null,
+        };
+      }
+      const ig = meta.find((t) => t.kind === "instagram_business");
+      if (ig) {
+        next.instagram = {
+          handle: ig.label,
+          displayName: ig.label,
+          avatarUrl: ig.profile_picture_url || null,
+        };
+      }
+      const tt = (providers?.tiktok?.targets || [])[0];
+      if (tt) {
+        next.tiktok = {
+          handle: tt.label,
+          displayName: tt.display_name || tt.label,
+          avatarUrl: tt.profile_picture_url || null,
+        };
+      }
+      setCreatorByPlatform(next);
+    };
+    const cached = readCachedConnections();
+    if (cached?.providers) apply(cached.providers);
+    fetchConnections().then((d) => apply(d?.providers || {}));
+  }, []);
   const isMobile = useIsMobile();
 
   // Rough token estimate so the user sees the cost before paying for it.
@@ -658,6 +703,7 @@ export default function CreationEditor() {
                       content={currentPost.content}
                       hashtagCount={hashtagCount}
                       media={currentPost.media}
+                      creator={creatorByPlatform[platform.id]}
                     />
                   </div>
                 );
@@ -948,6 +994,7 @@ function PlatformPreview({
   content,
   hashtagCount,
   media = [],
+  creator = null,
 }) {
   const Icon = platform.icon;
   const charPercent = Math.min((content.length / platform.maxChars) * 100, 100);
@@ -962,6 +1009,19 @@ function PlatformPreview({
   // chip as the avatar background to keep white initials legible.
   const avatarBg = platform.id === "tiktok" ? "#0f172a" : platform.color;
   const hero = media[0];
+  // Per-platform creator card: when a connected account exists for this
+  // platform, show its real avatar + @handle here. TikTok specifically
+  // requires the creator info to appear on the compose screen BEFORE
+  // posting — this is one of the audit reviewers' reject-on-sight checks.
+  const creatorHandle = creator?.handle || "datalia_official";
+  const creatorAvatar = creator?.avatarUrl || null;
+  const creatorInitials = (creator?.displayName || "DT")
+    .split(/\s+/)
+    .map((w) => w[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
 
   return (
     <article
@@ -1052,15 +1112,26 @@ function PlatformPreview({
       {/* Content preview */}
       <div className="px-4 py-3">
         <div className="flex items-center gap-2 mb-2">
-          <div
-            className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-bold"
-            style={{ background: avatarBg }}
-            aria-hidden="true"
-          >
-            DT
-          </div>
+          {creatorAvatar ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={creatorAvatar}
+              alt={creatorHandle}
+              className="w-7 h-7 rounded-full"
+              style={{ objectFit: "cover", background: avatarBg }}
+              aria-hidden="true"
+            />
+          ) : (
+            <div
+              className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-bold"
+              style={{ background: avatarBg }}
+              aria-hidden="true"
+            >
+              {creatorInitials}
+            </div>
+          )}
           <div>
-            <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>datalia_official</p>
+            <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{creatorHandle}</p>
             <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>Just now</p>
           </div>
         </div>

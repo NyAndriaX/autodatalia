@@ -352,27 +352,163 @@ async def publish_tiktok(
     handle_label: str,
     content: str,
     video_url: str,
+    privacy_level: str = "SELF_ONLY",
+    disclose_video_branded: bool = False,
+    disclose_video_your_brand: bool = False,
+    audit_mode: str = "inbox",
 ) -> PublishResult:
-    """TikTok Content Posting API — stub until the sandbox auth flow runs.
+    """Publish a video to TikTok via the Content Posting API.
 
-    Sandbox flow (`video.upload`, the only one available pre-audit):
-      POST /v2/post/publish/inbox/video/init/  (initialise)
-      → response includes a publish_id + upload_url
-      → upload video bytes (or pass PULL_FROM_URL with the public URL)
-      → video lands in the user's TikTok inbox; they tap publish in-app.
+    Two surfaces, same shape — `audit_mode` picks which:
 
-    Direct-post (`video.publish`) is the post-audit flow and replaces
-    `/inbox/video/init/` with `/video/init/` — same shape otherwise.
+      - "inbox"  → /v2/post/publish/inbox/video/init/  (sandbox / pre-audit;
+                  video lands in the user's TikTok inbox, they tap Publish
+                  manually in-app). This is the only mode that works before
+                  TikTok approves the `video.publish` scope.
 
-    We'll fill this in once the tunnel + sandbox tester come online.
+      - "direct" → /v2/post/publish/video/init/  (post-audit; direct to
+                  feed, no human tap). Requires `video.publish` scope.
+
+    `privacy_level` is one of TikTok's published values:
+      PUBLIC_TO_EVERYONE | MUTUAL_FOLLOW_FRIENDS | FOLLOWER_OF_CREATOR | SELF_ONLY
+    Sandbox forces SELF_ONLY regardless of what we send; once audited the
+    full set is honoured.
+
+    PULL_FROM_URL upload mode requires the URL prefix to be verified in
+    TikTok's URL Properties panel. Until that's done, this raises a
+    clear error rather than failing opaquely from upstream.
     """
-    return PublishResult(
-        target_id=open_id,
-        target_label=handle_label,
-        platform="tiktok",
-        ok=False,
-        error="tiktok_publish_not_implemented",
-    )
+    if not video_url:
+        return PublishResult(
+            target_id=open_id,
+            target_label=handle_label,
+            platform="tiktok",
+            ok=False,
+            error="tiktok_requires_video",
+        )
+
+    base = "https://open.tiktokapis.com/v2/post/publish"
+    init_path = f"{base}/inbox/video/init/" if audit_mode == "inbox" else f"{base}/video/init/"
+
+    init_body: dict[str, Any] = {
+        "post_info": {
+            "title": content[:2200] if content else "",
+            "privacy_level": privacy_level,
+            "disable_duet": False,
+            "disable_comment": False,
+            "disable_stitch": False,
+            "video_cover_timestamp_ms": 1000,
+            # Two branded-content flags TikTok specifically requires the UI
+            # to surface separately; we forward whatever the editor sent.
+            "brand_content_toggle": bool(disclose_video_branded),
+            "brand_organic_toggle": bool(disclose_video_your_brand),
+        },
+        "source_info": {
+            "source": "PULL_FROM_URL",
+            "video_url": video_url,
+        },
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            init_resp = await client.post(
+                init_path,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json; charset=UTF-8",
+                },
+                json=init_body,
+            )
+        if init_resp.status_code >= 400:
+            return PublishResult(
+                target_id=open_id,
+                target_label=handle_label,
+                platform="tiktok",
+                ok=False,
+                error=f"tiktok_init_failed: HTTP {init_resp.status_code}",
+                raw={"response": init_resp.text[:800]},
+            )
+        init_data = init_resp.json().get("data") or {}
+        publish_id = init_data.get("publish_id")
+        if not publish_id:
+            return PublishResult(
+                target_id=open_id,
+                target_label=handle_label,
+                platform="tiktok",
+                ok=False,
+                error="tiktok_init_returned_no_publish_id",
+                raw=init_resp.json(),
+            )
+
+        # Poll the status endpoint until the upload is done or fails.
+        # Inbox mode finishes at "SEND_TO_USER_INBOX" (user has to tap),
+        # direct mode at "PUBLISH_COMPLETE" (a permalink_url is returned).
+        terminal_success = {"SEND_TO_USER_INBOX", "PUBLISH_COMPLETE"}
+        terminal_failure = {"FAILED"}
+
+        status_url = f"{base}/status/fetch/"
+        permalink: str | None = None
+        last_status: str | None = None
+        last_payload: dict[str, Any] | None = None
+        for _ in range(30):  # ~60s budget at 2s poll
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                status_resp = await client.post(
+                    status_url,
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Content-Type": "application/json; charset=UTF-8",
+                    },
+                    json={"publish_id": publish_id},
+                )
+            if status_resp.status_code >= 400:
+                return PublishResult(
+                    target_id=open_id,
+                    target_label=handle_label,
+                    platform="tiktok",
+                    ok=False,
+                    error=f"tiktok_status_failed: HTTP {status_resp.status_code}",
+                    raw={"response": status_resp.text[:800]},
+                )
+            last_payload = status_resp.json().get("data") or {}
+            last_status = last_payload.get("status")
+            permalink = last_payload.get("publicaly_available_post_id") or last_payload.get(
+                "publicly_available_post_id"
+            )  # TikTok docs use both spellings across versions
+            if last_status in terminal_success:
+                break
+            if last_status in terminal_failure:
+                return PublishResult(
+                    target_id=open_id,
+                    target_label=handle_label,
+                    platform="tiktok",
+                    ok=False,
+                    error=f"tiktok_publish_failed: {last_payload.get('fail_reason') or last_status}",
+                    raw=last_payload,
+                )
+            await asyncio.sleep(2)
+
+        permalink_url = (
+            f"https://www.tiktok.com/@{handle_label.lstrip('@')}/video/{permalink}"
+            if permalink
+            else None
+        )
+        return PublishResult(
+            target_id=open_id,
+            target_label=handle_label,
+            platform="tiktok",
+            ok=True,
+            platform_post_id=permalink or publish_id,
+            permalink_url=permalink_url,
+            raw={"status": last_status, "data": last_payload},
+        )
+    except Exception as exc:
+        return PublishResult(
+            target_id=open_id,
+            target_label=handle_label,
+            platform="tiktok",
+            ok=False,
+            error=f"tiktok_exception: {exc}",
+        )
 
 
 # ── LinkedIn stub ───────────────────────────────────────────────────
@@ -468,7 +604,23 @@ async def build_targets_from_post(
                     "media_url": media_url,
                     "media_kind": media_kind,
                 })
-        elif platform in ("tiktok", "linkedin"):
+        elif platform == "tiktok":
+            record = tokens.get("tiktok") or {}
+            token = record.get("access_token")
+            if not token:
+                continue
+            raw = record.get("raw") or {}
+            open_id = record.get("open_id") or raw.get("open_id")
+            handle = record.get("username") or record.get("display_name")
+            resolved.append({
+                "platform": "tiktok",
+                "id": open_id or "tiktok",
+                "label": f"@{handle}" if handle else (open_id or "tiktok"),
+                "access_token": token,
+                "media_url": media_url,
+                "media_kind": "video",  # TikTok is video-only
+            })
+        elif platform == "linkedin":
             record = tokens.get(platform) or {}
             token = record.get("access_token")
             if not token:
@@ -476,7 +628,7 @@ async def build_targets_from_post(
             raw = record.get("raw") or {}
             resolved.append({
                 "platform": platform,
-                "id": raw.get("open_id") or raw.get("urn") or platform,
+                "id": raw.get("urn") or platform,
                 "label": platform,
                 "access_token": token,
                 "media_url": media_url,
@@ -557,6 +709,10 @@ async def publish_to_targets(
                 handle_label=t.get("label") or t["id"],
                 content=content,
                 video_url=t.get("media_url") or "",
+                privacy_level=t.get("privacy_level", "SELF_ONLY"),
+                disclose_video_branded=t.get("disclose_video_branded", False),
+                disclose_video_your_brand=t.get("disclose_video_your_brand", False),
+                audit_mode=t.get("audit_mode", "inbox"),
             )
         if platform == "linkedin":
             return await publish_linkedin(

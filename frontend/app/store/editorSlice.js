@@ -11,10 +11,29 @@ const initialState = {
     },
     mode: "free", // "free" | "template" | "scratch"
     template: "promo", // active template id when mode === "template"
+    /* Tone is sent to the AI as generation context — null means "let the
+       model pick". The dropdown defaults to the value last used. */
+    tone: null,
+    /* Per-platform aspect ratio chosen for the preview frame. Keyed by
+       platform id; missing keys fall back to the platform's defaultRatio
+       (see RATIOS_BY_PLATFORM). Empty by default so the editor displays
+       each platform's recommended ratio without the user having to choose. */
+    ratios: {},
     status: "draft", // "draft" | "pending" | "approved" | "published" | "error"
     scheduledDate: null,
     hashtags: [],
     media: [],
+    /* TikTok-specific compose flags. TikTok's audit reviewers verify the
+       editor exposes all four of these BEFORE the publish call — they're
+       reject-on-sight if missing. We persist them on currentPost so the
+       PublishConfirmModal reads/writes one source of truth and the publish
+       thunk can forward them to the backend on every fire. */
+    tiktok: {
+      privacy_level: "PUBLIC_TO_EVERYONE", // forced to SELF_ONLY by TikTok in sandbox anyway
+      disclose_video_branded: false,       // "Disclose branded content"
+      disclose_video_your_brand: false,    // "Your brand"
+      music_confirmed: false,              // gate — Publish disabled until ticked
+    },
   },
   aiGeneration: {
     isGenerating: false,
@@ -42,6 +61,23 @@ const editorSlice = createSlice({
     },
     setTemplate: (state, action) => {
       state.currentPost.template = action.payload;
+    },
+    setTone: (state, action) => {
+      state.currentPost.tone = action.payload || null;
+    },
+    setPlatformRatio: (state, action) => {
+      const { platform, ratio } = action.payload;
+      if (!platform) return;
+      state.currentPost.ratios[platform] = ratio;
+    },
+    /* Partial update for the TikTok compose flags. Pass any subset:
+       e.g. dispatch(setTiktokOptions({ music_confirmed: true })). */
+    setTiktokOptions: (state, action) => {
+      const patch = action.payload || {};
+      state.currentPost.tiktok = {
+        ...(state.currentPost.tiktok || {}),
+        ...patch,
+      };
     },
     setStatus: (state, action) => {
       state.currentPost.status = action.payload;
@@ -115,6 +151,9 @@ export const {
   togglePlatform,
   setMode,
   setTemplate,
+  setTone,
+  setPlatformRatio,
+  setTiktokOptions,
   setStatus,
   setScheduledDate,
   setHashtags,
