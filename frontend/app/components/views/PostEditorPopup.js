@@ -1,0 +1,709 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  X,
+  Trash2,
+  Upload,
+  Film,
+  ImagePlus,
+  Sparkles,
+  Heart,
+  MessageCircle,
+  Share2,
+  Hash,
+  ExternalLink,
+  CheckCircle2,
+  AlertCircle,
+} from "lucide-react";
+import {
+  PLATFORMS,
+  PLATFORM_MAP,
+  STATUSES,
+  STATUS_META,
+  RATIOS_BY_PLATFORM,
+  parseRatio,
+  activePlatformIds,
+} from "../../lib/platforms";
+import { isoDateKey, parseDateKey, startOfToday } from "../../lib/dateUtils";
+import DatePicker from "./DatePicker";
+import TimePicker from "./TimePicker";
+
+let mediaUid = 0;
+
+/**
+ * Buffer-style edit popup opened from the calendar. Splits the dialog into:
+ *  - left  : editable post fields (content, media, platforms, schedule, status)
+ *  - right : platform-tabbed live preview that re-renders on every change
+ *
+ * For *creating* new posts the calendar still uses the compact ScheduleModal;
+ * this richer popup is reserved for editing existing scheduled posts where
+ * "see what it will look like" matters.
+ */
+export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
+  const [content, setContent] = useState(post.content ?? "");
+  const [platforms, setPlatforms] = useState(
+    post.platforms ?? { facebook: true }
+  );
+  const [date, setDate] = useState(
+    post.scheduledDate ?? isoDateKey(startOfToday())
+  );
+  const [time, setTime] = useState(post.time ?? "09:00");
+  const [media, setMedia] = useState(post.media ?? []);
+  const [status, setStatus] = useState(post.status ?? "draft");
+
+  const imageInputRef = useRef(null);
+  const videoInputRef = useRef(null);
+
+  const activeIds = useMemo(() => activePlatformIds(platforms), [platforms]);
+  const [tabIdx, setTabIdx] = useState(0);
+  // Keep the selected preview tab in range when platforms toggle.
+  useEffect(() => {
+    if (tabIdx >= activeIds.length) setTabIdx(Math.max(0, activeIds.length - 1));
+  }, [activeIds, tabIdx]);
+
+  const togglePlatform = (id) =>
+    setPlatforms((p) => ({ ...p, [id]: !p[id] }));
+
+  const addMedia = (m) =>
+    setMedia((list) => [...list, { id: `m${++mediaUid}`, ...m }]);
+  const removeMedia = (id) =>
+    setMedia((list) => list.filter((m) => m.id !== id));
+
+  const onPickFile = (kind) => (e) => {
+    const file = e.target.files?.[0];
+    if (file) addMedia({ kind, source: "upload", name: file.name });
+    e.target.value = "";
+  };
+
+  const hashtagCount = (content.match(/#\w+/g) || []).length;
+
+  const handleSave = () => {
+    onSave({
+      content: content.trim(),
+      platforms,
+      scheduledDate: date,
+      time,
+      media,
+      status,
+    });
+  };
+
+  const activeTabPlatform = activeIds[tabIdx]
+    ? PLATFORM_MAP[activeIds[tabIdx]]
+    : null;
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-fade-in"
+      style={{ background: "rgba(15, 23, 42, 0.5)" }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full"
+        style={{
+          maxWidth: 960,
+          maxHeight: "92vh",
+          background: "var(--bg-card)",
+          border: "1px solid var(--border-default)",
+          borderRadius: "var(--radius-md)",
+          boxShadow: "var(--shadow-modal)",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
+        {/* Header */}
+        <div
+          className="flex items-center justify-between px-5 py-3 shrink-0"
+          style={{ borderBottom: "1px solid var(--border-default)" }}
+        >
+          <div className="flex items-center gap-2">
+            <h3
+              className="text-base font-bold"
+              style={{ color: "var(--text-primary)" }}
+            >
+              Edit post
+            </h3>
+            <span
+              className={STATUS_META[status]?.badgeClass || "badge-draft"}
+              style={{ fontSize: 10 }}
+            >
+              {STATUS_META[status]?.label || status}
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            className="btn-ghost"
+            style={{ padding: 6 }}
+            aria-label="Close"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Body — split layout */}
+        <div
+          className="flex-1 overflow-hidden grid"
+          style={{
+            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+            minHeight: 0,
+          }}
+        >
+          {/* LEFT — editor */}
+          <div
+            className="overflow-y-auto p-5"
+            style={{ borderRight: "1px solid var(--border-default)" }}
+          >
+            <label
+              className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
+              style={{ color: "var(--text-tertiary)" }}
+            >
+              Content
+            </label>
+            <textarea
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              rows={5}
+              className="input-field"
+              style={{ resize: "vertical", marginBottom: 16 }}
+              placeholder="What do you want to post?"
+            />
+
+            <label
+              className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
+              style={{ color: "var(--text-tertiary)" }}
+            >
+              Media
+            </label>
+            <div className="flex flex-wrap gap-2 mb-2">
+              <button
+                onClick={() => imageInputRef.current?.click()}
+                className="btn-secondary text-xs inline-flex items-center gap-1.5"
+              >
+                <Upload size={13} /> Image
+              </button>
+              <button
+                onClick={() => videoInputRef.current?.click()}
+                className="btn-secondary text-xs inline-flex items-center gap-1.5"
+              >
+                <Film size={13} /> Video
+              </button>
+              <button
+                onClick={() =>
+                  addMedia({ kind: "image", source: "ai", name: "AI image" })
+                }
+                className="btn-secondary text-xs inline-flex items-center gap-1.5"
+                title="Generate with AI"
+              >
+                <Sparkles size={13} /> AI
+              </button>
+            </div>
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={onPickFile("image")}
+            />
+            <input
+              ref={videoInputRef}
+              type="file"
+              accept="video/*"
+              className="hidden"
+              onChange={onPickFile("video")}
+            />
+            {media.length > 0 && (
+              <div className="flex flex-col gap-1.5 mb-4">
+                {media.map((m) => (
+                  <div
+                    key={m.id}
+                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs"
+                    style={{
+                      background: "var(--bg-secondary)",
+                      color: "var(--text-secondary)",
+                    }}
+                  >
+                    {m.kind === "video" ? (
+                      <Film size={13} />
+                    ) : (
+                      <ImagePlus size={13} />
+                    )}
+                    <span className="flex-1 truncate">{m.name}</span>
+                    <span
+                      className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded"
+                      style={{
+                        background:
+                          m.source === "ai"
+                            ? "rgba(245,158,11,0.15)"
+                            : "rgba(99,102,241,0.12)",
+                        color:
+                          m.source === "ai"
+                            ? "var(--status-pending)"
+                            : "var(--accent-primary)",
+                      }}
+                    >
+                      {m.source}
+                    </span>
+                    <button
+                      onClick={() => removeMedia(m.id)}
+                      style={{ color: "var(--text-muted)" }}
+                      aria-label="Remove media"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {media.length === 0 && <div style={{ marginBottom: 16 }} />}
+
+            <label
+              className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
+              style={{ color: "var(--text-tertiary)" }}
+            >
+              Platforms
+            </label>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {PLATFORMS.map((p) => {
+                const Icon = p.icon;
+                const on = !!platforms[p.id];
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => togglePlatform(p.id)}
+                    className="text-xs font-medium px-2.5 py-1.5 rounded-lg transition-all inline-flex items-center gap-1.5"
+                    style={{
+                      background: on
+                        ? "rgba(99, 102, 241, 0.12)"
+                        : "transparent",
+                      border: `1px solid ${
+                        on ? "var(--border-active)" : "var(--border-default)"
+                      }`,
+                      color: on
+                        ? "var(--text-primary)"
+                        : "var(--text-muted)",
+                    }}
+                  >
+                    <Icon size={12} style={{ color: p.color }} />
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <label
+              className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
+              style={{ color: "var(--text-tertiary)" }}
+            >
+              Schedule
+            </label>
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              <DatePicker
+                value={date}
+                onChange={setDate}
+                minKey={isoDateKey(startOfToday())}
+              />
+              <TimePicker value={time} onChange={setTime} />
+            </div>
+
+            <label
+              className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
+              style={{ color: "var(--text-tertiary)" }}
+            >
+              Status
+            </label>
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              className="input-field"
+              style={{ maxWidth: 220 }}
+            >
+              {STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {STATUS_META[s]?.label || s}
+                </option>
+              ))}
+            </select>
+
+            {/* Publish results — the scheduler writes one row per target
+                once the post fires. Same content the bell menu shows, kept
+                here so users can revisit the outcome days later. */}
+            {Array.isArray(post.publish_results) && post.publish_results.length > 0 && (
+              <div className="mt-5">
+                <label
+                  className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
+                  style={{ color: "var(--text-tertiary)" }}
+                >
+                  Publish results
+                </label>
+                <ul className="flex flex-col gap-1.5">
+                  {post.publish_results.map((r, idx) => {
+                    const ok = !!r.ok;
+                    const Icon = ok ? CheckCircle2 : AlertCircle;
+                    const label = r.target_label || r.target_id || "?";
+                    const platform = r.platform || "?";
+                    return (
+                      <li
+                        key={`${platform}-${r.target_id || idx}`}
+                        className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs"
+                        style={{
+                          background: "var(--bg-secondary)",
+                          color: "var(--text-secondary)",
+                        }}
+                      >
+                        <Icon
+                          size={13}
+                          style={{
+                            color: ok
+                              ? "var(--status-approved)"
+                              : "var(--status-error)",
+                          }}
+                        />
+                        <span className="flex-1 truncate">
+                          <span className="font-medium">{label}</span>
+                          <span className="opacity-70"> · {platform}</span>
+                          {!ok && r.error && (
+                            <span
+                              className="block text-[10px] mt-0.5"
+                              style={{ color: "var(--status-error)" }}
+                            >
+                              {r.error}
+                            </span>
+                          )}
+                        </span>
+                        {ok && r.permalink_url && (
+                          <a
+                            href={r.permalink_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[10px]"
+                            style={{ color: "var(--accent-primary)" }}
+                            title="Open the live post in a new tab"
+                          >
+                            View <ExternalLink size={10} />
+                          </a>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+                {post.error && (
+                  <p
+                    className="text-[11px] mt-2"
+                    style={{ color: "var(--status-error)" }}
+                  >
+                    {post.error}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* RIGHT — preview */}
+          <div
+            className="overflow-y-auto p-5"
+            style={{ background: "var(--bg-secondary)" }}
+          >
+            {activeIds.length === 0 ? (
+              <div
+                className="h-full flex flex-col items-center justify-center text-center gap-2"
+                style={{ color: "var(--text-muted)" }}
+              >
+                <Sparkles size={28} className="opacity-40" />
+                <p className="text-sm">No platform selected</p>
+                <p className="text-xs">Toggle a platform on the left to preview</p>
+              </div>
+            ) : (
+              <>
+                {/* Platform tabs */}
+                <div
+                  role="tablist"
+                  aria-label="Platform previews"
+                  className="flex items-center gap-1 mb-3"
+                >
+                  {activeIds.map((id, idx) => {
+                    const p = PLATFORM_MAP[id];
+                    const Icon = p.icon;
+                    const isActive = idx === tabIdx;
+                    return (
+                      <button
+                        key={id}
+                        role="tab"
+                        aria-selected={isActive}
+                        onClick={() => setTabIdx(idx)}
+                        className="text-xs font-medium px-2.5 py-1.5 rounded-lg inline-flex items-center gap-1.5 transition-all"
+                        style={{
+                          background: isActive
+                            ? "var(--bg-card)"
+                            : "transparent",
+                          border: `1px solid ${
+                            isActive ? "var(--border-active)" : "transparent"
+                          }`,
+                          color: isActive
+                            ? "var(--text-primary)"
+                            : "var(--text-muted)",
+                        }}
+                      >
+                        <Icon size={12} style={{ color: p.color }} />
+                        {p.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {activeTabPlatform && (
+                  <PostMiniPreview
+                    platform={activeTabPlatform}
+                    content={content}
+                    media={media}
+                    hashtagCount={hashtagCount}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Footer actions */}
+        <div
+          className="flex items-center justify-between px-5 py-3 shrink-0"
+          style={{ borderTop: "1px solid var(--border-default)" }}
+        >
+          <button
+            onClick={() => onDelete?.(post.id)}
+            className="text-xs inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors"
+            style={{
+              color: "var(--status-error)",
+              background: "transparent",
+              border: "1px solid transparent",
+            }}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.background = "rgba(239,68,68,0.08)")
+            }
+            onMouseLeave={(e) =>
+              (e.currentTarget.style.background = "transparent")
+            }
+          >
+            <Trash2 size={13} /> Delete
+          </button>
+          <div className="flex items-center gap-2">
+            <button className="btn-secondary text-sm" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="btn-primary text-sm" onClick={handleSave}>
+              Save changes
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Compact platform preview — same visual idea as the editor's PlatformPreview
+   but sized to live inside a 480-pixel-wide modal panel. Renders the post
+   with platform-appropriate aspect ratio, char/hashtag limits, and chrome.
+   ─────────────────────────────────────────────────────────────────────── */
+function PostMiniPreview({ platform, content, media, hashtagCount }) {
+  const Icon = platform.icon;
+  const ratio = RATIOS_BY_PLATFORM[platform.id]?.defaultRatio || "1:1";
+  const aspectRatio = ratio.replace(":", " / ");
+  const numericRatio = parseRatio(ratio);
+  const charPercent = Math.min(
+    (content.length / platform.maxChars) * 100,
+    100
+  );
+  const hashOverLimit = hashtagCount > platform.maxHashtags;
+  const charOverLimit = content.length > platform.maxChars;
+  const avatarBg = platform.id === "tiktok" ? "#0f172a" : platform.color;
+  const hero = media[0];
+
+  return (
+    <article
+      className="overflow-hidden rounded-2xl"
+      style={{
+        background: "var(--bg-card)",
+        border: "1px solid var(--border-default)",
+        boxShadow: "0 12px 28px rgba(15, 23, 42, 0.12)",
+      }}
+    >
+      <div
+        className="flex items-center gap-2 px-3 py-2.5"
+        style={{ borderBottom: "1px solid var(--border-default)" }}
+      >
+        <div
+          className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-bold"
+          style={{ background: avatarBg }}
+        >
+          DT
+        </div>
+        <div className="flex-1 min-w-0">
+          <p
+            className="text-xs font-semibold truncate"
+            style={{ color: "var(--text-primary)" }}
+          >
+            datalia_official
+          </p>
+          <p
+            className="text-[10px]"
+            style={{ color: "var(--text-muted)" }}
+          >
+            {platform.label} · scheduled
+          </p>
+        </div>
+        <Icon size={14} style={{ color: platform.color }} />
+      </div>
+
+      {/* Media area */}
+      <div
+        className="relative flex items-center justify-center"
+        style={{
+          width: "100%",
+          aspectRatio,
+          maxHeight: 320,
+          background: hero
+            ? "var(--bg-elevated)"
+            : "linear-gradient(135deg, var(--bg-tertiary), var(--bg-elevated))",
+        }}
+      >
+        {hero ? (
+          hero.kind === "video" ? (
+            <video
+              src={hero.remoteUrl || hero.previewUrl}
+              className="w-full h-full object-cover"
+              muted
+              loop
+              playsInline
+              autoPlay
+              onError={(e) => {
+                if (hero.previewUrl && e.currentTarget.src !== hero.previewUrl) {
+                  e.currentTarget.src = hero.previewUrl;
+                }
+              }}
+            />
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={hero.remoteUrl || hero.previewUrl}
+              alt={hero.name}
+              className="w-full h-full object-cover"
+              onError={(e) => {
+                if (hero.previewUrl && e.currentTarget.src !== hero.previewUrl) {
+                  e.currentTarget.src = hero.previewUrl;
+                }
+              }}
+            />
+          )
+        ) : (
+          <div
+            className="px-4 text-center"
+            style={{ color: "var(--text-muted)" }}
+          >
+            <Icon
+              size={28}
+              className="mx-auto mb-1 opacity-30"
+              style={{ color: platform.color }}
+            />
+            <p className="text-[11px]">
+              {ratio} {numericRatio < 0.7 ? "Vertical" : numericRatio > 1.1 ? "Landscape" : "Square"}
+            </p>
+          </div>
+        )}
+        {media.length > 1 && (
+          <span
+            className="absolute top-2 right-2 px-2 py-0.5 rounded-full text-[10px] font-semibold text-white"
+            style={{ background: "rgba(0,0,0,0.6)" }}
+          >
+            1 / {media.length}
+          </span>
+        )}
+      </div>
+
+      {/* Body text */}
+      <div className="px-3 py-2.5">
+        <p
+          className="text-xs leading-relaxed whitespace-pre-line"
+          style={{
+            color: content
+              ? "var(--text-secondary)"
+              : "var(--text-muted)",
+            fontStyle: content ? "normal" : "italic",
+            maxHeight: 92,
+            overflow: "hidden",
+            display: "-webkit-box",
+            WebkitBoxOrient: "vertical",
+            WebkitLineClamp: 4,
+          }}
+        >
+          {content || "Your post content will appear here…"}
+        </p>
+      </div>
+
+      {/* Engagement chrome (visual realism) */}
+      <div
+        className="flex items-center gap-4 px-3 py-1.5"
+        style={{
+          color: "var(--text-muted)",
+          borderTop: "1px solid var(--border-default)",
+        }}
+        aria-hidden="true"
+      >
+        <Heart size={13} />
+        <MessageCircle size={13} />
+        <Share2 size={13} />
+      </div>
+
+      {/* Stats bar */}
+      <div
+        className="flex items-center justify-between px-3 py-2"
+        style={{
+          borderTop: "1px solid var(--border-default)",
+          background: "var(--bg-secondary)",
+        }}
+      >
+        <div className="flex items-center gap-2">
+          <div
+            className="h-1.5 rounded-full overflow-hidden"
+            style={{ width: 56, background: "var(--bg-elevated)" }}
+          >
+            <div
+              className="h-full rounded-full transition-all duration-300"
+              style={{
+                width: `${charPercent}%`,
+                background: charOverLimit
+                  ? "var(--status-error)"
+                  : charPercent > 80
+                  ? "var(--status-pending)"
+                  : "var(--status-approved)",
+              }}
+            />
+          </div>
+          <span
+            className="text-[10px]"
+            style={{
+              color: charOverLimit
+                ? "var(--status-error)"
+                : "var(--text-muted)",
+            }}
+          >
+            {content.length}/{platform.maxChars}
+          </span>
+        </div>
+        <span
+          className="text-[10px] flex items-center gap-1"
+          style={{
+            color: hashOverLimit
+              ? "var(--status-error)"
+              : "var(--text-muted)",
+          }}
+        >
+          <Hash size={10} />
+          {hashtagCount}/{platform.maxHashtags}
+        </span>
+      </div>
+    </article>
+  );
+}

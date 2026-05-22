@@ -3,9 +3,9 @@ import {
   hydrateScheduledPosts,
   removeScheduledPost,
   reschedulePost,
+  updateScheduledPost,
 } from "./calendarSlice";
 import { addNotification } from "./uiSlice";
-import { webhookService } from "../lib/webhookService";
 import {
   createPost,
   deletePost,
@@ -14,35 +14,53 @@ import {
 } from "../lib/postsService";
 
 /**
- * Hydrate the calendar from the backend on app boot.
- * Returns true if any posts were loaded (non-empty), so AppBootstrap can
- * decide whether the demo seed should still run.
+ * Hydrate the calendar from the backend.
+ *
+ * `refresh: false` (boot mode, default): only hydrate when the server has
+ * posts, so an empty backend lets CalendarView's demo seed run.
+ * `refresh: true` (polled refresh): always hydrate when the fetch succeeds
+ * — including with an empty array — so that scheduler-driven status flips
+ * and remote deletions reach the store.
+ *
+ * Returns true if any posts were loaded (non-empty); callers at boot still
+ * use this to decide whether to fall back to localStorage.
  */
-export function loadScheduledPostsThunk() {
+export function loadScheduledPostsThunk({ refresh = false } = {}) {
   return async (dispatch) => {
     const remote = await fetchPosts();
-    if (Array.isArray(remote) && remote.length > 0) {
+    if (!Array.isArray(remote)) return false; // fetch failed — don't clobber
+    if (refresh || remote.length > 0) {
       dispatch(hydrateScheduledPosts(remote));
-      return true;
     }
-    return false;
+    return remote.length > 0;
   };
 }
 
 /**
  * Schedule a new post on `date` (YYYY-MM-DD).
- * Optimistic: the post appears immediately. The backend POST + n8n webhook
- * are best-effort; on failure the post stays in the local store.
+ *
+ * Sets `status: "scheduled"` so the backend scheduler picks it up at fire
+ * time — without this it would persist as a "draft" and never auto-publish.
+ * Tags the post with the browser's IANA timezone so the server interprets
+ * `time` ("09:00") in the user's local time, not UTC.
+ *
+ * Optimistic: the post appears immediately. On backend failure the post
+ * stays in the local store but won't actually be fired by anything.
  */
 export function schedulePostThunk({ post, date }) {
   return async (dispatch) => {
-    const scheduled = { ...post, scheduledDate: date, status: post.status ?? "draft" };
+    const tz =
+      typeof Intl !== "undefined"
+        ? Intl.DateTimeFormat().resolvedOptions().timeZone
+        : "UTC";
+    const scheduled = {
+      ...post,
+      scheduledDate: date,
+      status: post.status === "draft" ? "scheduled" : post.status ?? "scheduled",
+      timezone: post.timezone || tz,
+    };
     dispatch(addScheduledPost(scheduled));
     const persisted = await createPost(scheduled);
-    // Fire the n8n webhook in parallel (separate concern from persistence).
-    webhookService
-      .schedulePost(persisted ?? scheduled)
-      .catch(() => {});
     dispatch(
       addNotification({
         message: persisted ? "Post scheduled." : "Scheduled locally (backend offline).",
@@ -54,14 +72,29 @@ export function schedulePostThunk({ post, date }) {
 
 /** Move an existing scheduled post to a new day (drag-and-drop). */
 export function reschedulePostThunk({ id, date }) {
-  return async (dispatch, getState) => {
+  return async (dispatch) => {
     dispatch(reschedulePost({ id, date }));
-    const post = getState().calendar.scheduledPosts.find((p) => p.id === id);
     const updated = await patchPost(id, { scheduledDate: date });
-    webhookService.schedulePost(updated ?? post).catch(() => {});
     dispatch(
       addNotification({
         message: updated ? "Post rescheduled." : "Rescheduled locally (backend offline).",
+        type: updated ? "success" : "info",
+      })
+    );
+  };
+}
+
+/**
+ * Edit an existing scheduled post. Optimistic local patch first, then a
+ * backend PATCH.
+ */
+export function updatePostThunk({ id, patch }) {
+  return async (dispatch) => {
+    dispatch(updateScheduledPost({ id, patch }));
+    const updated = await patchPost(id, patch);
+    dispatch(
+      addNotification({
+        message: updated ? "Post updated." : "Updated locally (backend offline).",
         type: updated ? "success" : "info",
       })
     );

@@ -7,15 +7,12 @@ import {
   Film,
   ImagePlus,
   Sparkles,
-  Clock,
-  CalendarDays,
 } from "lucide-react";
 import { PLATFORMS } from "../../lib/platforms";
 import { isoDateKey, startOfToday, parseDateKey } from "../../lib/dateUtils";
+import DatePicker from "./DatePicker";
+import TimePicker from "./TimePicker";
 
-/* Media source options (skeleton — backend wired later). Maps to plan tasks
-   ME-T02 (upload+compress), ME-T03 (AI image: DALL-E / Stable Diffusion),
-   VD-T01..T04 (AI video: ComfyUI / LTX). */
 const MEDIA_SOURCES = [
   { id: "upload-image", kind: "image", source: "upload", label: "Upload Image", icon: Upload },
   { id: "upload-video", kind: "video", source: "upload", label: "Upload Video", icon: Film },
@@ -34,6 +31,15 @@ export default function ScheduleModal({
   initialDate = null,
   initialContent = "",
   initialPlatforms,
+  initialTime = "09:00",
+  initialMedia = [],
+  // Per-platform aspect ratio map ({facebook: "1:1", ...}). Forwarded
+  // verbatim to onSchedule so the backend can crop correctly when the
+  // scheduler fires the post — without this, the ratio picked in the
+  // editor would be lost the moment the user clicked Schedule.
+  initialRatios = null,
+  title = "Schedule a post",
+  submitLabel = "Schedule",
   onClose,
   onSchedule,
 }) {
@@ -42,8 +48,12 @@ export default function ScheduleModal({
     initialPlatforms ?? { facebook: true, instagram: true }
   );
   const [date, setDate] = useState(initialDate ?? isoDateKey(startOfToday()));
-  const [time, setTime] = useState("09:00");
-  const [media, setMedia] = useState([]);
+  const [time, setTime] = useState(initialTime ?? "09:00");
+  // Carries through whatever the editor uploaded (status: "uploaded" +
+  // remoteUrl). Quick-creates from the calendar only add metadata-only
+  // descriptors via the picker below; those don't get fired by the
+  // scheduler (no remoteUrl), but that path is intentionally minimal.
+  const [media, setMedia] = useState(initialMedia ?? []);
   const imageInputRef = useRef(null);
   const videoInputRef = useRef(null);
 
@@ -63,7 +73,7 @@ export default function ScheduleModal({
     if (s.source === "upload") {
       (s.kind === "image" ? imageInputRef : videoInputRef).current?.click();
     } else {
-      addMedia({ kind: s.kind, source: "ai", name: `AI ${s.kind} — generation pending` });
+      addMedia({ kind: s.kind, source: "ai", name: `AI ${s.kind}` });
     }
   };
 
@@ -91,7 +101,7 @@ export default function ScheduleModal({
       >
         <div className="flex items-center justify-between mb-1">
           <h3 className="text-base font-bold" style={{ color: "var(--text-primary)" }}>
-            Schedule a post
+            {title}
           </h3>
           <button onClick={onClose} className="btn-ghost" style={{ padding: 6 }} aria-label="Close">
             <X size={16} />
@@ -128,7 +138,7 @@ export default function ScheduleModal({
                   border: "1px solid var(--border-default)",
                   color: "var(--text-secondary)",
                 }}
-                title={s.source === "ai" ? "AI generation — backend wired later" : "Pick a file from your device"}
+                title={s.source === "ai" ? "Generate with AI" : "Pick a file from your device"}
               >
                 <Icon size={14} style={{ color: "var(--accent-primary)" }} />
                 {s.label}
@@ -195,28 +205,16 @@ export default function ScheduleModal({
           })}
         </div>
 
-        {/* Date + time */}
-        <div className="flex flex-wrap items-center gap-4 mb-5">
-          <div className="flex items-center gap-2">
-            <CalendarDays size={14} style={{ color: "var(--text-muted)" }} />
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="input-field"
-              style={{ width: 150 }}
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <Clock size={14} style={{ color: "var(--text-muted)" }} />
-            <input
-              type="time"
-              value={time}
-              onChange={(e) => setTime(e.target.value)}
-              className="input-field"
-              style={{ width: 120 }}
-            />
-          </div>
+        {/* Date + time — custom calendar popover for the date so the modal
+            doesn't pop the OS-native date dialog (which looks foreign and
+            varies wildly across browsers). */}
+        <div className="flex flex-wrap items-center gap-3 mb-5">
+          <DatePicker
+            value={date}
+            onChange={setDate}
+            minKey={isoDateKey(startOfToday())}
+          />
+          <TimePicker value={time} onChange={setTime} />
         </div>
 
         <div className="flex justify-end gap-2">
@@ -229,14 +227,14 @@ export default function ScheduleModal({
               onSchedule({
                 content: content.trim(),
                 platforms,
-                status: "draft",
                 scheduledDate: date,
                 time,
                 media,
+                ratios: initialRatios || undefined,
               })
             }
           >
-            Schedule
+            {submitLabel}
           </button>
         </div>
       </div>

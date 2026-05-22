@@ -1,9 +1,13 @@
 import { createSlice } from "@reduxjs/toolkit";
 
+// Bounded log of recent AI calls — keeps the slice small while still
+// giving the analytics view enough history for a meaningful chart.
+const AI_CALL_RING_SIZE = 50;
+
 const initialState = {
   sidebarCollapsed: false,
   mobileNavOpen: false, // off-canvas sidebar drawer on small screens
-  activeView: "creation", // "creation" | "calendar" | "library" | "analytics" | "settings"
+  activeView: "dashboard", // "dashboard" | "creation" | "calendar" | "library" | "analytics" | "settings"
   notifications: [], // local in-app events (pushed by thunks)
   searchQuery: "",
   commandPaletteOpen: false,
@@ -22,8 +26,21 @@ const initialState = {
     status: "idle", // "idle" | "loading" | "done" | "error"
   },
   // Session AI spend meter — only real (non-cached) calls add to this.
-  aiUsage: { totalTokens: 0, calls: 0 },
+  // `recentCalls` is a bounded ring of per-call records so the Analytics
+  // view can render real bars/tables; older entries are dropped after
+  // AI_CALL_RING_SIZE so the slice stays small in memory. `cacheHits`
+  // counts requests served by the local memoization cache (zero-token
+  // wins), so we can show real "tokens saved" stats.
+  aiUsage: { totalTokens: 0, calls: 0, cacheHits: 0, recentCalls: [] },
+  // Publish-side spam guards: a frontend cooldown so the button locks
+  // for a few seconds after each publish, and a 1h ring of recent
+  // content hashes so the confirm modal can warn about duplicates
+  // before the backend rejects them.
+  publishCooldownUntil: 0,        // ms epoch
+  recentPublishes: [],            // [{ hash, ts }] — pruned to last hour
 };
+
+const PUBLISH_HISTORY_WINDOW_MS = 60 * 60 * 1000;
 
 const uiSlice = createSlice({
   name: "ui",
@@ -79,7 +96,17 @@ const uiSlice = createSlice({
       state.messages.status = action.payload;
     },
     setMessages: (state, action) => {
-      state.messages.items = action.payload;
+      // Polled refreshes would otherwise clobber the local `read` flag every
+      // 30s. Merge by id: preserve `read` for items the user already saw,
+      // and let new server entries default to unread. Order tracks the
+      // server response (newest-first).
+      const previousRead = new Set(
+        state.messages.items.filter((m) => m.read).map((m) => m.id)
+      );
+      state.messages.items = (action.payload || []).map((m) => ({
+        ...m,
+        read: m.read || previousRead.has(m.id),
+      }));
       state.messages.status = "done";
     },
     markMessageRead: (state, action) => {
@@ -99,8 +126,38 @@ const uiSlice = createSlice({
       state.aiUsage.totalTokens += action.payload || 0;
       state.aiUsage.calls += 1;
     },
+    recordCacheHit: (state) => {
+      state.aiUsage.cacheHits += 1;
+    },
+    recordAiCall: (state, action) => {
+      // payload: { kind, model, variants, promptTokens, completionTokens,
+      //            totalTokens } — `at` is stamped here so consumers don't
+      // need to remember to add it.
+      state.aiUsage.recentCalls.unshift({
+        at: Date.now(),
+        kind: action.payload?.kind || "generate",
+        model: action.payload?.model || "llm-router",
+        variants: action.payload?.variants || 1,
+        promptTokens: action.payload?.promptTokens || 0,
+        completionTokens: action.payload?.completionTokens || 0,
+        totalTokens: action.payload?.totalTokens || 0,
+      });
+      if (state.aiUsage.recentCalls.length > AI_CALL_RING_SIZE) {
+        state.aiUsage.recentCalls.length = AI_CALL_RING_SIZE;
+      }
+    },
     resetTokenUsage: (state) => {
-      state.aiUsage = { totalTokens: 0, calls: 0 };
+      state.aiUsage = { totalTokens: 0, calls: 0, cacheHits: 0, recentCalls: [] };
+    },
+    setPublishCooldownUntil: (state, action) => {
+      state.publishCooldownUntil = action.payload || 0;
+    },
+    recordPublishHash: (state, action) => {
+      const now = Date.now();
+      state.recentPublishes = state.recentPublishes.filter(
+        (p) => now - p.ts < PUBLISH_HISTORY_WINDOW_MS
+      );
+      state.recentPublishes.push({ hash: action.payload, ts: now });
     },
   },
 });
@@ -125,7 +182,11 @@ export const {
   setConnectivity,
   setTheme,
   addTokenUsage,
+  recordCacheHit,
+  recordAiCall,
   resetTokenUsage,
+  setPublishCooldownUntil,
+  recordPublishHash,
 } = uiSlice.actions;
 
 export default uiSlice.reducer;

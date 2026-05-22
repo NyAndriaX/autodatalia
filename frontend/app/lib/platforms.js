@@ -56,6 +56,93 @@ export const PLATFORM_MAP = Object.fromEntries(
   PLATFORMS.map((p) => [p.id, p])
 );
 
+/**
+ * Aspect-ratio options surfaced to the user *per platform*. Encoded as
+ * "W:H" strings so callers can either `split(":")` for math or feed them
+ * straight to CSS `aspect-ratio`.
+ *
+ * Sourced from each platform's published media specs (Meta business help,
+ * TikTok creator center, LinkedIn help). Spec drift is real — re-verify
+ * against the help-center URLs before a release that changes ratios.
+ *
+ * `defaultRatio` is the "do what most creators do" pick — that's the one
+ * pre-selected when an empty post is opened. `options` is the small set
+ * of *commonly used* ratios per platform — not every theoretical one, so
+ * the picker stays scannable.
+ */
+export const RATIOS_BY_PLATFORM = {
+  facebook: {
+    defaultRatio: "1:1",
+    options: [
+      { value: "1:1", label: "Square (1:1)", hint: "Feed post" },
+      { value: "4:5", label: "Tall (4:5)", hint: "Max-height feed" },
+      { value: "1.91:1", label: "Landscape (1.91:1)", hint: "Link share" },
+      { value: "9:16", label: "Vertical (9:16)", hint: "Stories / Reels" },
+    ],
+  },
+  instagram: {
+    defaultRatio: "4:5",
+    options: [
+      { value: "4:5", label: "Tall (4:5)", hint: "Feed photo" },
+      { value: "1:1", label: "Square (1:1)", hint: "Carousel / legacy feed" },
+      { value: "1.91:1", label: "Landscape (1.91:1)", hint: "Min feed ratio" },
+      { value: "9:16", label: "Vertical (9:16)", hint: "Reels / Stories" },
+    ],
+  },
+  tiktok: {
+    defaultRatio: "9:16",
+    options: [
+      { value: "9:16", label: "Vertical (9:16)", hint: "Full-screen feed" },
+      { value: "1:1", label: "Square (1:1)", hint: "Cross-post (letterboxed)" },
+      { value: "16:9", label: "Landscape (16:9)", hint: "Pillarboxed upload" },
+    ],
+  },
+  linkedin: {
+    defaultRatio: "1.91:1",
+    options: [
+      { value: "1.91:1", label: "Landscape (1.91:1)", hint: "Article / link share" },
+      { value: "1:1", label: "Square (1:1)", hint: "Carousel / mobile post" },
+      { value: "4:5", label: "Tall (4:5)", hint: "Max-height feed" },
+      { value: "9:16", label: "Vertical (9:16)", hint: "Vertical video" },
+    ],
+  },
+};
+
+/** "W:H" → numeric ratio used for CSS aspect-ratio and frame width math. */
+export function parseRatio(value) {
+  const [w, h] = String(value).split(":").map(Number);
+  if (!w || !h) return 1;
+  return w / h;
+}
+
+/**
+ * Pixel-width budget for a preview *card* given a platform's chosen ratio.
+ * Vertical ratios get a narrower frame (so they don't blow past the panel
+ * height); landscape ratios get the wider frame they need to stay readable.
+ */
+export function previewFrameWidth(ratioValue) {
+  const r = parseRatio(ratioValue);
+  if (r < 0.7) return 252; // 9:16 etc.
+  if (r < 1.05) return 330; // 1:1
+  if (r < 1.5) return 360; // 4:5 / 1.91:1
+  return 376; // 16:9 wider
+}
+
+/**
+ * Tone options offered to the user as a single picker on the editor. The
+ * tone is forwarded to the AI as generation context (rather than being a
+ * local string transform), so adding/removing entries here changes the
+ * prompt that the LLM Router sees.
+ */
+export const TONES = [
+  { id: "professional", label: "Professional", hint: "Polished, on-brand" },
+  { id: "casual", label: "Casual", hint: "Conversational, light" },
+  { id: "playful", label: "Playful", hint: "Fun, emoji-friendly" },
+  { id: "bold", label: "Bold", hint: "Punchy, action-driven" },
+  { id: "informative", label: "Informative", hint: "Educational, factual" },
+  { id: "inspirational", label: "Inspirational", hint: "Uplifting, story-led" },
+];
+
 /** Active platform ids from a currentPost.platforms-shaped object. */
 export function activePlatformIds(platforms) {
   return PLATFORMS.filter((p) => platforms?.[p.id]).map((p) => p.id);
@@ -65,10 +152,11 @@ export function activePlatformIds(platforms) {
  * Post statuses. `badgeClass` + `colorVar` reuse the existing
  * .badge-* utility classes and --status-* CSS variables in globals.css.
  */
-export const STATUSES = ["draft", "pending", "approved", "published", "error"];
+export const STATUSES = ["draft", "scheduled", "pending", "approved", "published", "error"];
 
 export const STATUS_META = {
   draft: { label: "Draft", badgeClass: "badge-draft", colorVar: "var(--status-draft)" },
+  scheduled: { label: "Scheduled", badgeClass: "badge-pending", colorVar: "var(--status-pending)" },
   pending: { label: "Pending", badgeClass: "badge-pending", colorVar: "var(--status-pending)" },
   approved: { label: "Approved", badgeClass: "badge-approved", colorVar: "var(--status-approved)" },
   published: { label: "Published", badgeClass: "badge-approved", colorVar: "var(--status-published)" },

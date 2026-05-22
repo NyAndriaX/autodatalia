@@ -1,6 +1,10 @@
 aiofiles==24.1.0
 fastapi==0.115.12
 httpx==0.28.1
+pillow==11.0.0
 pydantic==2.11.3
 python-multipart==0.0.20
+# tzdata: scheduler interprets posts in their IANA timezone; Windows
+# / slim Linux images don't always ship system tzdata.
+tzdata==2025.2
 uvicorn[standard]==0.34.2

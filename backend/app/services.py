@@ -16,7 +16,10 @@ from .config import settings
 
 # ── Constants ──────────────────────────────────────────────────────────
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+# .jfif is what Microsoft Edge / older Windows tools name a regular JPEG.
+# The byte content is identical to .jpg, so include it as an image extension
+# — otherwise uploaded files vanish from /search after the page reloads.
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".gif"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".m4v"}
 DESCRIPTION_EXTENSIONS = (".txt", ".md")
 
@@ -301,18 +304,106 @@ async def _post_chat(payload: dict[str, Any]) -> tuple[str, dict[str, int]]:
     return content, usage
 
 
+def _image_hash(image_path: Path) -> str:
+    """SHA-256 of the image bytes. Stable across renames, sensitive to edits."""
+    h = hashlib.sha256()
+    with image_path.open("rb") as f:
+        for chunk in iter(lambda: f.read(64 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+async def _describe_image(image_path: Path) -> str:
+    """Return a short cached text description of the image.
+
+    The vision model is hit at most once per unique file (key = content
+    hash, persisted in the AI cache). Every later /generate call that
+    references the same image reuses this text — the image bytes never
+    go to the model again until the file actually changes.
+    """
+    if not settings.ai_api_key:
+        return ""
+    key = _cache_key("describe", _image_hash(image_path))
+    cached = _cache_get(key)
+    if isinstance(cached, str) and cached:
+        return cached
+
+    payload = {
+        # Factual image-description is a perfect SIMPLE-tier job — accuracy
+        # over creativity, no need to pay the standard model's premium.
+        "model": settings.ai_model_fast,
+        "temperature": 0.2,
+        "max_tokens": 140,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Describe images factually for a copywriter: subject, "
+                    "setting, mood, dominant colors, any visible text or "
+                    "branding. 2-3 short sentences, no preamble."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image."},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": build_image_data_uri(image_path)},
+                    },
+                ],
+            },
+        ],
+    }
+    try:
+        text, _usage = await _post_chat(payload)
+    except HTTPException:
+        return ""
+    text = text.strip()
+    if text:
+        _cache_set(key, text)
+    return text
+
+
 async def generate_post_variants(
     *,
     prompt: str,
     platforms: dict[str, bool] | None = None,
     template: str | None = None,
     n: int = 1,
+    image_filename: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Prompt-driven generation — returns ([{id,text,tone}], usage)."""
     prompt = _compress(prompt)
     active = [k for k, v in (platforms or {}).items() if v] or ["generic"]
 
-    cache_key = _cache_key("generate", prompt, sorted(active), template, n)
+    # Resolve the optional uploaded image. We accept just the filename so the
+    # frontend never has to re-upload bytes — the file is already in our
+    # content dir. Anything outside the content dir is silently ignored.
+    image_path = None
+    if image_filename:
+        safe_image_name = _safe_filename(image_filename)
+        candidate = settings.content_dir / safe_image_name
+        if (
+            candidate.exists()
+            and candidate.is_file()
+            and candidate.suffix.lower() in IMAGE_EXTENSIONS
+        ):
+            image_path = candidate
+
+    # Convert the image (if any) to a short cached description so the vision
+    # model is hit at most once per file. Repeat generations on the same
+    # image — even with different prompts — use the text only, saving the
+    # ~250-1000 image tokens per call.
+    image_description = ""
+    image_fingerprint: str | None = None
+    if image_path:
+        image_fingerprint = _image_hash(image_path)
+        image_description = await _describe_image(image_path)
+
+    cache_key = _cache_key(
+        "generate", prompt, sorted(active), template, n, image_fingerprint,
+    )
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached, dict(_ZERO_USAGE)
@@ -322,11 +413,19 @@ async def generate_post_variants(
         f"Brief: {prompt.strip() or 'An engaging brand post.'}\n"
         f"Target platforms: {', '.join(active)}.\n"
         + (f"Brand template/style hint: {template}.\n" if template else "")
+        + (
+            f"Image (already analyzed): {image_description}\n"
+            "Use it as the main subject.\n"
+            if image_description
+            else ""
+        )
         + "Each variant must have a different angle/tone, be ready to post, "
         "and include relevant hashtags.\n"
         'Return JSON only with this shape: '
         '{"variants":[{"text":"...","tone":"..."}]}'
     )
+
+    user_content = user_prompt
 
     payload = {
         "model": settings.ai_model,
@@ -341,7 +440,7 @@ async def generate_post_variants(
                     "with valid JSON only."
                 ),
             },
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": user_content},
         ],
     }
 
@@ -448,6 +547,32 @@ def _unique_path(directory: Path, filename: str) -> Path:
         i += 1
 
 
+def delete_media(relative_path: str) -> bool:
+    """Delete a previously-uploaded media file by its content-dir-relative path.
+
+    Returns True if removed, False if not found. Raises ValueError if the
+    path tries to escape the content directory (defense in depth — we never
+    want a `../etc/passwd` deletion).
+    """
+    if not relative_path:
+        raise ValueError("Empty path.")
+    root = settings.content_dir.resolve()
+    target = (root / relative_path).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Path escapes content directory.") from exc
+    if not target.is_file():
+        return False
+    target.unlink()
+    # Drop the optional sidecar description too (.txt/.md beside the file).
+    for ext in DESCRIPTION_EXTENSIONS:
+        sidecar = target.with_suffix(ext)
+        if sidecar.is_file():
+            sidecar.unlink()
+    return True
+
+
 async def save_upload(file: UploadFile) -> dict[str, str]:
     """Persist an uploaded file to the content dir; return its metadata."""
     settings.content_dir.mkdir(parents=True, exist_ok=True)
@@ -496,6 +621,7 @@ def search_media(query: str, limit: int = 50) -> list[dict[str, str]]:
             {
                 "id": path.relative_to(settings.content_dir).as_posix(),
                 "type": "media",
+                "kind": kind,
                 "title": path.name,
                 "subtitle": f"{kind.capitalize()} · {path.stat().st_size // 1024} KB",
             }
@@ -578,6 +704,55 @@ def posts_delete(post_id: str) -> bool:
             return False
         _posts_write_raw(remaining)
         return True
+
+
+# ── Messages / activity feed ───────────────────────────────────────────
+# Single JSON file, newest-first, capped at MAX_MESSAGES. The bell menu
+# polls /messages to surface scheduler-driven publish events (matches the
+# manual /publish flow where editor thunks dispatch addNotification).
+
+_MESSAGES_FILE = settings.content_dir / "messages.json"
+_MESSAGES_LOCK = _threading.Lock()
+MAX_MESSAGES = 200
+
+
+def _messages_read_raw() -> list[dict[str, Any]]:
+    try:
+        data = json.loads(_MESSAGES_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []  # corrupt → start fresh; never crash the process
+
+
+def _messages_write_raw(items: list[dict[str, Any]]) -> None:
+    _MESSAGES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _MESSAGES_FILE.write_text(json.dumps(items, indent=2), encoding="utf-8")
+
+
+def messages_list() -> list[dict[str, Any]]:
+    """Return every persisted message, newest first."""
+    with _MESSAGES_LOCK:
+        return list(_messages_read_raw())
+
+
+def messages_append(message: dict[str, Any]) -> dict[str, Any]:
+    """Prepend one message and trim the log to MAX_MESSAGES.
+
+    Fills in `id` and `timestamp` if the caller omitted them. The bell
+    treats absent `id` as a fresh unread item, so we always issue one.
+    """
+    with _MESSAGES_LOCK:
+        items = _messages_read_raw()
+        record = dict(message)
+        record.setdefault("id", f"msg-{_uuid.uuid4().hex[:12]}")
+        record.setdefault("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+        record.setdefault("read", False)
+        items.insert(0, record)
+        del items[MAX_MESSAGES:]
+        _messages_write_raw(items)
+        return record
 
 
 # ── File output ────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 """FastAPI route handlers."""
 
+import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
@@ -15,21 +16,29 @@ from .models import (
     PostCreate,
     PostUpdate,
     PostsResponse,
+    PublishRequest,
+    PublishResponse,
+    PublishResultModel,
     SearchResponse,
     TransformRequest,
     TransformResponse,
     UploadResponse,
 )
 from .config import settings
+from .images import crop_for_targets
+from .oauth import _load_tokens, _fetch_meta_pages
+from .publish import publish_to_targets
 from .services import (
     build_image_data_uri,
     generate_captions,
     generate_post_variants,
     iter_content_items,
+    messages_append,
     posts_create,
     posts_delete,
     posts_list,
     posts_update,
+    delete_media,
     rate_guard,
     rate_tick,
     save_caption_file,
@@ -68,6 +77,18 @@ async def tunnel_status() -> dict[str, Any]:
     }
 
 
+@router.get("/messages")
+async def messages() -> dict[str, list[Any]]:
+    """Activity feed (publish events, validations…).
+
+    The scheduler appends one entry per target when a scheduled post fires
+    (success + failure both surface here), so the bell menu shows real
+    activity. Newest-first, capped at services.MAX_MESSAGES.
+    """
+    from .services import messages_list
+    return {"items": messages_list()}
+
+
 # ── Generation endpoints ──────────────────────────────────────────────
 
 @router.post(
@@ -84,6 +105,7 @@ async def generate(request: Request, body: GenerateRequest) -> GenerateResponse:
         platforms=body.platforms,
         template=body.template,
         n=body.variants,
+        image_filename=body.image_filename,
     )
     if usage["total_tokens"] > 0:  # don't count free cache hits
         rate_tick(client)
@@ -105,6 +127,186 @@ async def transform(request: Request, body: TransformRequest) -> TransformRespon
     return TransformResponse(text=text, usage=usage)
 
 
+# ── Publishing — fan post out to real social networks ────────────────
+
+
+@router.post("/publish", response_model=PublishResponse)
+async def publish(body: PublishRequest) -> PublishResponse:
+    """Publish `content` to every selected target.
+
+    The frontend sends a list of target ids ({platform, id}) it gathered
+    from /oauth/connections. We resolve the access token server-side
+    (Page tokens come from the user's Meta token, etc.) so tokens never
+    leave the backend.
+
+    Each target is dispatched in parallel; the response includes one
+    result row per target with ok / platform_post_id / error.
+    """
+    if not body.targets:
+        raise HTTPException(400, "publish requires at least one target")
+    if len(body.targets) > 20:
+        # Sanity ceiling — nobody legitimately fans one post to >20 places.
+        raise HTTPException(400, "too_many_targets (max 20 per publish call)")
+    if not (body.content or "").strip() and not body.media_url:
+        # Don't let an empty post reach the platforms — Meta returns a
+        # cryptic "param message is required" otherwise.
+        raise HTTPException(400, "publish requires either content or media_url")
+
+    tokens = _load_tokens()
+    meta_record = tokens.get("meta") or {}
+    user_meta_token = meta_record.get("access_token")
+
+    # Cache the Pages-with-IG lookup so we don't refetch per-target.
+    meta_pages: list[dict[str, Any]] | None = None
+
+    async def _resolve_meta_pages() -> list[dict[str, Any]]:
+        nonlocal meta_pages
+        if meta_pages is None:
+            meta_pages = (
+                await _fetch_meta_pages(user_meta_token) if user_meta_token else []
+            )
+        return meta_pages
+
+    resolved: list[dict[str, Any]] = []
+    for t in body.targets:
+        platform = t.platform
+        if platform in ("facebook", "instagram"):
+            if not user_meta_token:
+                resolved.append({
+                    "platform": platform,
+                    "id": t.id,
+                    "label": t.label or t.id,
+                    "access_token": "",
+                    "media_url": body.media_url,
+                    "link": body.link,
+                    "media_kind": t.media_kind or "image",
+                    "_unresolved_reason": "meta_not_connected",
+                })
+                continue
+            pages = await _resolve_meta_pages()
+            # FB target: id is the page id. IG target: id is the ig user id;
+            # we still need its parent Page's access token to call /media.
+            page = None
+            if platform == "facebook":
+                page = next((p for p in pages if p["page_id"] == t.id), None)
+            else:  # instagram
+                page = next(
+                    (
+                        p
+                        for p in pages
+                        if (p.get("instagram") or {}).get("ig_id") == t.id
+                    ),
+                    None,
+                )
+            if not page:
+                resolved.append({
+                    "platform": platform,
+                    "id": t.id,
+                    "label": t.label or t.id,
+                    "access_token": "",
+                    "media_url": body.media_url,
+                    "link": body.link,
+                    "media_kind": t.media_kind or "image",
+                    "_unresolved_reason": "target_not_found_in_meta_pages",
+                })
+                continue
+            resolved.append({
+                "platform": platform,
+                "id": t.id,
+                "label": t.label or page["page_name"],
+                "access_token": page["page_access_token"],
+                "media_url": body.media_url,
+                "link": body.link,
+                "media_kind": t.media_kind or "image",
+            })
+        else:
+            # TikTok / LinkedIn — stubs for now, still flow through so
+            # the response includes one row per requested target.
+            record = tokens.get(platform) or {}
+            resolved.append({
+                "platform": platform,
+                "id": t.id,
+                "label": t.label or t.id,
+                "access_token": record.get("access_token", ""),
+                "media_url": body.media_url,
+                "media_kind": t.media_kind or "image",
+            })
+
+    # Apply the user's per-platform aspect ratio choice — the cropped
+    # variant is what the platform actually receives.
+    for r in resolved:
+        r["media_url"] = crop_for_targets(
+            media_url=r.get("media_url"),
+            ratios=body.ratios,
+            platform=r["platform"],
+        )
+
+    # Emit "not connected" results synthetically so the frontend gets a
+    # clear per-target error without us calling the upstream API.
+    publishable = [r for r in resolved if "_unresolved_reason" not in r]
+    failed = [
+        {
+            "target_id": r["id"],
+            "target_label": r["label"],
+            "platform": r["platform"],
+            "ok": False,
+            "platform_post_id": None,
+            "error": r["_unresolved_reason"],
+            "raw": None,
+        }
+        for r in resolved
+        if "_unresolved_reason" in r
+    ]
+
+    succeeded = (
+        await publish_to_targets(content=body.content, targets=publishable)
+        if publishable
+        else []
+    )
+
+    # Preserve original target order in the response.
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in succeeded + failed:
+        by_id[(row["platform"], row["target_id"])] = row
+    ordered = [
+        by_id.get((t.platform, t.id), {
+            "target_id": t.id,
+            "target_label": t.label or t.id,
+            "platform": t.platform,
+            "ok": False,
+            "platform_post_id": None,
+            "error": "internal_resolve_miss",
+        })
+        for t in body.targets
+    ]
+
+    # Mirror the manual publish to /messages so a second browser session (or
+    # the bell on a different device) sees the activity, matching what the
+    # scheduler does for its own fires.
+    for r in ordered:
+        platform = r.get("platform") or "?"
+        target = r.get("target_label") or r.get("target_id") or "?"
+        if r.get("ok"):
+            messages_append({
+                "kind": "publish",
+                "platform": platform,
+                "target_label": target,
+                "message": f"Published to {target} ({platform}).",
+                "url": r.get("permalink_url"),
+            })
+        else:
+            messages_append({
+                "kind": "publish_error",
+                "platform": platform,
+                "target_label": target,
+                "message": f"{target} ({platform}) failed: {r.get('error') or 'unknown'}",
+            })
+
+    return PublishResponse(
+        results=[PublishResultModel(**r) for r in ordered]
+    )
+
+
 # ── Media endpoints ───────────────────────────────────────────────────
 
 @router.post(
@@ -113,10 +315,22 @@ async def transform(request: Request, body: TransformRequest) -> TransformRespon
     dependencies=[auth_required],
 )
 async def upload(request: Request, file: UploadFile = File(...)) -> UploadResponse:
-    """Store an uploaded image/video and return its served URL."""
+    """Store an uploaded image/video and return its served URL.
+
+    URL precedence (each must be publicly fetchable for Meta/IG to ingest):
+      1. PUBLIC_BASE_URL  — explicit override
+      2. OAUTH_REDIRECT_BASE — already configured to the ngrok host
+      3. cloudflared tunnel (TUNNEL_ENABLED=true)
+      4. request.base_url — last-resort localhost; Meta will reject it
+    """
     meta = await save_upload(file)
-    url = await tunnel.wait_for_tunnel(timeout=5.0)
-    base = url or str(request.base_url).rstrip("/")
+    base = (
+        os.environ.get("PUBLIC_BASE_URL")
+        or os.environ.get("OAUTH_REDIRECT_BASE")
+        or await tunnel.wait_for_tunnel(timeout=5.0)
+        or str(request.base_url).rstrip("/")
+    )
+    base = base.rstrip("/")
     return UploadResponse(
         url=f"{base}/content/{meta['relative_path']}",
         filename=meta["filename"],
@@ -124,10 +338,40 @@ async def upload(request: Request, file: UploadFile = File(...)) -> UploadRespon
     )
 
 
+@router.delete(
+    "/media/{path:path}",
+    dependencies=[auth_required],
+)
+async def delete_media_route(path: str) -> dict[str, Any]:
+    """Remove a previously-uploaded media file by its content-dir-relative path."""
+    try:
+        removed = delete_media(path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not removed:
+        raise HTTPException(status_code=404, detail="Media not found.")
+    return {"deleted": True, "path": path}
+
+
 @router.get("/search", response_model=SearchResponse)
-async def search(q: str = "") -> SearchResponse:
-    """Search media in the content directory (posts/templates → Airtable TBD)."""
-    return SearchResponse(results=search_media(q))
+async def search(request: Request, q: str = "") -> SearchResponse:
+    """Search media in the content directory (posts/templates → Airtable TBD).
+
+    Each media hit now carries a `url` and `kind` so the frontend Media
+    Library can render thumbnails for *already-uploaded* assets — not
+    just the ones from the current session.
+    """
+    url = await tunnel.wait_for_tunnel(timeout=5.0)
+    base = url or str(request.base_url).rstrip("/")
+    hits = []
+    for hit in search_media(q):
+        hits.append(
+            {
+                **hit,
+                "url": f"{base}/content/{hit['id']}",
+            }
+        )
+    return SearchResponse(results=hits)
 
 
 # ── Scheduled posts (calendar persistence) ────────────────────────────

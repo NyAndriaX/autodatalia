@@ -7,12 +7,15 @@ import {
   ChevronRight,
   Plus,
   X,
+  Pencil,
   CalendarDays,
   CalendarRange,
   Film,
   ImagePlus,
+  ExternalLink,
 } from "lucide-react";
 import ScheduleModal from "./ScheduleModal";
+import PostEditorPopup from "./PostEditorPopup";
 import { useIsMobile } from "../../lib/useIsMobile";
 import {
   setCalendarView,
@@ -26,6 +29,7 @@ import {
   schedulePostThunk,
   reschedulePostThunk,
   cancelScheduleThunk,
+  updatePostThunk,
 } from "../../store/calendarThunks";
 import {
   PLATFORMS,
@@ -65,11 +69,17 @@ function buildSeed() {
   ];
 }
 
-/* ——— A single scheduled-post chip (draggable + cancellable) ——— */
-function PostChip({ post, onCancel, compact }) {
+/* ——— A single scheduled-post chip (draggable + editable + cancellable) ——— */
+function PostChip({ post, onEdit, onCancel, compact }) {
   const activeIds = activePlatformIds(post.platforms);
   const primary = activeIds[0] ? PLATFORM_MAP[activeIds[0]] : null;
   const status = STATUS_META[post.status] ?? STATUS_META.draft;
+  // First successful publish on a fired post (the scheduler writes results
+  // back to the post via PATCH). The chip surfaces this as an external-link
+  // icon so the user can jump to the live post without opening the editor.
+  const firstPermalink = Array.isArray(post.publish_results)
+    ? post.publish_results.find((r) => r?.ok && r?.permalink_url)?.permalink_url
+    : null;
 
   return (
     <div
@@ -77,6 +87,10 @@ function PostChip({ post, onCancel, compact }) {
       onDragStart={(e) => {
         e.dataTransfer.setData(DND_MIME, post.id);
         e.dataTransfer.effectAllowed = "move";
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onEdit(post);
       }}
       className="group/chip flex items-center gap-1.5 rounded-md cursor-grab active:cursor-grabbing"
       style={{
@@ -87,7 +101,7 @@ function PostChip({ post, onCancel, compact }) {
       }}
       title={`${status.label} • ${activeIds
         .map((id) => PLATFORM_MAP[id].label)
-        .join(", ") || "No platform"}`}
+        .join(", ") || "No platform"} • Double-click to edit`}
     >
       <span
         className="w-1.5 h-1.5 rounded-full shrink-0"
@@ -109,6 +123,32 @@ function PostChip({ post, onCancel, compact }) {
       >
         {post.content || "(empty post)"}
       </span>
+      {firstPermalink && (
+        <a
+          href={firstPermalink}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="shrink-0 rounded"
+          style={{ color: "var(--accent-primary)" }}
+          title="Open the live post"
+          aria-label="Open the live post"
+        >
+          <ExternalLink size={11} />
+        </a>
+      )}
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onEdit(post);
+        }}
+        className="opacity-0 group-hover/chip:opacity-100 transition-opacity shrink-0 rounded"
+        style={{ color: "var(--text-muted)" }}
+        title="Edit post"
+        aria-label="Edit post"
+      >
+        <Pencil size={11} />
+      </button>
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -126,7 +166,7 @@ function PostChip({ post, onCancel, compact }) {
 }
 
 /* ——— A day cell: drop target + quick-create affordance ——— */
-function DayCell({ day, posts, isWeek, onDropPost, onCancel, onQuickCreate }) {
+function DayCell({ day, posts, isWeek, onDropPost, onEdit, onCancel, onQuickCreate }) {
   const [isOver, setIsOver] = useState(false);
 
   const overflow = !isWeek && posts.length > MAX_CHIPS_PER_DAY;
@@ -195,6 +235,7 @@ function DayCell({ day, posts, isWeek, onDropPost, onCancel, onQuickCreate }) {
           <PostChip
             key={p.id}
             post={p}
+            onEdit={onEdit}
             onCancel={onCancel}
             compact={!isWeek}
           />
@@ -242,6 +283,7 @@ export default function CalendarView() {
     (s) => s.calendar
   );
   const [quickCreateDate, setQuickCreateDate] = useState(null);
+  const [editingPost, setEditingPost] = useState(null);
   const isMobile = useIsMobile();
   // Below the 7-col grid's comfortable width, scroll horizontally instead
   // of squashing day cells to unusable widths.
@@ -300,6 +342,7 @@ export default function CalendarView() {
     (id) => dispatch(cancelScheduleThunk(id)),
     [dispatch]
   );
+  const onEdit = useCallback((post) => setEditingPost(post), []);
 
   const headers = weekdayHeaders();
 
@@ -439,6 +482,7 @@ export default function CalendarView() {
             posts={postsByDay[day.key] || []}
             isWeek={view === "week"}
             onDropPost={onDropPost}
+            onEdit={onEdit}
             onCancel={onCancel}
             onQuickCreate={setQuickCreateDate}
           />
@@ -452,6 +496,21 @@ export default function CalendarView() {
           onSchedule={(post) => {
             dispatch(schedulePostThunk({ post, date: post.scheduledDate }));
             setQuickCreateDate(null);
+          }}
+        />
+      )}
+
+      {editingPost && (
+        <PostEditorPopup
+          post={editingPost}
+          onClose={() => setEditingPost(null)}
+          onSave={(patch) => {
+            dispatch(updatePostThunk({ id: editingPost.id, patch }));
+            setEditingPost(null);
+          }}
+          onDelete={(id) => {
+            dispatch(cancelScheduleThunk(id));
+            setEditingPost(null);
           }}
         />
       )}

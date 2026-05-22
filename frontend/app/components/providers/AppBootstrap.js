@@ -49,6 +49,21 @@ export default function AppBootstrap() {
     saveScheduledPosts(scheduledPosts);
   }, [scheduledPosts]);
 
+  // Poll /posts and /messages every 30 s so the calendar reflects scheduler
+  // activity (status flips to "published"/"error") and the bell picks up
+  // publish events fired from the backend without a page reload. Same
+  // cadence as the existing health probe in Topbar.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const id = setInterval(() => {
+      // refresh: true so empty server responses still hydrate (otherwise
+      // a scheduler-deleted post would never disappear from the store).
+      dispatch(loadScheduledPostsThunk({ refresh: true }));
+      dispatch(loadMessagesThunk());
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [dispatch]);
+
   // Keep <html data-theme> + storage in sync with the preference, and follow
   // the OS when the preference is "system".
   useEffect(() => {

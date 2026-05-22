@@ -1,7 +1,15 @@
 "use client";
 
 import { useSelector, useDispatch } from "react-redux";
-import { setContent, togglePlatform, setMode, setTemplate, selectVariant } from "../../store/editorSlice";
+import {
+  setContent,
+  togglePlatform,
+  setMode,
+  setTemplate,
+  setTone,
+  setPlatformRatio,
+  selectVariant,
+} from "../../store/editorSlice";
 import {
   generateContentThunk,
   applyQuickActionThunk,
@@ -14,7 +22,6 @@ import {
   Sparkles,
   ArrowDownToLine,
   ArrowUpFromLine,
-  Palette,
   Send,
   Save,
   MessageSquare,
@@ -27,16 +34,26 @@ import {
   Loader2,
   Check,
   Type,
-  Smile,
   Heart,
   MessageCircle,
   Share2,
   Bookmark,
+  ChevronDown,
+  Frame,
+  MoreHorizontal,
 } from "lucide-react";
-import { useState, useMemo, useRef, useCallback } from "react";
+import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import MediaUploader from "./MediaUploader";
 import ScheduleModal from "./ScheduleModal";
-import { PLATFORMS } from "../../lib/platforms";
+import PublishConfirmModal from "./PublishConfirmModal";
+import { publishHashKey } from "../../lib/publishHash";
+import {
+  PLATFORMS,
+  RATIOS_BY_PLATFORM,
+  TONES,
+  parseRatio,
+  previewFrameWidth,
+} from "../../lib/platforms";
 import { useIsMobile } from "../../lib/useIsMobile";
 
 /* Suggested hashtags (skeleton — a contextual AI suggester wires here later,
@@ -53,11 +70,11 @@ const MODES = [
   { id: "scratch", label: "From Scratch", icon: Type, description: "Start with a blank canvas" },
 ];
 
+/* Compact transforms — the tone selector handles tone separately, so this
+   list is now just the two length actions. */
 const QUICK_ACTIONS = [
   { id: "shorten", label: "Shorten", icon: ArrowDownToLine },
   { id: "expand", label: "Expand", icon: ArrowUpFromLine },
-  { id: "tone-casual", label: "Casual Tone", icon: Smile },
-  { id: "tone-pro", label: "Professional", icon: Palette },
 ];
 
 const TEMPLATES = [
@@ -66,13 +83,23 @@ const TEMPLATES = [
   { id: "news", label: "Company News & Updates" },
 ];
 
+/* Resolve "ratio for this platform on this post" using the user's pick
+   first, falling back to the platform's recommended default. */
+function effectiveRatio(platformId, ratios) {
+  return (
+    ratios?.[platformId] || RATIOS_BY_PLATFORM[platformId]?.defaultRatio || "1:1"
+  );
+}
+
 export default function CreationEditor() {
   const dispatch = useDispatch();
   const { currentPost, aiGeneration } = useSelector((state) => state.editor);
+  const recentPublishes = useSelector((s) => s.ui.recentPublishes);
   const [currentPreviewIdx, setCurrentPreviewIdx] = useState(0);
   const [showSchedule, setShowSchedule] = useState(false);
   const [showHashtags, setShowHashtags] = useState(false);
   const [confirmRegen, setConfirmRegen] = useState(false);
+  const [showPublishConfirm, setShowPublishConfirm] = useState(false);
   const isMobile = useIsMobile();
 
   // Rough token estimate so the user sees the cost before paying for it.
@@ -324,14 +351,78 @@ export default function CreationEditor() {
             </div>
           )}
 
-          {/* Hashtag suggester (skeleton — HT-T01 contextual AI wires here) */}
-          <div className="mt-5">
+          {/* Tone + Transforms — a single row instead of 4 ad-hoc buttons.
+              Tone is sent to the AI as generation context (so it shows up
+              in the *next* Generate); the two transforms below stay as
+              cheap local edits for the current text. */}
+          <div className="mt-5 flex flex-wrap items-end gap-3">
+            <div className="flex-1 min-w-[200px]">
+              <p
+                className="text-xs font-semibold uppercase tracking-wider mb-2"
+                style={{ color: "var(--text-tertiary)" }}
+                id="tone-label"
+              >
+                Tone
+              </p>
+              <select
+                id="tone-select"
+                aria-labelledby="tone-label"
+                value={currentPost.tone || ""}
+                onChange={(e) => dispatch(setTone(e.target.value || null))}
+                className="input-field cursor-pointer"
+                title="Sent to the AI on the next Generate"
+              >
+                <option value="">Auto — let the model choose</option>
+                {TONES.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.label} — {t.hint}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex gap-2">
+              {QUICK_ACTIONS.map((action) => {
+                const Icon = action.icon;
+                return (
+                  <button
+                    key={action.id}
+                    id={`quick-action-${action.id}`}
+                    className="btn-secondary flex items-center gap-2 text-xs h-9"
+                    disabled={isBusy || !currentPost.content.trim()}
+                    onClick={() => dispatch(applyQuickActionThunk(action.id))}
+                    aria-label={`${action.label} — transform content`}
+                    title={`${action.label} the current content (local, no tokens)`}
+                  >
+                    {aiGeneration.isApplyingAction ? (
+                      <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Icon size={14} aria-hidden="true" />
+                    )}
+                    {action.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Hashtag suggester — collapsed by default to cut visual noise */}
+          <div className="mt-4">
             <button
               onClick={() => setShowHashtags((v) => !v)}
               className="btn-secondary inline-flex items-center gap-2 text-xs"
+              aria-expanded={showHashtags}
             >
               <Hash size={14} aria-hidden="true" />
-              Suggest Hashtags
+              {showHashtags ? "Hide hashtags" : "Suggest hashtags"}
+              <ChevronDown
+                size={12}
+                aria-hidden="true"
+                style={{
+                  transform: showHashtags ? "rotate(180deg)" : "none",
+                  transition: "transform 0.2s",
+                }}
+              />
             </button>
             {showHashtags && (
               <div className="flex gap-2 flex-wrap mt-3 animate-fade-in">
@@ -353,52 +444,18 @@ export default function CreationEditor() {
                     {tag}
                   </button>
                 ))}
-                <span className="text-[11px] self-center" style={{ color: "var(--text-muted)" }}>
-                  Mock list — contextual AI suggester wires here (HT-T01)
-                </span>
               </div>
             )}
           </div>
 
           {/* Media upload */}
-          <div className="mt-6">
+          <div className="mt-5">
             <MediaUploader />
           </div>
 
-          {/* Quick AI Actions */}
-          <div className="mt-5">
-            <p
-              className="text-xs font-semibold uppercase tracking-wider mb-3"
-              style={{ color: "var(--text-tertiary)" }}
-              id="quick-actions-label"
-            >
-              Quick AI Actions
-            </p>
-            <div className="flex gap-2 flex-wrap" role="group" aria-labelledby="quick-actions-label">
-              {QUICK_ACTIONS.map((action) => {
-                const Icon = action.icon;
-                return (
-                  <button
-                    key={action.id}
-                    id={`quick-action-${action.id}`}
-                    className="btn-secondary flex items-center gap-2 text-xs"
-                    disabled={isBusy || !currentPost.content.trim()}
-                    onClick={() => dispatch(applyQuickActionThunk(action.id))}
-                    aria-label={`${action.label} — transform content`}
-                  >
-                    {aiGeneration.isApplyingAction ? (
-                      <Loader2 size={14} className="animate-spin" aria-hidden="true" />
-                    ) : (
-                      <Icon size={14} aria-hidden="true" />
-                    )}
-                    {action.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Generate Button */}
+          {/* Generate — single primary CTA; secondary controls only appear
+              once variants exist, and Regenerate keeps the confirm step so
+              accidental clicks don't burn tokens. */}
           <div className="mt-6">
             <button
               id="generate-ai-btn"
@@ -414,16 +471,16 @@ export default function CreationEditor() {
               {aiGeneration.isGenerating ? (
                 <>
                   <Loader2 size={20} className="animate-spin" aria-hidden="true" />
-                  Generating via LLM Router...
+                  Generating…
                 </>
               ) : (
                 <>
                   <Sparkles size={20} aria-hidden="true" />
-                  Generate via AI
+                  Generate{currentPost.tone ? ` (${TONES.find((t) => t.id === currentPost.tone)?.label || "tone"})` : ""}
                 </>
               )}
             </button>
-            <p className="text-xs text-center mt-2" style={{ color: "var(--text-muted)" }}>
+            <p className="text-[11px] text-center mt-2" style={{ color: "var(--text-muted)" }}>
               Unchanged prompt reuses the last result — no tokens spent.
             </p>
             {aiGeneration.variants.length > 0 && (
@@ -466,48 +523,29 @@ export default function CreationEditor() {
           </div>
         </div>
 
-        {/* Action Footer */}
+        {/* Action Footer — collapsed from 4 buttons to a split-publish
+            (primary CTA + popover of alternative submit paths) so the
+            visual hierarchy points the user at the action they came for. */}
         <div
           className="px-6 py-4 shrink-0 flex flex-wrap items-center gap-3"
           style={{ borderTop: "1px solid var(--border-default)", background: "var(--bg-secondary)" }}
         >
           <button
             id="save-draft-btn"
-            className="btn-secondary flex items-center gap-2"
+            className="btn-ghost inline-flex items-center gap-2 text-sm"
             onClick={() => dispatch(saveDraftThunk())}
             aria-label="Save post as draft"
+            style={{ color: "var(--text-secondary)" }}
           >
-            <Save size={16} aria-hidden="true" />
-            Save as Draft
-          </button>
-          <button
-            id="submit-telegram-btn"
-            className="btn-secondary flex items-center gap-2"
-            onClick={() => dispatch(submitForValidationThunk())}
-            aria-label="Submit post for human validation via Telegram"
-          >
-            <MessageSquare size={16} aria-hidden="true" />
-            Submit for Validation
-          </button>
-          <button
-            id="schedule-btn"
-            className="btn-secondary flex items-center gap-2"
-            onClick={() => setShowSchedule(true)}
-            aria-label="Schedule this post on the calendar"
-          >
-            <CalendarClock size={16} aria-hidden="true" />
-            Schedule…
+            <Save size={14} aria-hidden="true" />
+            Save draft
           </button>
           <div className="flex-1" />
-          <button
-            id="publish-now-btn"
-            className="btn-primary flex items-center gap-2"
-            onClick={() => dispatch(publishNowThunk())}
-            aria-label="Publish post now"
-          >
-            <Send size={16} aria-hidden="true" />
-            Publish Now
-          </button>
+          <SplitPublishButton
+            onSchedule={() => setShowSchedule(true)}
+            onValidate={() => dispatch(submitForValidationThunk())}
+            onPublish={() => setShowPublishConfirm(true)}
+          />
         </div>
       </div>
 
@@ -523,8 +561,10 @@ export default function CreationEditor() {
         }}
         aria-label="Live post preview"
       >
-        {/* No bulky header — the preview itself owns the panel. A compact
-            platform switcher only appears when more than one is selected. */}
+        {/* No bulky header — the preview itself owns the panel. The tab
+            strip only appears when more than one platform is active; the
+            ratio picker floats over the preview (below) so it never eats
+            scroll height when a single platform is selected. */}
         {activePlatforms.length > 1 && (
           <div
             className="px-3 py-1.5 shrink-0 flex gap-1 overflow-x-auto"
@@ -542,14 +582,14 @@ export default function CreationEditor() {
                   aria-selected={isActive}
                   aria-label={`Preview ${p.label}`}
                   onClick={() => setCurrentPreviewIdx(idx)}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-semibold transition-all duration-200 whitespace-nowrap"
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold transition-all duration-200 whitespace-nowrap"
                   style={{
                     background: isActive ? `${p.color}15` : "transparent",
-                    color: isActive ? p.color : "var(--text-muted)",
+                    color: isActive ? "var(--text-primary)" : "var(--text-muted)",
                     border: isActive ? `1px solid ${p.color}30` : "1px solid transparent",
                   }}
                 >
-                  <Icon size={14} aria-hidden="true" />
+                  <Icon size={14} style={{ color: p.color }} aria-hidden="true" />
                   {p.label}
                 </button>
               );
@@ -558,10 +598,39 @@ export default function CreationEditor() {
         )}
 
         <div
-          className="flex-1 min-h-0 overflow-y-auto px-5 py-5"
+          className="flex-1 min-h-0 overflow-y-auto px-5 py-5 relative"
           onTouchStart={onPreviewTouchStart}
           onTouchEnd={onPreviewTouchEnd}
         >
+          {/* Floating ratio picker — sticks to the top-right of the preview
+              viewport so it stays reachable as the user scrolls long captions,
+              but doesn't take any flex height (was previously inline in a
+              shrink-0 strip, which cropped the preview card on short panes). */}
+          {activePlatforms[safePreviewIdx] && (
+            <div
+              className="sticky top-0 z-20 flex justify-end pointer-events-none"
+              style={{ height: 0 }}
+            >
+              <div className="pointer-events-auto">
+                <RatioPicker
+                  platform={activePlatforms[safePreviewIdx]}
+                  value={effectiveRatio(
+                    activePlatforms[safePreviewIdx].id,
+                    currentPost.ratios
+                  )}
+                  onChange={(ratio) =>
+                    dispatch(
+                      setPlatformRatio({
+                        platform: activePlatforms[safePreviewIdx].id,
+                        ratio,
+                      })
+                    )
+                  }
+                />
+              </div>
+            </div>
+          )}
+
           {activePlatforms.length === 0 ? (
             <div
               className="flex flex-col items-center justify-center h-full text-center"
@@ -575,15 +644,8 @@ export default function CreationEditor() {
             <div className="flex min-h-0 flex-1 flex-col items-center">
               {activePlatforms.map((platform, idx) => {
                 if (idx !== safePreviewIdx) return null;
-                // Frame width per orientation so the *whole* card keeps the
-                // platform's real proportions: TikTok reads as a 9:16 phone,
-                // Instagram a 1:1 square, Facebook/LinkedIn a 16:9 landscape.
-                const frameWidth =
-                  platform.id === "tiktok"
-                    ? 252
-                    : platform.id === "instagram"
-                    ? 330
-                    : 376;
+                const ratio = effectiveRatio(platform.id, currentPost.ratios);
+                const frameWidth = previewFrameWidth(ratio);
                 return (
                   <div
                     key={platform.id}
@@ -592,6 +654,7 @@ export default function CreationEditor() {
                   >
                     <PlatformPreview
                       platform={platform}
+                      ratio={ratio}
                       content={currentPost.content}
                       hashtagCount={hashtagCount}
                       media={currentPost.media}
@@ -608,6 +671,11 @@ export default function CreationEditor() {
         <ScheduleModal
           initialContent={currentPost.content}
           initialPlatforms={currentPost.platforms}
+          // Forward the editor's already-uploaded media (remoteUrl + status)
+          // and ratio picks so the backend scheduler can fire the post with
+          // the exact same media URL + crops the manual Publish path uses.
+          initialMedia={currentPost.media}
+          initialRatios={currentPost.ratios}
           onClose={() => setShowSchedule(false)}
           onSchedule={(post) => {
             dispatch(schedulePostThunk({ post, date: post.scheduledDate }));
@@ -615,19 +683,280 @@ export default function CreationEditor() {
           }}
         />
       )}
+
+      {showPublishConfirm && (() => {
+        // Compute the same hash the publish thunk records so the modal can
+        // flag duplicate posts before the user fires another publish.
+        const uploaded = currentPost.media.find(
+          (m) => m.status === "uploaded" && m.remoteUrl
+        );
+        const hash = publishHashKey(currentPost.content, uploaded?.remoteUrl || null);
+        const recentSet = new Set((recentPublishes || []).map((p) => p.hash));
+        const enabledPlatforms = Object.entries(currentPost.platforms)
+          .filter(([, on]) => on)
+          .map(([id]) => id);
+        return (
+          <PublishConfirmModal
+            content={currentPost.content}
+            enabledPlatforms={enabledPlatforms}
+            contentHash={hash}
+            recentPostHashes={recentSet}
+            onClose={() => setShowPublishConfirm(false)}
+            onConfirm={() => {
+              setShowPublishConfirm(false);
+              dispatch(publishNowThunk());
+            }}
+          />
+        );
+      })()}
     </div>
   );
 }
 
+/* ——— Per-platform aspect ratio popover ———
+   Each platform accepts different ratios for different placements
+   (feed vs reels vs link-share). Rather than picking a single global
+   ratio, the user picks per platform — sourced from RATIOS_BY_PLATFORM
+   in lib/platforms.js. Closes on outside click / Escape. */
+function RatioPicker({ platform, value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const spec = RATIOS_BY_PLATFORM[platform.id];
+  const options = spec?.options || [];
+
+  useEffect(() => {
+    if (!open) return;
+    const away = (e) => !ref.current?.contains(e.target) && setOpen(false);
+    const esc = (e) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+
+  if (!options.length) return null;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all backdrop-blur"
+        style={{
+          /* Slightly translucent so the picker reads as floating over the
+             preview card rather than as part of any toolbar. */
+          background: "color-mix(in srgb, var(--bg-card) 88%, transparent)",
+          border: `1px solid ${open ? "var(--border-active)" : "var(--border-default)"}`,
+          color: "var(--text-secondary)",
+          boxShadow: "0 4px 12px rgba(15, 23, 42, 0.10)",
+        }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={`Pick the aspect ratio used to preview ${platform.label} posts`}
+      >
+        <Frame size={12} aria-hidden="true" />
+        {value}
+        <ChevronDown size={12} aria-hidden="true" />
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          className="absolute right-0 z-30 mt-1 rounded-xl p-1.5 shadow-lg animate-fade-in"
+          style={{
+            background: "var(--bg-card)",
+            border: "1px solid var(--border-default)",
+            boxShadow: "var(--shadow-dropdown)",
+            minWidth: 220,
+          }}
+        >
+          {options.map((opt) => {
+            const isSelected = opt.value === value;
+            const isDefault = opt.value === spec.defaultRatio;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="option"
+                aria-selected={isSelected}
+                onClick={() => {
+                  onChange(opt.value);
+                  setOpen(false);
+                }}
+                className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-left text-xs transition-all"
+                style={{
+                  background: isSelected ? "rgba(99,102,241,0.12)" : "transparent",
+                  color: "var(--text-primary)",
+                }}
+              >
+                <span
+                  className="rounded-sm shrink-0"
+                  style={{
+                    width: 22,
+                    height: 22 / parseRatio(opt.value),
+                    minHeight: 10,
+                    background: isSelected
+                      ? "var(--accent-primary)"
+                      : "var(--bg-tertiary)",
+                    border: "1px solid var(--border-default)",
+                  }}
+                  aria-hidden="true"
+                />
+                <span className="flex-1">
+                  <span className="block font-medium">{opt.label}</span>
+                  <span className="block text-[10px]" style={{ color: "var(--text-muted)" }}>
+                    {opt.hint}
+                  </span>
+                </span>
+                {isDefault && (
+                  <span
+                    className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded"
+                    style={{
+                      background: "var(--bg-tertiary)",
+                      color: "var(--text-muted)",
+                    }}
+                  >
+                    default
+                  </span>
+                )}
+                {isSelected && (
+                  <Check size={12} style={{ color: "var(--accent-primary)" }} />
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ——— Split Publish button ———
+   Folds Schedule / Submit-for-validation / Save-draft into a single
+   chevron menu so the footer surfaces one primary action (Publish now)
+   and one ghost (Save draft) — every other path lives in the dropdown.
+   Closes on outside click / Escape, mirrors RatioPicker. */
+function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const away = (e) => !ref.current?.contains(e.target) && setOpen(false);
+    const esc = (e) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative inline-flex" ref={ref}>
+      <button
+        id="publish-now-btn"
+        className="btn-primary flex items-center gap-2"
+        onClick={onPublish}
+        aria-label="Publish post now"
+        style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
+      >
+        <Send size={16} aria-hidden="true" />
+        Publish now
+      </button>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="btn-primary"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="More publish options"
+        style={{
+          borderTopLeftRadius: 0,
+          borderBottomLeftRadius: 0,
+          padding: "0 10px",
+          borderLeft: "1px solid rgba(255,255,255,0.18)",
+        }}
+      >
+        <ChevronDown size={14} aria-hidden="true" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 bottom-full mb-1 z-30 rounded-xl p-1.5 shadow-lg animate-fade-in"
+          style={{
+            background: "var(--bg-card)",
+            border: "1px solid var(--border-default)",
+            boxShadow: "var(--shadow-dropdown)",
+            minWidth: 220,
+          }}
+        >
+          <MenuItem
+            icon={CalendarClock}
+            label="Schedule for later…"
+            onClick={() => {
+              setOpen(false);
+              onSchedule();
+            }}
+          />
+          <MenuItem
+            icon={MessageSquare}
+            label="Submit for validation"
+            sub="Telegram approval flow"
+            onClick={() => {
+              setOpen(false);
+              onValidate();
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({ icon: Icon, label, sub, onClick }) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-left text-xs transition-all"
+      style={{ background: "transparent", color: "var(--text-primary)" }}
+      onMouseEnter={(e) =>
+        (e.currentTarget.style.background = "var(--bg-tertiary)")
+      }
+      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+    >
+      <Icon size={14} style={{ color: "var(--accent-primary)" }} />
+      <span className="flex-1">
+        <span className="block font-medium">{label}</span>
+        {sub && (
+          <span className="block text-[10px]" style={{ color: "var(--text-muted)" }}>
+            {sub}
+          </span>
+        )}
+      </span>
+    </button>
+  );
+}
+
 /* ——— Platform Preview Card ——— */
-function PlatformPreview({ platform, content, hashtagCount, media = [] }) {
+function PlatformPreview({
+  platform,
+  ratio = "1:1",
+  content,
+  hashtagCount,
+  media = [],
+}) {
   const Icon = platform.icon;
   const charPercent = Math.min((content.length / platform.maxChars) * 100, 100);
   const hashOverLimit = hashtagCount > platform.maxHashtags;
   const charOverLimit = content.length > platform.maxChars;
-  const isVertical = platform.id === "tiktok";
-  const isSquare = platform.id === "instagram";
-  const aspectRatio = isVertical ? "9 / 16" : isSquare ? "1 / 1" : "16 / 9";
+  const numericRatio = parseRatio(ratio);
+  const isVertical = numericRatio < 0.7;
+  const isSquare = numericRatio >= 0.9 && numericRatio <= 1.1;
+  const aspectRatio = ratio.replace(":", " / ");
 
   // TikTok's brand color is a theme var (readable text), so use a fixed dark
   // chip as the avatar background to keep white initials legible.
@@ -644,13 +973,15 @@ function PlatformPreview({ platform, content, hashtagCount, media = [] }) {
       }}
       aria-label={`${platform.label} post preview`}
     >
-      {/* Platform header */}
+      {/* Platform header — text uses the theme primary so it stays readable
+          in both light + dark; identity is carried by the icon + the side
+          chip rather than brand-colored body text. */}
       <div
         className="flex items-center gap-2 px-4 py-3.5"
         style={{ borderBottom: "1px solid var(--border-default)" }}
       >
         <Icon size={16} style={{ color: platform.color }} aria-hidden="true" />
-        <span className="text-sm font-semibold" style={{ color: platform.color }}>
+        <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
           {platform.label}
         </span>
         <div className="flex-1" />
@@ -672,16 +1003,30 @@ function PlatformPreview({ platform, content, hashtagCount, media = [] }) {
           <>
             {hero.kind === "video" ? (
               <video
-                src={hero.previewUrl}
+                src={hero.remoteUrl || hero.previewUrl}
                 className="w-full h-full object-cover"
                 muted
                 loop
                 playsInline
                 autoPlay
+                onError={(e) => {
+                  if (hero.previewUrl && e.currentTarget.src !== hero.previewUrl) {
+                    e.currentTarget.src = hero.previewUrl;
+                  }
+                }}
               />
             ) : (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={hero.previewUrl} alt={hero.name} className="w-full h-full object-cover" />
+              <img
+                src={hero.remoteUrl || hero.previewUrl}
+                alt={hero.name}
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  if (hero.previewUrl && e.currentTarget.src !== hero.previewUrl) {
+                    e.currentTarget.src = hero.previewUrl;
+                  }
+                }}
+              />
             )}
             {media.length > 1 && (
               <span
@@ -695,7 +1040,10 @@ function PlatformPreview({ platform, content, hashtagCount, media = [] }) {
         ) : (
           <div className="px-6 text-center" style={{ color: "var(--text-muted)" }}>
             <Icon size={32} className="mx-auto mb-2 opacity-30" style={{ color: platform.color }} aria-hidden="true" />
-            <p className="text-xs">{isVertical ? "9:16 Vertical" : isSquare ? "1:1 Square" : "16:9 Landscape"}</p>
+            <p className="text-xs">
+              {ratio}{" "}
+              {isVertical ? "Vertical" : isSquare ? "Square" : "Landscape"}
+            </p>
             <p className="text-xs mt-0.5 opacity-60">Upload media on the left to preview</p>
           </div>
         )}
