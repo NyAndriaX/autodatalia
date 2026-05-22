@@ -75,15 +75,15 @@ export default function DashboardView() {
   const todayKey = isoDateKey(today);
 
   // Live OAuth state — same source the Settings view uses, so the Dashboard
-  // never lies about what's actually wired. Paint from cache instantly
-  // (avoids a "0 connected" flash + a slow Meta round-trip on every visit),
-  // then validate in the background. Both views share the same localStorage
-  // cache so flipping between them is free of upstream calls.
-  const [oauthState, setOauthState] = useState(() => {
-    const cached = typeof window !== "undefined" ? readCachedConnections() : null;
-    return cached?.providers || null;
-  });
+  // never lies about what's actually wired. Initial state is null so SSR
+  // and the first client tick agree (no hydration mismatch on the "live"
+  // badge etc.); a useEffect on mount paints from the cache instantly
+  // (so the "0 connected" flash is just one tick), then a background
+  // fetchConnections refreshes anything older than the TTL.
+  const [oauthState, setOauthState] = useState(null);
   useEffect(() => {
+    const cached = readCachedConnections();
+    if (cached?.providers) setOauthState(cached.providers);
     fetchConnections().then((d) => setOauthState(d?.providers || {}));
   }, []);
 

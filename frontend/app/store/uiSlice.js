@@ -63,8 +63,14 @@ const uiSlice = createSlice({
       state.mobileNavOpen = false; // close drawer on navigation
     },
     addNotification: (state, action) => {
+      // Publishing fans out across N platforms and dispatches one
+      // addNotification per result — those land in the same millisecond,
+      // so a plain `Date.now()` id collides and React warns about duplicate
+      // keys in the bell feed. A monotonic counter on top of the timestamp
+      // keeps the id roughly time-ordered but guaranteed unique.
+      state._notifSeq = (state._notifSeq || 0) + 1;
       state.notifications.unshift({
-        id: Date.now(),
+        id: `n-${Date.now()}-${state._notifSeq}`,
         ...action.payload,
         read: false,
         timestamp: new Date().toISOString(),
