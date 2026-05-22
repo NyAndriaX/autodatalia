@@ -437,6 +437,10 @@ async def _fetch_meta_pages(user_token: str) -> list[dict[str, Any]]:
 
     Returns [] on any upstream failure (graceful — the connections endpoint
     shouldn't 502 just because a single provider hiccupped).
+
+    Audience counts (fan_count, IG followers_count) ride along for the
+    dashboard's "Subscribers / Audience" tiles — they used to be MOCK
+    placeholders, now they're real numbers from Meta directly.
     """
     if not user_token:
         return []
@@ -445,7 +449,12 @@ async def _fetch_meta_pages(user_token: str) -> list[dict[str, Any]]:
             "https://graph.facebook.com/v21.0/me/accounts",
             params={
                 "access_token": user_token,
-                "fields": "id,name,category,access_token,instagram_business_account{id,username,profile_picture_url}",
+                "fields": (
+                    "id,name,category,access_token,fan_count,"
+                    "instagram_business_account{"
+                    "id,username,profile_picture_url,followers_count"
+                    "}"
+                ),
                 "limit": 100,
             },
         )
@@ -461,11 +470,13 @@ async def _fetch_meta_pages(user_token: str) -> list[dict[str, Any]]:
                 "page_name": p.get("name"),
                 "page_category": p.get("category"),
                 "page_access_token": p.get("access_token"),
+                "fan_count": p.get("fan_count"),
                 "instagram": (
                     {
                         "ig_id": ig.get("id"),
                         "username": ig.get("username"),
                         "profile_picture_url": ig.get("profile_picture_url"),
+                        "followers_count": ig.get("followers_count"),
                     }
                     if ig.get("id")
                     else None
@@ -532,6 +543,9 @@ async def connections() -> dict[str, Any]:
                         "label": page["page_name"],
                         "kind": "facebook_page",
                         "category": page.get("page_category"),
+                        # Audience count surfaces in the dashboard's Subscribers
+                        # tile; can be None if Meta hasn't propagated it yet.
+                        "audience": page.get("fan_count"),
                     }
                 )
                 if page.get("instagram"):
@@ -543,6 +557,7 @@ async def connections() -> dict[str, Any]:
                             "kind": "instagram_business",
                             "linked_to_page_id": page["page_id"],
                             "profile_picture_url": ig.get("profile_picture_url"),
+                            "audience": ig.get("followers_count"),
                         }
                     )
 

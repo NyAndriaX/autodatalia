@@ -351,99 +351,211 @@ export default function CalendarView() {
       className="h-full flex flex-col animate-fade-in"
       style={{ padding: isMobile ? 12 : 20, overflowX: isMobile ? "auto" : undefined }}
     >
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center gap-3 shrink-0 mb-4">
-        <button className="btn-secondary" onClick={() => dispatch(goToToday())}>
-          Today
-        </button>
-        <div className="flex items-center gap-1">
-          <button
-            className="btn-ghost"
-            style={{ padding: 8 }}
-            onClick={() => navigate(-1)}
-            aria-label="Previous"
-          >
-            <ChevronLeft size={18} />
-          </button>
-          <button
-            className="btn-ghost"
-            style={{ padding: 8 }}
-            onClick={() => navigate(1)}
-            aria-label="Next"
-          >
-            <ChevronRight size={18} />
-          </button>
-        </div>
-        <h2
-          className="text-lg font-bold"
-          style={{ color: "var(--text-primary)", minWidth: 200 }}
-        >
-          {view === "month"
-            ? formatMonthLabel(cursorDate)
-            : formatWeekLabel(cursorDate)}
-        </h2>
-
-        <div
-          className="flex items-center gap-1 ml-auto rounded-lg p-1"
-          style={{ background: "var(--bg-secondary)" }}
-        >
-          {[
-            { id: "month", label: "Month", Icon: CalendarDays },
-            { id: "week", label: "Week", Icon: CalendarRange },
-          ].map(({ id, label, Icon }) => {
-            const on = view === id;
-            return (
+      {/* Toolbar — on phones the month label drops to its own row so the
+          arrows + view toggle don't end up squeezed against each other. */}
+      {isMobile ? (
+        <div className="shrink-0 mb-3 flex flex-col gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <button
+              className="btn-secondary text-sm"
+              style={{ padding: "6px 12px" }}
+              onClick={() => dispatch(goToToday())}
+            >
+              Today
+            </button>
+            <div className="flex items-center gap-1">
               <button
-                key={id}
-                onClick={() => dispatch(setCalendarView(id))}
-                className="text-sm font-medium px-3 py-1.5 rounded-md transition-all inline-flex items-center gap-1.5"
-                style={{
-                  background: on ? "var(--bg-card)" : "transparent",
-                  color: on ? "var(--text-primary)" : "var(--text-muted)",
-                  boxShadow: on ? "var(--shadow-dropdown)" : "none",
-                }}
+                className="btn-ghost"
+                style={{ padding: 8 }}
+                onClick={() => navigate(-1)}
+                aria-label="Previous"
               >
-                <Icon size={15} />
-                {label}
+                <ChevronLeft size={18} />
               </button>
-            );
-          })}
+              <button
+                className="btn-ghost"
+                style={{ padding: 8 }}
+                onClick={() => navigate(1)}
+                aria-label="Next"
+              >
+                <ChevronRight size={18} />
+              </button>
+            </div>
+            <div
+              className="flex items-center gap-1 rounded-lg p-0.5"
+              style={{ background: "var(--bg-secondary)" }}
+            >
+              {[
+                { id: "month", label: "M", Icon: CalendarDays, full: "Month" },
+                { id: "week", label: "W", Icon: CalendarRange, full: "Week" },
+              ].map(({ id, label, Icon, full }) => {
+                const on = view === id;
+                return (
+                  <button
+                    key={id}
+                    onClick={() => dispatch(setCalendarView(id))}
+                    aria-label={full}
+                    className="text-sm font-medium px-2.5 py-1 rounded-md inline-flex items-center gap-1"
+                    style={{
+                      background: on ? "var(--bg-card)" : "transparent",
+                      color: on ? "var(--text-primary)" : "var(--text-muted)",
+                    }}
+                  >
+                    <Icon size={14} />
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <h2
+            className="text-base font-bold"
+            style={{ color: "var(--text-primary)" }}
+          >
+            {view === "month"
+              ? formatMonthLabel(cursorDate)
+              : formatWeekLabel(cursorDate)}
+          </h2>
         </div>
-      </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-3 shrink-0 mb-4">
+          <button className="btn-secondary" onClick={() => dispatch(goToToday())}>
+            Today
+          </button>
+          <div className="flex items-center gap-1">
+            <button
+              className="btn-ghost"
+              style={{ padding: 8 }}
+              onClick={() => navigate(-1)}
+              aria-label="Previous"
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <button
+              className="btn-ghost"
+              style={{ padding: 8 }}
+              onClick={() => navigate(1)}
+              aria-label="Next"
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+          <h2
+            className="text-lg font-bold flex-1"
+            style={{ color: "var(--text-primary)" }}
+          >
+            {view === "month"
+              ? formatMonthLabel(cursorDate)
+              : formatWeekLabel(cursorDate)}
+          </h2>
 
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-2 shrink-0 mb-4">
-        <span
-          className="text-xs font-semibold uppercase tracking-wider mr-1"
-          style={{ color: "var(--text-tertiary)" }}
+          <div
+            className="flex items-center gap-1 rounded-lg p-1"
+            style={{ background: "var(--bg-secondary)" }}
+          >
+            {[
+              { id: "month", label: "Month", Icon: CalendarDays },
+              { id: "week", label: "Week", Icon: CalendarRange },
+            ].map(({ id, label, Icon }) => {
+              const on = view === id;
+              return (
+                <button
+                  key={id}
+                  onClick={() => dispatch(setCalendarView(id))}
+                  className="text-sm font-medium px-3 py-1.5 rounded-md transition-all inline-flex items-center gap-1.5"
+                  style={{
+                    background: on ? "var(--bg-card)" : "transparent",
+                    color: on ? "var(--text-primary)" : "var(--text-muted)",
+                    boxShadow: on ? "var(--shadow-dropdown)" : "none",
+                  }}
+                >
+                  <Icon size={15} />
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Filters — on phones the section labels eat too much space, so
+          the chips run edge-to-edge in a single horizontal scroll row
+          (familiar pattern from Apple/Google calendars). */}
+      {isMobile ? (
+        <div
+          className="shrink-0 mb-3"
+          style={{
+            overflowX: "auto",
+            margin: "0 -12px",
+            padding: "0 12px",
+            // Hide the scrollbar on the chip strip — the chips themselves
+            // signal scrollability via the right edge fading off.
+            scrollbarWidth: "none",
+          }}
         >
-          Platforms
-        </span>
-        {PLATFORMS.map((p) => (
-          <FilterChip
-            key={p.id}
-            active={filters.platforms[p.id]}
-            color={p.color}
-            label={p.label}
-            onClick={() => dispatch(togglePlatformFilter(p.id))}
-          />
-        ))}
-        <span
-          className="text-xs font-semibold uppercase tracking-wider mx-1"
-          style={{ color: "var(--text-tertiary)" }}
-        >
-          Status
-        </span>
-        {STATUSES.map((s) => (
-          <FilterChip
-            key={s}
-            active={filters.statuses[s]}
-            color={STATUS_META[s].colorVar}
-            label={STATUS_META[s].label}
-            onClick={() => dispatch(toggleStatusFilter(s))}
-          />
-        ))}
-      </div>
+          <div
+            className="flex items-center gap-2"
+            style={{ width: "max-content" }}
+          >
+            {PLATFORMS.map((p) => (
+              <FilterChip
+                key={p.id}
+                active={filters.platforms[p.id]}
+                color={p.color}
+                label={p.label}
+                onClick={() => dispatch(togglePlatformFilter(p.id))}
+              />
+            ))}
+            <span
+              className="w-px h-4 mx-1"
+              style={{ background: "var(--border-default)" }}
+              aria-hidden="true"
+            />
+            {STATUSES.map((s) => (
+              <FilterChip
+                key={s}
+                active={filters.statuses[s]}
+                color={STATUS_META[s].colorVar}
+                label={STATUS_META[s].label}
+                onClick={() => dispatch(toggleStatusFilter(s))}
+              />
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2 shrink-0 mb-4">
+          <span
+            className="text-xs font-semibold uppercase tracking-wider mr-1"
+            style={{ color: "var(--text-tertiary)" }}
+          >
+            Platforms
+          </span>
+          {PLATFORMS.map((p) => (
+            <FilterChip
+              key={p.id}
+              active={filters.platforms[p.id]}
+              color={p.color}
+              label={p.label}
+              onClick={() => dispatch(togglePlatformFilter(p.id))}
+            />
+          ))}
+          <span
+            className="text-xs font-semibold uppercase tracking-wider mx-1"
+            style={{ color: "var(--text-tertiary)" }}
+          >
+            Status
+          </span>
+          {STATUSES.map((s) => (
+            <FilterChip
+              key={s}
+              active={filters.statuses[s]}
+              color={STATUS_META[s].colorVar}
+              label={STATUS_META[s].label}
+              onClick={() => dispatch(toggleStatusFilter(s))}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Weekday header */}
       <div
