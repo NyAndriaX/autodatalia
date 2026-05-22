@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Clock } from "lucide-react";
 
 /**
@@ -23,8 +24,12 @@ import { Clock } from "lucide-react";
  */
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
-const ROW_PX = 36; // height of one row in the scroll column; padding math uses this
+const ROW_PX = 32; // height of one row in the scroll column
 const VISIBLE_ROWS = 5; // odd so there's a clear center
+const POPOVER_WIDTH = 260;
+// Approximate height — used only for the flip-above-trigger heuristic.
+// Real height self-measures via the popover ref after first paint.
+const POPOVER_HEIGHT_APPROX = 320;
 
 // Common posting times — picked over months of "what did users actually
 // schedule" feedback; surfaces them as one-tap chips so the columns are
@@ -41,20 +46,65 @@ const pad = (n) => String(n).padStart(2, "0");
 
 export default function TimePicker({ value = "09:00", onChange, minuteStep = 5 }) {
   const [open, setOpen] = useState(false);
-  const wrapRef = useRef(null);
+  const [popoverPos, setPopoverPos] = useState(null); // { top, left }
+  const triggerRef = useRef(null);
+  const popoverRef = useRef(null);
+  // Track whether we're mounted so the portal call doesn't run during SSR.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  // Compute popover position relative to the trigger. Used both on open
+  // (initial placement) and whenever the user scrolls/resizes (so the
+  // popover stays glued to the trigger inside scrollable modals).
+  const reposition = () => {
+    const trigger = triggerRef.current;
+    if (!trigger) return;
+    const rect = trigger.getBoundingClientRect();
+    const vpH = window.innerHeight;
+    const vpW = window.innerWidth;
+    const popH = popoverRef.current?.offsetHeight || POPOVER_HEIGHT_APPROX;
+    // Flip above when there isn't room below — the previous popover got
+    // clipped inside the calendar's edit modal exactly this way.
+    const flipUp = rect.bottom + popH + 8 > vpH && rect.top - popH - 8 > 0;
+    const top = flipUp ? rect.top - popH - 6 : rect.bottom + 6;
+    // Clamp horizontally so it never disappears off the side of the viewport.
+    const left = Math.max(
+      8,
+      Math.min(rect.left, vpW - POPOVER_WIDTH - 8)
+    );
+    setPopoverPos({ top, left });
+  };
 
   useEffect(() => {
     if (!open) return;
+    reposition();
     const onClickAway = (e) => {
-      if (!wrapRef.current?.contains(e.target)) setOpen(false);
+      // Click on trigger or inside popover → stay open. Anything else closes.
+      if (triggerRef.current?.contains(e.target)) return;
+      if (popoverRef.current?.contains(e.target)) return;
+      setOpen(false);
     };
     const onKey = (e) => e.key === "Escape" && setOpen(false);
+    // Re-anchor when ancestors scroll (modal content, page body) or the
+    // viewport resizes. `true` on scroll captures from any scroll container.
+    const onScrollOrResize = () => reposition();
     document.addEventListener("mousedown", onClickAway);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScrollOrResize, true);
+    window.addEventListener("resize", onScrollOrResize);
     return () => {
       document.removeEventListener("mousedown", onClickAway);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScrollOrResize, true);
+      window.removeEventListener("resize", onScrollOrResize);
     };
+  }, [open]);
+
+  // After first render of the popover, the real height is known — re-measure
+  // and adjust placement so the flip-up math uses the actual height.
+  useLayoutEffect(() => {
+    if (open) reposition();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const [hStr = "09", mStr = "00"] = (value || "09:00").split(":");
@@ -84,9 +134,37 @@ export default function TimePicker({ value = "09:00", onChange, minuteStep = 5 }
     label = `${pad(selectedH)}:${pad(selectedM)}`;
   }
 
+  const popover = open && popoverPos && (
+    <div
+      ref={popoverRef}
+      role="dialog"
+      aria-label="Choose a time"
+      className="rounded-xl p-3 shadow-lg animate-fade-in"
+      style={{
+        position: "fixed",
+        top: popoverPos.top,
+        left: popoverPos.left,
+        zIndex: 200,
+        background: "var(--bg-card)",
+        border: "1px solid var(--border-default)",
+        boxShadow: "var(--shadow-dropdown)",
+        width: POPOVER_WIDTH,
+      }}
+    >
+      <PopoverBody
+        selectedH={selectedH}
+        snappedM={snappedM}
+        minutes={minutes}
+        commit={commit}
+        close={() => setOpen(false)}
+      />
+    </div>
+  );
+
   return (
-    <div className="relative" ref={wrapRef}>
+    <>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
         className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-all"
@@ -103,136 +181,131 @@ export default function TimePicker({ value = "09:00", onChange, minuteStep = 5 }
         <span className="flex-1 text-left tabular-nums">{label}</span>
       </button>
 
-      {open && (
+      {/* Portal-render so the popover escapes the modal's overflow:auto.
+          Without this it gets clipped inside calendar's edit dialog and
+          the user has to scroll to see the columns — the CEO's complaint. */}
+      {mounted && popover ? createPortal(popover, document.body) : null}
+    </>
+  );
+}
+
+/* The popover body is its own component so the markup stays readable above.
+   The behavioral nuance — portal, reposition, click-away — lives in the
+   parent so this can focus purely on what the user sees. */
+function PopoverBody({ selectedH, snappedM, minutes, commit, close }) {
+  return (
+    <>
+      {/* Big readout — tall enough that the picker reads as "I'm a clock",
+          not "I'm another grid". */}
+      <div
+        className="text-center mb-3 tabular-nums leading-none"
+        style={{
+          color: "var(--text-primary)",
+          fontWeight: 700,
+          fontSize: 32,
+          letterSpacing: 2,
+        }}
+        aria-live="polite"
+      >
+        {pad(selectedH)}
+        <span style={{ color: "var(--text-muted)" }}>:</span>
+        {pad(snappedM)}
+      </div>
+
+      {/* Twin scrollable columns. The selected row sits in the centred
+          "tray" defined by ROW_PX × VISIBLE_ROWS — the column scrolls
+          programmatically when the value changes externally, and the
+          tray's accent band tells the user where to drop a click. */}
+      <div className="relative grid grid-cols-2 gap-2 mb-3">
         <div
-          role="dialog"
-          aria-label="Choose a time"
-          className="absolute z-[110] mt-1 rounded-xl p-3 shadow-lg animate-fade-in"
+          aria-hidden="true"
+          className="pointer-events-none absolute left-0 right-0"
           style={{
-            background: "var(--bg-card)",
-            border: "1px solid var(--border-default)",
-            boxShadow: "var(--shadow-dropdown)",
-            width: 280,
+            top: ROW_PX * Math.floor(VISIBLE_ROWS / 2),
+            height: ROW_PX,
+            background: "rgba(99, 102, 241, 0.10)",
+            border: "1px solid var(--border-active)",
+            borderRadius: 8,
           }}
-        >
-          {/* Big readout — tall enough that the picker reads as "I'm a
-              clock", not "I'm another grid". */}
-          <div
-            className="text-center mb-3 tabular-nums leading-none"
-            style={{
-              color: "var(--text-primary)",
-              fontWeight: 700,
-              fontSize: 36,
-              letterSpacing: 2,
-            }}
-            aria-live="polite"
-          >
-            {pad(selectedH)}
-            <span style={{ color: "var(--text-muted)" }}>:</span>
-            {pad(snappedM)}
-          </div>
+        />
+        <WheelColumn
+          ariaLabel="Hour"
+          items={HOURS}
+          selected={selectedH}
+          onSelect={(h) => commit(h, snappedM)}
+        />
+        <WheelColumn
+          ariaLabel="Minute"
+          items={minutes}
+          selected={snappedM}
+          onSelect={(m) => commit(selectedH, m)}
+        />
+      </div>
 
-          {/* Twin scrollable columns. The selected row sits in the centred
-              "tray" defined by ROW_PX × VISIBLE_ROWS — the column scrolls
-              programmatically when the value changes externally, and the
-              tray's accent border tells the user where to drop a click. */}
-          <div className="relative grid grid-cols-2 gap-2 mb-3">
-            {/* Centred selection tray — sits behind both columns so the
-                accent band reads as a single visual horizon. */}
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute left-0 right-0"
-              style={{
-                top: ROW_PX * Math.floor(VISIBLE_ROWS / 2),
-                height: ROW_PX,
-                background: "rgba(99, 102, 241, 0.10)",
-                border: "1px solid var(--border-active)",
-                borderRadius: 8,
-              }}
-            />
-
-            <WheelColumn
-              ariaLabel="Hour"
-              items={HOURS}
-              selected={selectedH}
-              onSelect={(h) => commit(h, snappedM)}
-              open={open}
-            />
-            <WheelColumn
-              ariaLabel="Minute"
-              items={minutes}
-              selected={snappedM}
-              onSelect={(m) => commit(selectedH, m)}
-              open={open}
-            />
-          </div>
-
-          {/* Quick presets — what 9 in 10 picks actually look like. */}
-          <div className="flex flex-wrap gap-1 mb-2">
-            {PRESETS.map((p) => {
-              const isSel = `${pad(selectedH)}:${pad(snappedM)}` === p.time;
-              return (
-                <button
-                  key={p.time}
-                  type="button"
-                  onClick={() => {
-                    const [h, m] = p.time.split(":").map(Number);
-                    commit(h, m);
-                  }}
-                  className="text-[11px] px-2 py-1 rounded-full transition-colors"
-                  style={{
-                    background: isSel
-                      ? "rgba(99, 102, 241, 0.15)"
-                      : "var(--bg-secondary)",
-                    border: `1px solid ${
-                      isSel ? "var(--border-active)" : "var(--border-default)"
-                    }`,
-                    color: isSel ? "var(--text-primary)" : "var(--text-secondary)",
-                  }}
-                  aria-pressed={isSel}
-                  title={p.time}
-                >
-                  {p.label}
-                </button>
-              );
-            })}
-          </div>
-
-          <div
-            className="flex items-center justify-between mt-2 pt-2"
-            style={{ borderTop: "1px solid var(--border-default)" }}
-          >
+      {/* Quick presets — what 9 in 10 picks actually look like. */}
+      <div className="flex flex-wrap gap-1 mb-2">
+        {PRESETS.map((p) => {
+          const isSel = `${pad(selectedH)}:${pad(snappedM)}` === p.time;
+          return (
             <button
+              key={p.time}
               type="button"
               onClick={() => {
-                const now = new Date();
-                const snapM = minutes.reduce(
-                  (best, m) =>
-                    Math.abs(m - now.getMinutes()) < Math.abs(best - now.getMinutes())
-                      ? m
-                      : best,
-                  minutes[0]
-                );
-                commit(now.getHours(), snapM);
-                setOpen(false);
+                const [h, m] = p.time.split(":").map(Number);
+                commit(h, m);
               }}
-              className="text-xs font-medium"
-              style={{ color: "var(--accent-primary)" }}
+              className="text-[11px] px-2 py-1 rounded-full transition-colors"
+              style={{
+                background: isSel
+                  ? "rgba(99, 102, 241, 0.15)"
+                  : "var(--bg-secondary)",
+                border: `1px solid ${
+                  isSel ? "var(--border-active)" : "var(--border-default)"
+                }`,
+                color: isSel ? "var(--text-primary)" : "var(--text-secondary)",
+              }}
+              aria-pressed={isSel}
+              title={p.time}
             >
-              Now
+              {p.label}
             </button>
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              className="text-xs"
-              style={{ color: "var(--text-muted)" }}
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
+          );
+        })}
+      </div>
+
+      <div
+        className="flex items-center justify-between mt-2 pt-2"
+        style={{ borderTop: "1px solid var(--border-default)" }}
+      >
+        <button
+          type="button"
+          onClick={() => {
+            const now = new Date();
+            const snapM = minutes.reduce(
+              (best, m) =>
+                Math.abs(m - now.getMinutes()) < Math.abs(best - now.getMinutes())
+                  ? m
+                  : best,
+              minutes[0]
+            );
+            commit(now.getHours(), snapM);
+            close();
+          }}
+          className="text-xs font-medium"
+          style={{ color: "var(--accent-primary)" }}
+        >
+          Now
+        </button>
+        <button
+          type="button"
+          onClick={close}
+          className="text-xs"
+          style={{ color: "var(--text-muted)" }}
+        >
+          Done
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -243,20 +316,20 @@ export default function TimePicker({ value = "09:00", onChange, minuteStep = 5 }
    selected value changes externally (e.g. the user tapped a preset).
    ─────────────────────────────────────────────────────────────────────── */
 
-function WheelColumn({ ariaLabel, items, selected, onSelect, open }) {
+function WheelColumn({ ariaLabel, items, selected, onSelect }) {
   const ref = useRef(null);
   const half = Math.floor(VISIBLE_ROWS / 2);
   const padPx = ROW_PX * half;
 
   // Scroll the selected row into the centred tray. useLayoutEffect (vs.
   // useEffect) so the scroll lands before paint — otherwise the user sees
-  // the column jump on open.
+  // the column jump on first render.
   useLayoutEffect(() => {
-    if (!open || !ref.current) return;
+    if (!ref.current) return;
     const idx = items.indexOf(selected);
     if (idx < 0) return;
     ref.current.scrollTop = idx * ROW_PX;
-  }, [open, selected, items]);
+  }, [selected, items]);
 
   return (
     <div

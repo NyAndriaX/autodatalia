@@ -52,7 +52,10 @@ import {
   weekdayHeaders,
 } from "../../lib/dateUtils";
 
-const MAX_CHIPS_PER_DAY = 3;
+// Density bumped from 3 → 5 so the calendar earns its real estate. Users
+// can scroll inside a cell when there's more, but at 3 chips/day a busy
+// week had "+X more" everywhere and the calendar lost its purpose.
+const MAX_CHIPS_PER_DAY = 5;
 const DND_MIME = "application/x-datalia-post";
 
 /* ——— Demo seed: a few posts around today so the view is alive offline ——— */
@@ -166,7 +169,7 @@ function PostChip({ post, onEdit, onCancel, compact }) {
 }
 
 /* ——— A day cell: drop target + quick-create affordance ——— */
-function DayCell({ day, posts, isWeek, onDropPost, onEdit, onCancel, onQuickCreate }) {
+function DayCell({ day, posts, isWeek, onDropPost, onEdit, onCancel, onQuickCreate, flashToday }) {
   const [isOver, setIsOver] = useState(false);
 
   const overflow = !isWeek && posts.length > MAX_CHIPS_PER_DAY;
@@ -186,7 +189,13 @@ function DayCell({ day, posts, isWeek, onDropPost, onEdit, onCancel, onQuickCrea
         const id = e.dataTransfer.getData(DND_MIME);
         if (id) onDropPost(id, day.key);
       }}
-      className="group/cell flex flex-col gap-1 p-1.5 transition-colors"
+      // `flashToday` is bumped each time the user clicks the Today button.
+      // Keying the cell on it remounts it, replaying the fade-in animation
+      // so the user gets visible confirmation even when already on today.
+      key={day.isToday ? `today-${flashToday}` : undefined}
+      className={`group/cell flex flex-col gap-1 p-1 transition-colors ${
+        day.isToday ? "animate-fade-in" : ""
+      }`}
       style={{
         background: isOver
           ? "var(--bg-card-hover)"
@@ -194,41 +203,49 @@ function DayCell({ day, posts, isWeek, onDropPost, onEdit, onCancel, onQuickCrea
           ? "var(--bg-card)"
           : "var(--bg-secondary)",
         border: day.isToday
-          ? "1px solid var(--accent-primary)"
+          ? "2px solid var(--accent-primary)"
           : "1px solid var(--border-default)",
         borderRadius: "var(--radius-sm)",
-        // Fixed-fill cell: every row is the same height; chips that exceed
-        // it scroll inside the cell instead of stretching the whole row.
         height: isWeek ? undefined : "100%",
         minHeight: 0,
         overflow: "hidden",
         flex: isWeek ? "1 1 0" : undefined,
-        opacity: day.inMonth ? 1 : 0.55,
+        opacity: day.inMonth ? 1 : 0.5,
       }}
     >
-      <div className="flex items-center justify-between shrink-0">
+      {/* Compact header row — date number sits flush left, plus button
+          flush right. Dropped the previous filled "today circle" chrome
+          so the date gets more breathing room without losing the today
+          cue (the surrounding 2px accent border already calls it out). */}
+      <div className="flex items-center justify-between shrink-0 px-1 pt-0.5">
         <span
-          className="text-xs font-semibold w-6 h-6 flex items-center justify-center rounded-full"
+          className="text-xs font-bold tabular-nums"
           style={{
-            color: day.isToday ? "#fff" : "var(--text-tertiary)",
-            background: day.isToday ? "var(--accent-primary)" : "transparent",
+            color: day.isToday
+              ? "var(--accent-primary)"
+              : day.inMonth
+              ? "var(--text-secondary)"
+              : "var(--text-muted)",
           }}
         >
           {day.date.getDate()}
         </span>
         <button
           onClick={() => onQuickCreate(day.key)}
-          className="opacity-0 group-hover/cell:opacity-100 transition-opacity rounded"
+          // On phones nothing triggers :hover, so the + button needs to be
+          // perma-visible there. Keep the hover-fade on pointer devices so
+          // the chrome stays calm.
+          className="opacity-30 group-hover/cell:opacity-100 transition-opacity rounded"
           style={{ color: "var(--text-muted)" }}
           title="Schedule a post on this day"
           aria-label="Schedule a post on this day"
         >
-          <Plus size={14} />
+          <Plus size={13} />
         </button>
       </div>
 
       <div
-        className="flex flex-col gap-1 overflow-y-auto"
+        className="flex flex-col gap-0.5 overflow-y-auto px-0.5"
         style={{ flex: "1 1 0", minHeight: 0 }}
       >
         {shown.map((p) => (
@@ -284,6 +301,14 @@ export default function CalendarView() {
   );
   const [quickCreateDate, setQuickCreateDate] = useState(null);
   const [editingPost, setEditingPost] = useState(null);
+  // Every "Today" click bumps this counter. Day cells with `isToday`
+  // remount when it changes, replaying the fade-in animation so the
+  // user gets visual confirmation even when they were already on today.
+  const [flashToday, setFlashToday] = useState(0);
+  const onTodayClick = useCallback(() => {
+    dispatch(goToToday());
+    setFlashToday((n) => n + 1);
+  }, [dispatch]);
   const isMobile = useIsMobile();
   // Below the 7-col grid's comfortable width, scroll horizontally instead
   // of squashing day cells to unusable widths.
@@ -359,7 +384,7 @@ export default function CalendarView() {
             <button
               className="btn-secondary text-sm"
               style={{ padding: "6px 12px" }}
-              onClick={() => dispatch(goToToday())}
+              onClick={onTodayClick}
             >
               Today
             </button>
@@ -419,7 +444,7 @@ export default function CalendarView() {
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-3 shrink-0 mb-4">
-          <button className="btn-secondary" onClick={() => dispatch(goToToday())}>
+          <button className="btn-secondary" onClick={onTodayClick}>
             Today
           </button>
           <div className="flex items-center gap-1">
@@ -597,6 +622,7 @@ export default function CalendarView() {
             onEdit={onEdit}
             onCancel={onCancel}
             onQuickCreate={setQuickCreateDate}
+            flashToday={flashToday}
           />
         ))}
       </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useDispatch } from "react-redux";
 import {
   X,
   Trash2,
@@ -15,21 +16,27 @@ import {
   ExternalLink,
   CheckCircle2,
   AlertCircle,
+  Loader2,
 } from "lucide-react";
 import {
   PLATFORMS,
   PLATFORM_MAP,
-  STATUSES,
   STATUS_META,
   RATIOS_BY_PLATFORM,
   parseRatio,
   activePlatformIds,
 } from "../../lib/platforms";
 import { isoDateKey, parseDateKey, startOfToday } from "../../lib/dateUtils";
+import { addNotification } from "../../store/uiSlice";
+import {
+  ACCEPTED_TYPES,
+  toMediaItem,
+  uploadToBackend,
+  validateFile,
+  revokeMediaItem,
+} from "../../lib/uploadService";
 import DatePicker from "./DatePicker";
 import TimePicker from "./TimePicker";
-
-let mediaUid = 0;
 
 /**
  * Buffer-style edit popup opened from the calendar. Splits the dialog into:
@@ -41,6 +48,7 @@ let mediaUid = 0;
  * "see what it will look like" matters.
  */
 export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
+  const dispatch = useDispatch();
   const [content, setContent] = useState(post.content ?? "");
   const [platforms, setPlatforms] = useState(
     post.platforms ?? { facebook: true }
@@ -50,7 +58,9 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
   );
   const [time, setTime] = useState(post.time ?? "09:00");
   const [media, setMedia] = useState(post.media ?? []);
-  const [status, setStatus] = useState(post.status ?? "draft");
+  // Status is derived/auto-set at save time rather than user-picked — see
+  // handleSave below. The header badge below still reads from `post.status`
+  // so the user can see what the current persisted status is.
 
   const imageInputRef = useRef(null);
   const videoInputRef = useRef(null);
@@ -62,21 +72,81 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
     if (tabIdx >= activeIds.length) setTabIdx(Math.max(0, activeIds.length - 1));
   }, [activeIds, tabIdx]);
 
+  // Track previewUrls *this popup* created so we can revoke them on close.
+  // Media that came in via `post.media` keeps its own lifecycle (the upload
+  // service or store owns it), so we don't blanket-revoke everything.
+  const ownedPreviewIds = useRef(new Set());
+
+  useEffect(() => {
+    const owned = ownedPreviewIds.current;
+    return () => {
+      for (const m of media) if (owned.has(m.id)) revokeMediaItem(m);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const togglePlatform = (id) =>
     setPlatforms((p) => ({ ...p, [id]: !p[id] }));
 
-  const addMedia = (m) =>
-    setMedia((list) => [...list, { id: `m${++mediaUid}`, ...m }]);
-  const removeMedia = (id) =>
-    setMedia((list) => list.filter((m) => m.id !== id));
+  const removeMedia = (id) => {
+    setMedia((list) => {
+      const target = list.find((m) => m.id === id);
+      if (target && ownedPreviewIds.current.has(id)) revokeMediaItem(target);
+      ownedPreviewIds.current.delete(id);
+      return list.filter((m) => m.id !== id);
+    });
+  };
 
-  const onPickFile = (kind) => (e) => {
+  const updateMedia = (id, patch) =>
+    setMedia((list) => list.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+
+  // Picker → uploadService dance, identical to ScheduleModal's. Before this
+  // wiring, picking a file added a descriptor-only entry the scheduler
+  // couldn't fire and the preview pane couldn't load — the broken-image
+  // icon in the CEO's screenshot was exactly this bug.
+  const ingestFile = async (file, expectedKind) => {
+    const err = validateFile(file);
+    if (err) {
+      dispatch(addNotification({ message: `${file.name}: ${err}`, type: "error" }));
+      return;
+    }
+    const item = toMediaItem(file);
+    ownedPreviewIds.current.add(item.id);
+    setMedia((list) => [...list, item]);
+    updateMedia(item.id, { status: "uploading" });
+    const result = await uploadToBackend(file);
+    updateMedia(item.id, result);
+    if (result.status !== "uploaded") {
+      dispatch(
+        addNotification({
+          message: `${file.name} couldn't be uploaded — the scheduler will fire this post without media.`,
+          type: "error",
+        })
+      );
+    }
+  };
+
+  const onPickFile = (kind) => async (e) => {
     const file = e.target.files?.[0];
-    if (file) addMedia({ kind, source: "upload", name: file.name });
     e.target.value = "";
+    if (!file) return;
+    await ingestFile(file, kind);
   };
 
   const hashtagCount = (content.match(/#\w+/g) || []).length;
+  const hasPending = media.some((m) => m.status === "uploading");
+
+  // Status auto-flow: draft + future date → scheduled. Published / error
+  // stay as-is (the scheduler manages those). The manual Status dropdown
+  // has been removed — "I'm editing a post on the calendar" implies intent
+  // to schedule, not to leave as a draft.
+  const computeNextStatus = () => {
+    const current = post.status || "draft";
+    if (current === "published" || current === "error") return current;
+    const todayKey = isoDateKey(startOfToday());
+    const hasFutureSchedule = date && date >= todayKey;
+    return hasFutureSchedule ? "scheduled" : "draft";
+  };
 
   const handleSave = () => {
     onSave({
@@ -85,9 +155,14 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
       scheduledDate: date,
       time,
       media,
-      status,
+      status: computeNextStatus(),
     });
   };
+
+  // Status the header badge shows — preview the auto-computed next status
+  // while editing so the user knows what Save will land on.
+  const nextStatus = computeNextStatus();
+  const status = nextStatus;
 
   const activeTabPlatform = activeIds[tabIdx]
     ? PLATFORM_MAP[activeIds[tabIdx]]
@@ -192,10 +267,16 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
               </button>
               <button
                 onClick={() =>
-                  addMedia({ kind: "image", source: "ai", name: "AI image" })
+                  dispatch(
+                    addNotification({
+                      message:
+                        "AI image generation isn't wired yet — upload from your device for now.",
+                      type: "info",
+                    })
+                  )
                 }
                 className="btn-secondary text-xs inline-flex items-center gap-1.5"
-                title="Generate with AI"
+                title="AI generation not wired yet"
               >
                 <Sparkles size={13} /> AI
               </button>
@@ -203,58 +284,71 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
             <input
               ref={imageInputRef}
               type="file"
-              accept="image/*"
+              accept={ACCEPTED_TYPES.filter((t) => t.startsWith("image/")).join(",")}
               className="hidden"
               onChange={onPickFile("image")}
             />
             <input
               ref={videoInputRef}
               type="file"
-              accept="video/*"
+              accept={ACCEPTED_TYPES.filter((t) => t.startsWith("video/")).join(",")}
               className="hidden"
               onChange={onPickFile("video")}
             />
             {media.length > 0 && (
               <div className="flex flex-col gap-1.5 mb-4">
-                {media.map((m) => (
-                  <div
-                    key={m.id}
-                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs"
-                    style={{
-                      background: "var(--bg-secondary)",
-                      color: "var(--text-secondary)",
-                    }}
-                  >
-                    {m.kind === "video" ? (
-                      <Film size={13} />
-                    ) : (
-                      <ImagePlus size={13} />
-                    )}
-                    <span className="flex-1 truncate">{m.name}</span>
-                    <span
-                      className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded"
+                {media.map((m) => {
+                  const statusIcon =
+                    m.status === "uploading" ? (
+                      <Loader2
+                        size={11}
+                        className="animate-spin"
+                        style={{ color: "var(--accent-primary)" }}
+                      />
+                    ) : m.status === "uploaded" ? (
+                      <CheckCircle2
+                        size={11}
+                        style={{ color: "var(--status-approved)" }}
+                      />
+                    ) : m.status === "local" || !m.remoteUrl ? (
+                      <AlertCircle
+                        size={11}
+                        style={{ color: "var(--status-pending)" }}
+                      />
+                    ) : null;
+                  return (
+                    <div
+                      key={m.id}
+                      className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs"
                       style={{
-                        background:
-                          m.source === "ai"
-                            ? "rgba(245,158,11,0.15)"
-                            : "rgba(99,102,241,0.12)",
-                        color:
-                          m.source === "ai"
-                            ? "var(--status-pending)"
-                            : "var(--accent-primary)",
+                        background: "var(--bg-secondary)",
+                        color: "var(--text-secondary)",
                       }}
+                      title={
+                        m.status === "uploaded"
+                          ? "Ready — will be sent at publish time"
+                          : m.status === "uploading"
+                          ? "Uploading…"
+                          : "Local-only preview — won't reach the platform"
+                      }
                     >
-                      {m.source}
-                    </span>
-                    <button
-                      onClick={() => removeMedia(m.id)}
-                      style={{ color: "var(--text-muted)" }}
-                      aria-label="Remove media"
-                    >
-                      <X size={12} />
-                    </button>
-                  </div>
-                ))}
+                      {m.kind === "video" ? (
+                        <Film size={13} />
+                      ) : (
+                        <ImagePlus size={13} />
+                      )}
+                      <span className="flex-1 truncate">{m.name}</span>
+                      {statusIcon}
+                      <button
+                        onClick={() => removeMedia(m.id)}
+                        style={{ color: "var(--text-muted)" }}
+                        aria-label="Remove media"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
             {media.length === 0 && <div style={{ marginBottom: 16 }} />}
@@ -308,24 +402,37 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
               <TimePicker value={time} onChange={setTime} />
             </div>
 
-            <label
-              className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
-              style={{ color: "var(--text-tertiary)" }}
+            {/* Status used to be a manual dropdown, which produced the
+                "saved as Draft by accident → scheduler ignores it" bug the
+                user reported. Status is now auto-computed at save time:
+                - published / error  → stays (the scheduler owns these)
+                - draft + future date → flips to scheduled on Save
+                - draft + past date   → stays draft (un-fireable)
+                The badge below previews what Save will land on. */}
+            <div
+              className="px-3 py-2 rounded-lg text-xs flex items-center gap-2"
+              style={{
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--border-default)",
+                color: "var(--text-secondary)",
+              }}
             >
-              Status
-            </label>
-            <select
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-              className="input-field"
-              style={{ maxWidth: 220 }}
-            >
-              {STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {STATUS_META[s]?.label || s}
-                </option>
-              ))}
-            </select>
+              <span style={{ color: "var(--text-muted)" }}>Saving as</span>
+              <span
+                className={STATUS_META[status]?.badgeClass || "badge-draft"}
+                style={{ fontSize: 10 }}
+              >
+                {STATUS_META[status]?.label || status}
+              </span>
+              {status === "scheduled" && (
+                <span
+                  className="ml-auto text-[10px]"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  fires at {time} on {date}
+                </span>
+              )}
+            </div>
 
             {/* Publish results — the scheduler writes one row per target
                 once the post fires. Same content the bell menu shows, kept
@@ -492,8 +599,17 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
             <button className="btn-secondary text-sm" onClick={onClose}>
               Cancel
             </button>
-            <button className="btn-primary text-sm" onClick={handleSave}>
-              Save changes
+            <button
+              className="btn-primary text-sm"
+              onClick={handleSave}
+              disabled={hasPending}
+              title={
+                hasPending
+                  ? "Waiting for media to finish uploading…"
+                  : undefined
+              }
+            >
+              {hasPending ? "Uploading…" : "Save changes"}
             </button>
           </div>
         </div>
