@@ -1,22 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useDispatch, useSelector } from "react-redux";
 import {
   UploadCloud,
   Sparkles,
   Palette,
   Image as ImageIcon,
   Film,
-  Lock,
   Search,
+  Trash2,
+  Wand2,
+  CalendarClock,
 } from "lucide-react";
 import { listMedia } from "../../lib/searchService";
 import {
   ACCEPTED_TYPES,
   MAX_SIZE_BYTES,
+  deleteFromBackend,
   uploadToBackend,
   validateFile,
 } from "../../lib/uploadService";
+import { addMedia } from "../../store/editorSlice";
+import { addNotification, setActiveView } from "../../store/uiSlice";
 
 const TABS = [
   { id: "uploads", label: "Uploads", icon: ImageIcon },
@@ -24,30 +30,146 @@ const TABS = [
   { id: "brand", label: "Brand Kit", icon: Palette },
 ];
 
-function Tile({ item }) {
+/* Tile design follows the canonical Google-Photos / Dropbox gallery
+   pattern: a hover gradient overlay reveals a primary action (Use) and
+   secondary actions (delete) appear in the corners. The "Used in N posts"
+   badge top-left tells the team which assets are doing work so cleanup
+   decisions don't accidentally delete an in-use image. */
+function Tile({ item, onDelete, onUse, usageCount = 0 }) {
   const Icon = item.kind === "video" ? Film : ImageIcon;
-  const hasPreview = item.previewUrl && item.kind === "image";
+  // Prefer the persisted server URL — the local blob: previewUrl can be
+  // revoked or invalidated by a dev HMR reload or after sitting unused.
+  const previewSrc = item.remoteUrl || item.previewUrl;
+  const isImage = item.kind === "image";
+  const isVideo = item.kind === "video";
+  const hasImagePreview = previewSrc && isImage;
+  const hasVideoPreview = previewSrc && isVideo;
+  const canDelete = !!onDelete && item.status !== "uploading";
+  const canUse = !!onUse && item.status === "uploaded" && !!item.remoteUrl;
   return (
     <div
-      className="relative rounded-xl overflow-hidden flex items-center justify-center"
+      className="group relative rounded-xl overflow-hidden flex items-center justify-center"
       style={{
         aspectRatio: "1 / 1",
-        background: hasPreview
-          ? `center / cover no-repeat url(${item.previewUrl})`
+        background: hasImagePreview
+          ? `center / cover no-repeat url(${previewSrc})`
           : "linear-gradient(135deg, var(--bg-tertiary), var(--bg-elevated))",
         border: "1px solid var(--border-default)",
       }}
       title={item.name}
     >
-      {!hasPreview && (
+      {hasVideoPreview && (
+        <video
+          src={previewSrc}
+          muted
+          playsInline
+          preload="metadata"
+          className="absolute inset-0 w-full h-full object-cover"
+        />
+      )}
+      {!hasImagePreview && !hasVideoPreview && (
         <Icon size={28} style={{ color: "var(--text-muted)", opacity: 0.5 }} />
       )}
+
+      {/* Top-left badges (stacked) — video kind first, then usage count. */}
+      <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
+        {isVideo && (
+          <span
+            className="inline-flex items-center justify-center w-5 h-5 rounded-full"
+            style={{ background: "rgba(0,0,0,0.55)" }}
+            aria-label="Video"
+            title="Video"
+          >
+            <Film size={11} className="text-white" />
+          </span>
+        )}
+        {usageCount > 0 && (
+          <span
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold"
+            style={{
+              background: "rgba(99, 102, 241, 0.9)",
+              color: "#fff",
+              backdropFilter: "blur(4px)",
+            }}
+            title={`Referenced in ${usageCount} scheduled or published post${
+              usageCount === 1 ? "" : "s"
+            }`}
+          >
+            <CalendarClock size={10} aria-hidden="true" />
+            {usageCount}
+          </span>
+        )}
+      </div>
+
+      {canDelete && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(item);
+          }}
+          className="absolute top-1.5 right-1.5 inline-flex items-center justify-center w-7 h-7 rounded-full opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+          style={{
+            background: "rgba(15,23,42,0.7)",
+            color: "#fff",
+            border: "1px solid rgba(255,255,255,0.15)",
+          }}
+          aria-label={`Delete ${item.name}`}
+          title="Delete"
+        >
+          <Trash2 size={13} />
+        </button>
+      )}
+
+      {/* Hover gradient + primary action — only when the item is actually
+          usable (uploaded + has remoteUrl). Local-only previews skip this
+          so the user doesn't pick a tile that the AI / publish path can't
+          actually use. */}
+      {canUse && (
+        <div
+          className="absolute inset-0 flex items-end justify-center opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
+          style={{
+            background:
+              "linear-gradient(to top, rgba(15,23,42,0.78) 0%, rgba(15,23,42,0.0) 55%)",
+          }}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onUse(item);
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 mb-2 rounded-full text-xs font-semibold transition-transform"
+            style={{
+              background: "var(--accent-primary)",
+              color: "#fff",
+              boxShadow: "0 4px 12px rgba(15, 23, 42, 0.35)",
+            }}
+            title="Add this asset to a new post"
+            onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.97)")}
+            onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
+            onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
+          >
+            <Wand2 size={12} aria-hidden="true" />
+            Use in new post
+          </button>
+        </div>
+      )}
+
       {item.status === "uploading" && (
         <div
           className="absolute inset-0 flex items-center justify-center text-xs"
           style={{ background: "rgba(15,23,42,0.55)", color: "#fff" }}
         >
           Uploading…
+        </div>
+      )}
+      {item.status === "deleting" && (
+        <div
+          className="absolute inset-0 flex items-center justify-center text-xs"
+          style={{ background: "rgba(15,23,42,0.55)", color: "#fff" }}
+        >
+          Deleting…
         </div>
       )}
       {item.status === "error" && (
@@ -69,6 +191,8 @@ function Tile({ item }) {
 }
 
 export default function MediaLibraryView() {
+  const dispatch = useDispatch();
+  const scheduledPosts = useSelector((s) => s.calendar.scheduledPosts);
   const [tab, setTab] = useState("uploads");
   // Locally-known uploads (this session) — backend-persisted hits come from /search.
   const [uploads, setUploads] = useState([]);
@@ -77,6 +201,71 @@ export default function MediaLibraryView() {
   const [searching, setSearching] = useState(false);
   const fileInputRef = useRef(null);
   const seq = useRef(0);
+  const useSeq = useRef(0);
+
+  // Map of media filename / remote URL → number of scheduled or published
+  // posts that reference it. Built once per scheduledPosts change so the
+  // tile lookup below is O(1). Empty when no posts use any asset, which
+  // is the common case at boot.
+  const usageByName = useMemo(() => {
+    const counts = new Map();
+    for (const post of scheduledPosts) {
+      if (!Array.isArray(post.media)) continue;
+      for (const m of post.media) {
+        const keys = [m.filename, m.name, m.remoteUrl].filter(Boolean);
+        for (const k of keys) counts.set(k, (counts.get(k) || 0) + 1);
+      }
+    }
+    return counts;
+  }, [scheduledPosts]);
+
+  const usageCountFor = useCallback(
+    (item) => {
+      const candidates = [item.name, item.id, item.remoteUrl].filter(Boolean);
+      let max = 0;
+      for (const c of candidates) {
+        const v = usageByName.get(c) || 0;
+        if (v > max) max = v;
+      }
+      return max;
+    },
+    [usageByName]
+  );
+
+  // "Use in new post": append the library item to the editor's currentPost
+  // (no clobber of in-flight content), navigate to the Creation view, and
+  // surface a notification so the user knows where to find it. The
+  // backend filename rides along so the AI's vision routing kicks in on
+  // the next Generate without a re-upload.
+  const onUseInPost = useCallback(
+    (item) => {
+      const newId = `lib_${Date.now()}_${useSeq.current++}`;
+      dispatch(
+        addMedia([
+          {
+            id: newId,
+            name: item.name,
+            kind: item.kind || "image",
+            previewUrl: item.remoteUrl || item.previewUrl || null,
+            remoteUrl: item.remoteUrl || null,
+            status: "uploaded",
+            // Backend search returns the content-dir-relative path as `id`.
+            // Strip any folder prefix because /upload writes flat into
+            // content_dir and /generate expects just the filename.
+            filename: (item.id || item.name || "").split("/").pop(),
+          },
+        ])
+      );
+      dispatch(setActiveView("creation"));
+      dispatch(
+        addNotification({
+          message: `Added "${item.name}" to the post you're composing.`,
+          type: "success",
+        })
+      );
+    },
+    [dispatch]
+  );
 
   // Fetch remote media on mount and whenever the query changes (debounced).
   useEffect(() => {
@@ -161,8 +350,51 @@ export default function MediaLibraryView() {
     if (files.length) handleFiles(files);
   };
 
+  const handleDelete = useCallback(async (item) => {
+    if (!window.confirm(`Delete "${item.name}"? This cannot be undone.`)) return;
+
+    // Session-only items (upload still in progress, or backend offline): just drop locally.
+    const isRemote = !!item.remoteUrl || /^[^_].*\.[a-z0-9]+$/i.test(item.id || "");
+    if (!isRemote) {
+      setUploads((prev) => prev.filter((u) => u.id !== item.id));
+      return;
+    }
+
+    // Optimistic: mark as deleting, then either remove or restore on failure.
+    setUploads((prev) =>
+      prev.map((u) => (u.id === item.id ? { ...u, status: "deleting" } : u))
+    );
+    setRemoteHits((prev) =>
+      prev.map((h) => (h.id === item.id ? { ...h, status: "deleting" } : h))
+    );
+
+    // The backend path is the search `id` (content-dir-relative). For
+    // session uploads we don't have that, so fall back to filename.
+    const backendPath = item.id?.includes("/") || /\.[a-z0-9]+$/i.test(item.id || "")
+      ? item.id
+      : item.name;
+
+    const { ok, status } = await deleteFromBackend(backendPath);
+    if (!ok && status !== 404) {
+      setUploads((prev) =>
+        prev.map((u) => (u.id === item.id ? { ...u, status: "uploaded" } : u))
+      );
+      setRemoteHits((prev) =>
+        prev.map((h) => (h.id === item.id ? { ...h, status: "uploaded" } : h))
+      );
+      window.alert(`Couldn't delete "${item.name}" (HTTP ${status || "?"}).`);
+      return;
+    }
+
+    setUploads((prev) => prev.filter((u) => u.id !== item.id));
+    setRemoteHits((prev) => prev.filter((h) => h.id !== item.id));
+  }, []);
+
   // Build the displayed grid: this-session uploads first, then de-duplicated
-  // backend hits (avoid showing the same filename twice).
+  // backend hits (avoid showing the same filename twice). The remote hits
+  // now carry `kind` and `url`, so the Tile can render real thumbs without
+  // a second roundtrip — fixes the "everything is an icon after refresh"
+  // regression.
   const sessionNames = new Set(uploads.map((u) => u.name));
   const items =
     tab === "uploads"
@@ -172,9 +404,12 @@ export default function MediaLibraryView() {
             .filter((h) => !sessionNames.has(h.title))
             .map((h) => ({
               id: h.id,
-              kind: h.subtitle?.toLowerCase().includes("video") ? "video" : "image",
+              kind:
+                h.kind ||
+                (h.subtitle?.toLowerCase().includes("video") ? "video" : "image"),
               name: h.title,
               status: "uploaded",
+              remoteUrl: h.url || null,
               previewUrl: null,
             })),
         ]
@@ -259,7 +494,13 @@ export default function MediaLibraryView() {
               style={{ gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))" }}
             >
               {items.map((it) => (
-                <Tile key={it.id} item={it} />
+                <Tile
+                  key={it.id}
+                  item={it}
+                  onDelete={handleDelete}
+                  onUse={onUseInPost}
+                  usageCount={usageCountFor(it)}
+                />
               ))}
             </div>
           ) : (
@@ -289,8 +530,7 @@ export default function MediaLibraryView() {
           style={{ background: "var(--bg-card)", border: "1px dashed var(--border-default)", color: "var(--text-muted)" }}
         >
           <Sparkles size={30} className="opacity-40" />
-          <p className="text-sm">AI-generated assets</p>
-          <p className="text-xs">ComfyUI / LTX wiring (VD-T01 → VD-T04)</p>
+          <p className="text-sm">No AI-generated assets yet</p>
         </div>
       )}
 
@@ -301,14 +541,7 @@ export default function MediaLibraryView() {
         >
           <Palette size={30} className="opacity-40" />
           <p className="text-sm">Brand Kit — logos, palette & fonts</p>
-          <p className="text-xs">Configured in Settings (TP-T03)</p>
-        </div>
-      )}
-
-      {tab === "uploads" && (
-        <div className="mt-5 flex items-center gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
-          <Lock size={12} />
-          Uploads persist to the backend `/upload` endpoint. AI assets and Brand Kit are pending.
+          <p className="text-xs">Configured in Settings</p>
         </div>
       )}
     </div>
