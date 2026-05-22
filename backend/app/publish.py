@@ -16,12 +16,17 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import mimetypes
+import os
 import time
 from dataclasses import dataclass, asdict
+from pathlib import Path
 from typing import Any
 
 import httpx
 from fastapi import HTTPException
+
+from .config import settings
 
 # ── Spam guards ─────────────────────────────────────────────────────
 # Two cheap in-memory checks so a runaway button-press doesn't flood
@@ -345,6 +350,33 @@ async def publish_instagram(
 # ── TikTok stub ─────────────────────────────────────────────────────
 
 
+def _resolve_media_to_disk_path(media_url: str | None) -> Path | None:
+    """Map a public media URL (the one we'd hand to TikTok via
+    PULL_FROM_URL) back to its local file path so we can read the bytes
+    for the FILE_UPLOAD flow.
+
+    The /upload endpoint stores everything flat in `settings.content_dir`
+    and serves it under <base>/content/<filename>. So the trailing path
+    segment after /content/ is the on-disk filename. Returns None when
+    the URL doesn't map to a local file (e.g. someone passed an external
+    URL) — caller falls back to PULL_FROM_URL or fails cleanly.
+    """
+    if not media_url:
+        return None
+    marker = "/content/"
+    idx = media_url.find(marker)
+    if idx < 0:
+        return None
+    rel = media_url[idx + len(marker):]
+    # Defence in depth: never let "../" escape content_dir.
+    candidate = (settings.content_dir / rel).resolve()
+    try:
+        candidate.relative_to(settings.content_dir.resolve())
+    except ValueError:
+        return None
+    return candidate if candidate.is_file() else None
+
+
 async def publish_tiktok(
     open_id: str,
     access_token: str,
@@ -356,27 +388,32 @@ async def publish_tiktok(
     disclose_video_branded: bool = False,
     disclose_video_your_brand: bool = False,
     audit_mode: str = "inbox",
+    upload_mode: str | None = None,
 ) -> PublishResult:
     """Publish a video to TikTok via the Content Posting API.
 
-    Two surfaces, same shape — `audit_mode` picks which:
-
+    `audit_mode` picks the endpoint family:
       - "inbox"  → /v2/post/publish/inbox/video/init/  (sandbox / pre-audit;
                   video lands in the user's TikTok inbox, they tap Publish
-                  manually in-app). This is the only mode that works before
-                  TikTok approves the `video.publish` scope.
+                  manually in-app)
+      - "direct" → /v2/post/publish/video/init/  (post-audit direct-post;
+                  requires `video.publish` scope)
 
-      - "direct" → /v2/post/publish/video/init/  (post-audit; direct to
-                  feed, no human tap). Requires `video.publish` scope.
+    `upload_mode` picks how the video bytes get to TikTok:
+      - "pull"  → PULL_FROM_URL: we hand TikTok the public URL; TikTok's
+                  servers fetch it. Requires the URL prefix to be
+                  pre-verified in TikTok's URL Properties.
+      - "file"  → FILE_UPLOAD: we PUT the bytes directly to the
+                  upload_url TikTok returns from /init/. No URL
+                  verification needed. Same flow Buffer / Hootsuite use.
 
-    `privacy_level` is one of TikTok's published values:
-      PUBLIC_TO_EVERYONE | MUTUAL_FOLLOW_FRIENDS | FOLLOWER_OF_CREATOR | SELF_ONLY
-    Sandbox forces SELF_ONLY regardless of what we send; once audited the
-    full set is honoured.
+    When `upload_mode` is None (default), reads TIKTOK_UPLOAD_MODE from
+    the env; if that's unset, defaults to "file" because the unverified-
+    prefix failure ("invalid domain") is what blocks every new install.
 
-    PULL_FROM_URL upload mode requires the URL prefix to be verified in
-    TikTok's URL Properties panel. Until that's done, this raises a
-    clear error rather than failing opaquely from upstream.
+    `privacy_level`: PUBLIC_TO_EVERYONE | MUTUAL_FOLLOW_FRIENDS |
+    FOLLOWER_OF_CREATOR | SELF_ONLY. Sandbox forces SELF_ONLY regardless;
+    once audited the full set is honoured.
     """
     if not video_url:
         return PublishResult(
@@ -387,26 +424,60 @@ async def publish_tiktok(
             error="tiktok_requires_video",
         )
 
+    # Resolve the upload mode. FILE_UPLOAD is the safer default — it
+    # works regardless of URL-prefix verification status.
+    mode = (upload_mode or os.environ.get("TIKTOK_UPLOAD_MODE") or "file").lower()
+    if mode not in ("pull", "file"):
+        mode = "file"
+
     base = "https://open.tiktokapis.com/v2/post/publish"
     init_path = f"{base}/inbox/video/init/" if audit_mode == "inbox" else f"{base}/video/init/"
 
+    post_info = {
+        "title": content[:2200] if content else "",
+        "privacy_level": privacy_level,
+        "disable_duet": False,
+        "disable_comment": False,
+        "disable_stitch": False,
+        "video_cover_timestamp_ms": 1000,
+        # Two branded-content flags TikTok specifically requires the UI
+        # to surface separately; we forward whatever the editor sent.
+        "brand_content_toggle": bool(disclose_video_branded),
+        "brand_organic_toggle": bool(disclose_video_your_brand),
+    }
+
+    # Build the source_info block based on upload mode.
+    if mode == "pull":
+        source_info = {"source": "PULL_FROM_URL", "video_url": video_url}
+        local_path: Path | None = None
+        video_size = 0
+    else:
+        local_path = _resolve_media_to_disk_path(video_url)
+        if local_path is None:
+            return PublishResult(
+                target_id=open_id,
+                target_label=handle_label,
+                platform="tiktok",
+                ok=False,
+                error="tiktok_file_upload_needs_local_media",
+                raw={"video_url": video_url},
+            )
+        video_size = local_path.stat().st_size
+        # TikTok chunked-upload knobs. Single-chunk for anything under 64 MB
+        # keeps the code simple — almost every short-form TikTok video fits.
+        # Larger files would need a chunked loop; not relevant at our scale.
+        chunk_size = video_size
+        total_chunk_count = 1
+        source_info = {
+            "source": "FILE_UPLOAD",
+            "video_size": video_size,
+            "chunk_size": chunk_size,
+            "total_chunk_count": total_chunk_count,
+        }
+
     init_body: dict[str, Any] = {
-        "post_info": {
-            "title": content[:2200] if content else "",
-            "privacy_level": privacy_level,
-            "disable_duet": False,
-            "disable_comment": False,
-            "disable_stitch": False,
-            "video_cover_timestamp_ms": 1000,
-            # Two branded-content flags TikTok specifically requires the UI
-            # to surface separately; we forward whatever the editor sent.
-            "brand_content_toggle": bool(disclose_video_branded),
-            "brand_organic_toggle": bool(disclose_video_your_brand),
-        },
-        "source_info": {
-            "source": "PULL_FROM_URL",
-            "video_url": video_url,
-        },
+        "post_info": post_info,
+        "source_info": source_info,
     }
 
     try:
@@ -439,6 +510,51 @@ async def publish_tiktok(
                 error="tiktok_init_returned_no_publish_id",
                 raw=init_resp.json(),
             )
+
+        # FILE_UPLOAD bytes step. Init returned an `upload_url`; we PUT the
+        # whole file there with the Content-Range header TikTok requires.
+        # Single-chunk path only — for >64 MB videos this would be a loop
+        # over chunk_size slices, but our editor caps at well under that.
+        if mode == "file" and local_path is not None:
+            upload_url = init_data.get("upload_url")
+            if not upload_url:
+                return PublishResult(
+                    target_id=open_id,
+                    target_label=handle_label,
+                    platform="tiktok",
+                    ok=False,
+                    error="tiktok_init_returned_no_upload_url",
+                    raw=init_data,
+                )
+            video_bytes = local_path.read_bytes()
+            content_type = (
+                mimetypes.guess_type(local_path.name)[0] or "video/mp4"
+            )
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                put_resp = await client.put(
+                    upload_url,
+                    headers={
+                        "Content-Type": content_type,
+                        "Content-Length": str(len(video_bytes)),
+                        # Required by TikTok: byte range for this chunk.
+                        # bytes <start>-<end>/<total>; we send one chunk
+                        # that covers the whole file.
+                        "Content-Range": f"bytes 0-{len(video_bytes) - 1}/{len(video_bytes)}",
+                    },
+                    content=video_bytes,
+                )
+            # TikTok returns 201 Created (or 200) on a complete upload,
+            # 308 Resume Incomplete on partial / chunked uploads. Anything
+            # 4xx/5xx is a hard failure for our single-chunk flow.
+            if put_resp.status_code >= 400:
+                return PublishResult(
+                    target_id=open_id,
+                    target_label=handle_label,
+                    platform="tiktok",
+                    ok=False,
+                    error=f"tiktok_upload_failed: HTTP {put_resp.status_code}",
+                    raw={"response": put_resp.text[:800]},
+                )
 
         # Poll the status endpoint until the upload is done or fails.
         # Inbox mode finishes at "SEND_TO_USER_INBOX" (user has to tap),

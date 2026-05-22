@@ -9,6 +9,7 @@ from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
+from .legal import router as legal_router
 from .oauth import router as oauth_router
 from .routes import router
 from .scheduler import start_scheduler, stop_scheduler
@@ -33,6 +34,10 @@ app.mount("/content", StaticFiles(directory=settings.content_dir), name="content
 # ── Routes ─────────────────────────────────────────────────────────────
 app.include_router(router)
 app.include_router(oauth_router)
+# Privacy + Terms pages — TikTok / LinkedIn / Meta dev portals all
+# require publicly-reachable URLs. Served at /privacy and /terms so
+# they're stable regardless of which deployment target is in front.
+app.include_router(legal_router)
 
 
 # ── TikTok domain verification ────────────────────────────────────────

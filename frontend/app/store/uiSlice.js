@@ -80,6 +80,14 @@ const uiSlice = createSlice({
       const notif = state.notifications.find((n) => n.id === action.payload);
       if (notif) notif.read = true;
     },
+    /* Bulk mark-as-read — used when the bell dropdown opens so the user
+       doesn't have to click each row to drop the unread badge. Without
+       this, post-publish notifications (which carry a permalink URL)
+       were "unskippable": the only way to mark them read was to click,
+       which opened the link in a new tab. */
+    markAllNotificationsRead: (state) => {
+      for (const n of state.notifications) n.read = true;
+    },
     clearNotifications: (state) => {
       state.notifications = [];
     },
@@ -118,6 +126,9 @@ const uiSlice = createSlice({
     markMessageRead: (state, action) => {
       const msg = state.messages.items.find((m) => m.id === action.payload);
       if (msg) msg.read = true;
+    },
+    markAllMessagesRead: (state) => {
+      for (const m of state.messages.items) m.read = true;
     },
     toggleCommandPalette: (state) => {
       state.commandPaletteOpen = !state.commandPaletteOpen;
@@ -176,6 +187,7 @@ export const {
   setActiveView,
   addNotification,
   markNotificationRead,
+  markAllNotificationsRead,
   clearNotifications,
   setSearchQuery,
   setSearchStatus,
@@ -184,6 +196,7 @@ export const {
   setMessagesStatus,
   setMessages,
   markMessageRead,
+  markAllMessagesRead,
   toggleCommandPalette,
   setConnectivity,
   setTheme,

@@ -4,8 +4,10 @@ import { useState, useMemo, useEffect, useRef, useSyncExternalStore } from "reac
 import { useSelector, useDispatch } from "react-redux";
 import {
   markNotificationRead,
+  markAllNotificationsRead,
   clearNotifications,
   markMessageRead,
+  markAllMessagesRead,
   setConnectivity,
   setTheme,
   setActiveView,
@@ -33,13 +35,16 @@ import {
   Loader2,
   Menu,
   Coins,
+  ExternalLink,
 } from "lucide-react";
 
 const VIEW_TITLES = {
+  dashboard: "Dashboard",
   creation: "Creation & Editor",
   calendar: "Calendar & Scheduling",
   library: "Media & Templates",
   analytics: "Analytics & API Costs",
+  credits: "Credits & Billing",
   settings: "Settings & Integrations",
 };
 
@@ -133,11 +138,29 @@ export default function Topbar() {
   const initials = authUser?.initials || "DT";
   const resultsVisible = showResults && searchQuery.trim() && searchView === activeView;
 
+  /* Row click marks the item as read but does NOT auto-open its URL.
+     Before: any click opened the URL in a new tab AND marked read, which
+     meant the only way to "dismiss" a publish-success notification was
+     to click — opening an unwanted tab every time. Now the URL has its
+     own click target (the external-link icon) so the row can be marked
+     read independently. The auto-mark on bell open also handles the
+     "I just want to skip these" case without any click at all. */
   const onFeedItemClick = (item) => {
     if (item.read) return;
     if (item.source === "message") dispatch(markMessageRead(item.id));
     else dispatch(markNotificationRead(item.id));
   };
+
+  /* When the bell opens, every visible notification + message gets
+     marked as read in bulk. Matches the Slack / Linear / Notion
+     pattern: opening the inbox = seen. The visual "newness" tint on
+     each row stays for the current open since React renders synchronously
+     before the reducer runs; next open they all read as plain. */
+  useEffect(() => {
+    if (!showNotifications) return;
+    dispatch(markAllNotificationsRead());
+    dispatch(markAllMessagesRead());
+  }, [showNotifications, dispatch]);
 
   // Clicking a search result navigates to the owning view, then resets search.
   const onResultClick = (r) => {
@@ -450,7 +473,7 @@ export default function Topbar() {
                 <div className="py-5 px-4 text-center">
                   <p className="text-sm" style={{ color: "var(--text-muted)" }}>No messages yet</p>
                   <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>
-                    Webhook alerts and Telegram pings will appear here
+                    Notifications will appear here
                   </p>
                 </div>
               ) : (
@@ -471,8 +494,24 @@ export default function Topbar() {
                         style={{ background: item.read ? "var(--text-muted)" : "var(--accent-primary)" }}
                         aria-hidden="true"
                       />
-                      <div className="min-w-0">
-                        <p className="text-xs" style={{ color: "var(--text-primary)" }}>{item.message}</p>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs flex items-center gap-1" style={{ color: "var(--text-primary)" }}>
+                          <span className="flex-1">{item.message}</span>
+                          {item.url && (
+                            <a
+                              href={item.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="shrink-0 inline-flex items-center justify-center rounded p-0.5"
+                              style={{ color: "var(--accent-primary)" }}
+                              aria-label="Open the live post in a new tab"
+                              title="Open the live post in a new tab"
+                            >
+                              <ExternalLink size={11} />
+                            </a>
+                          )}
+                        </p>
                         <p className="text-[10px] mt-0.5" style={{ color: "var(--text-muted)" }}>
                           {new Date(item.timestamp).toLocaleString()}
                         </p>
