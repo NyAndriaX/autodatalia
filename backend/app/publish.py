@@ -355,16 +355,22 @@ async def publish_instagram(
             # We MUST wait for each child (video OR image) to be FINISHED
             # before we can attach them to a CAROUSEL container.
             for child_id in children:
-                for _ in range(30):
-                    status = await _get_json(
-                        f"{base}/{child_id}",
-                        params={"fields": "status_code", "access_token": page_access_token},
-                    )
-                    code = status.get("status_code")
-                    if code == "FINISHED":
-                        break
-                    if code == "ERROR":
-                        raise HTTPException(502, f"IG child processing failed: {status}")
+                for attempt in range(30):
+                    try:
+                        status = await _get_json(
+                            f"{base}/{child_id}",
+                            params={"fields": "status_code", "access_token": page_access_token},
+                        )
+                        code = status.get("status_code")
+                        if code == "FINISHED":
+                            break
+                        if code == "ERROR":
+                            raise HTTPException(502, f"IG child processing failed: {status}")
+                    except HTTPException as exc:
+                        # Meta 100 subcode 33 ("Object does not exist") happens
+                        # due to eventual consistency. Ignore and retry.
+                        if attempt == 29:
+                            raise
                     await asyncio.sleep(2)
             
             # Create carousel container
