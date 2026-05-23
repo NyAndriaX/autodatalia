@@ -119,9 +119,62 @@ def crop_for_targets(
     """Convenience for the publish route — returns media_url cropped for
     the given platform, or the original if no per-platform ratio is set.
     """
-    if not media_url or not ratios:
+    if not media_url:
         return media_url
+
+    ratios = ratios or {}
     spec = ratios.get(platform)
+
+    # Instagram STRICTLY requires aspect ratio between 0.8 (4:5) and 1.91:1.
+    # If the user didn't explicitly pick a ratio, we must auto-enforce this
+    # to prevent Meta 36003 errors.
+    if not spec and platform == "instagram":
+        src = _local_path_from_public_url(media_url)
+        if src and src.exists():
+            try:
+                with Image.open(src) as img:
+                    w, h = img.size
+                    ratio = w / h
+                    if ratio < 0.8:
+                        spec = "4:5"
+                    elif ratio > 1.91:
+                        spec = "1.91:1"
+            except Exception:
+                pass
+
+    # TikTok STRICTLY requires JPEG or WEBP for photos/carousels (no PNG).
+    # If the image ends with .png, .gif, etc., we auto-convert it to .jpg
+    # to prevent file_format_check_failed.
+    if platform == "tiktok":
+        ext = (media_url or "").lower().rsplit(".", 1)[-1]
+        is_photo = ext in {"png", "jpg", "jpeg", "webp", "gif"}
+        
+        if is_photo and spec and spec not in {"9:16", "1:1", "4:5"}:
+            # TikTok strictly rejects 16:9 for photos/carousels with picture_size_check_failed
+            spec = "1:1"
+
+        src = _local_path_from_public_url(media_url)
+        if src and src.exists():
+            ext = src.suffix.lower()
+            if ext not in {".jpg", ".jpeg", ".webp"}:
+                # Convert PNG/other to JPG with white background for transparency
+                out = src.with_name(f"{src.stem}_converted.jpg")
+                if not out.exists():
+                    try:
+                        with Image.open(src) as img:
+                            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                                bg = Image.new("RGB", img.size, (255, 255, 255))
+                                bg.paste(img, mask=img.convert("RGBA").split()[3])
+                                img = bg
+                            else:
+                                img = img.convert("RGB")
+                            img.save(out, "JPEG", quality=95, optimize=True)
+                    except Exception:
+                        out = None
+                if out and out.exists():
+                    media_url = media_url.replace(src.name, out.name, 1)
+
     if not spec:
         return media_url
+        
     return crop_media_to_ratio(media_url, spec)

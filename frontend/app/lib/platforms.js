@@ -93,8 +93,9 @@ export const RATIOS_BY_PLATFORM = {
     defaultRatio: "9:16",
     options: [
       { value: "9:16", label: "Vertical (9:16)", hint: "Full-screen feed" },
-      { value: "1:1", label: "Square (1:1)", hint: "Cross-post (letterboxed)" },
-      { value: "16:9", label: "Landscape (16:9)", hint: "Pillarboxed upload" },
+      { value: "1:1", label: "Square (1:1)", hint: "Carousel / Cross-post" },
+      { value: "4:5", label: "Tall (4:5)", hint: "Carousel photo" },
+      { value: "16:9", label: "Landscape (16:9)", hint: "Video only" },
     ],
   },
   linkedin: {
