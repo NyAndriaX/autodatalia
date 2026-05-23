@@ -86,6 +86,15 @@ def _resolve_media_url(post: dict[str, Any]) -> str | None:
     return None
 
 
+def _resolve_media_urls(post: dict[str, Any]) -> list[str]:
+    """Pick all uploaded media's remote URLs."""
+    urls = []
+    for m in post.get("media") or []:
+        if m.get("status") == "uploaded" and m.get("remoteUrl"):
+            urls.append(m["remoteUrl"])
+    return urls
+
+
 def _resolve_media_kind(post: dict[str, Any]) -> str:
     """First uploaded video → 'video', else 'image' (IG needs this hint)."""
     for m in post.get("media") or []:
@@ -147,11 +156,14 @@ async def fire_post(post: dict[str, Any]) -> dict[str, Any]:
     """
     pid = post["id"]
     media_url = _resolve_media_url(post)
+    media_urls = _resolve_media_urls(post)
     targets = await build_targets_from_post(
         platforms=post.get("platforms") or {},
         media_url=media_url,
+        media_urls=media_urls,
         media_kind=_resolve_media_kind(post),
         ratios=post.get("ratios"),
+        tiktok_options=post.get("tiktok"),
     )
 
     if not targets:

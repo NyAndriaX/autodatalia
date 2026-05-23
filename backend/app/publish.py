@@ -333,24 +333,21 @@ async def publish_instagram(
             # Step 1 — create carousel children
             children = []
             for idx, url in enumerate(effective_urls[:10]): # IG max is 10
-                child_params: dict[str, Any] = {
-                    "access_token": page_access_token,
-                    "is_carousel_item": "true",
-                }
-                if media_kind == "video":
-                    child_params["media_type"] = "VIDEO"
-                    child_params["video_url"] = url
-                else:
-                    child_params["image_url"] = url
-
-                try:
-                    child = await _post_json(f"{base}/{ig_user_id}/media", data=child_params)
-                except HTTPException as exc:
-                    detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
-                    detail["carousel_child_index"] = idx
-                    detail["carousel_child_url"] = url
+                child = await _post_json(
+                    f"{base}/{ig_user_id}/media",
+                    data={
+                        "image_url" if media_kind == "image" else "video_url": url,
+                        "is_carousel_item": "true",
+                        **({"media_type": "VIDEO"} if media_kind == "video" else {}),
+                        "access_token": page_access_token,
+                    },
+                )
+                if child.get("error"):
+                    detail = child["error"].get("message", "IG child container creation failed")
                     raise HTTPException(status_code=502, detail=detail)
                 children.append(child.get("id"))
+                # Stagger to avoid ngrok 429 Too Many Requests (Meta crawler fetching everything at once)
+                await asyncio.sleep(2)
             
             # We MUST wait for each child (video OR image) to be FINISHED
             # before we can attach them to a CAROUSEL container.
@@ -563,7 +560,7 @@ async def publish_tiktok_photo(
     source_info: dict[str, Any] = {
         "source": "PULL_FROM_URL",
         "photo_cover_index": 0,
-        "photo_images": effective_urls,
+        "photo_images": [{"image_url": u} for u in effective_urls],
     }
 
     # Build bodies for both modes
@@ -581,10 +578,7 @@ async def publish_tiktok_photo(
             }
         else:
             return {
-                "post_info": {
-                    "title": (content or "")[:90],
-                    "description": (content or "")[:4000],
-                },
+                # TikTok throws 'invalid_params' if post_info is included for inbox drafts
                 "source_info": source_info,
                 "post_mode": "MEDIA_UPLOAD",
                 "media_type": "PHOTO",
@@ -1123,11 +1117,11 @@ async def publish_linkedin(
 async def build_targets_from_post(
     *,
     platforms: dict[str, bool],
-    media_url: str | None,
+    media_url: str | None = None,
     media_urls: list[str] | None = None,
     media_kind: str = "image",
-    link: str | None = None,
     ratios: dict[str, str] | None = None,
+    tiktok_options: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Build a publish-ready target list from a Post's `platforms` toggle map.
 
@@ -1198,6 +1192,7 @@ async def build_targets_from_post(
                     "png", "jpg", "jpeg", "webp", "gif"
                 } else "video"
 
+            tk_opts = tiktok_options or {}
             resolved.append({
                 "platform": "tiktok",
                 "id": open_id or "tiktok",
@@ -1206,6 +1201,10 @@ async def build_targets_from_post(
                 "media_url": media_url,
                 "media_urls": effective_urls,
                 "media_kind": tk_kind,
+                "privacy_level": tk_opts.get("privacy_level", "SELF_ONLY"),
+                "disclose_video_branded": tk_opts.get("disclose_video_branded", False),
+                "disclose_video_your_brand": tk_opts.get("disclose_video_your_brand", False),
+                "audit_mode": tk_opts.get("audit_mode", "inbox"),
             })
         elif platform == "linkedin":
             record = tokens.get(platform) or {}
