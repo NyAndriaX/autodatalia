@@ -51,6 +51,7 @@ export default function ScheduleModal({
   // scheduler fires the post — without this, the ratio picked in the
   // editor would be lost the moment the user clicked Schedule.
   initialRatios = null,
+  initialTikTok = null,
   title = "Schedule a post",
   submitLabel = "Schedule",
   onClose,
@@ -451,6 +452,7 @@ export default function ScheduleModal({
                 // entries fall back to RATIOS_BY_PLATFORM defaults server-
                 // side, so we don't need to pre-fill anything here).
                 ratios: Object.keys(ratios).length ? ratios : undefined,
+                tiktok: initialTikTok,
               })
             }
           >

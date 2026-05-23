@@ -371,16 +371,25 @@ async def publish_instagram(
                     await asyncio.sleep(2)
             
             # Create carousel container
-            container = await _post_json(
-                f"{base}/{ig_user_id}/media",
-                data={
-                    "caption": content,
-                    "media_type": "CAROUSEL",
-                    "children": ",".join(children),
-                    "access_token": page_access_token,
-                },
-            )
-            creation_id = container.get("id")
+            container = None
+            for attempt in range(5):
+                try:
+                    container = await _post_json(
+                        f"{base}/{ig_user_id}/media",
+                        data={
+                            "caption": content,
+                            "media_type": "CAROUSEL",
+                            "children": ",".join(children),
+                            "access_token": page_access_token,
+                        },
+                    )
+                    break
+                except HTTPException:
+                    if attempt == 4:
+                        raise
+                    await asyncio.sleep(3)
+                    
+            creation_id = container.get("id") if container else None
             if not creation_id:
                 raise HTTPException(502, "Instagram returned no creation_id for carousel.")
         else:
@@ -696,12 +705,15 @@ async def publish_tiktok_photo(
                 break
             if last_status in terminal_failure:
                 fail_reason = last_payload.get("fail_reason") or last_status
+                hint = ""
+                if fail_reason == "picture_size_check_failed":
+                    hint = " — TikTok requires images to be exactly 9:16, 1:1, or 4:5. Please adjust your aspect ratio in the UI."
                 return PublishResult(
                     target_id=open_id,
                     target_label=handle_label,
                     platform="tiktok",
                     ok=False,
-                    error=f"tiktok_publish_failed: {fail_reason}",
+                    error=f"tiktok_publish_failed: {fail_reason}{hint}",
                     raw=last_payload,
                 )
             await asyncio.sleep(2)

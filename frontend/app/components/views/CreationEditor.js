@@ -722,6 +722,7 @@ export default function CreationEditor() {
           // the exact same media URL + crops the manual Publish path uses.
           initialMedia={currentPost.media}
           initialRatios={currentPost.ratios}
+          initialTikTok={currentPost.tiktok}
           onClose={() => setShowSchedule(false)}
           onSchedule={(post) => {
             dispatch(schedulePostThunk({ post, date: post.scheduledDate }));
@@ -996,6 +997,7 @@ function PlatformPreview({
   media = [],
   creator = null,
 }) {
+  const [mediaIdx, setMediaIdx] = useState(0);
   const Icon = platform.icon;
   const charPercent = Math.min((content.length / platform.maxChars) * 100, 100);
   const hashOverLimit = hashtagCount > platform.maxHashtags;
@@ -1008,7 +1010,9 @@ function PlatformPreview({
   // TikTok's brand color is a theme var (readable text), so use a fixed dark
   // chip as the avatar background to keep white initials legible.
   const avatarBg = platform.id === "tiktok" ? "#0f172a" : platform.color;
-  const hero = media[0];
+  const effectiveMedia = media.slice(0, 10);
+  const currentIdx = Math.min(mediaIdx, Math.max(0, effectiveMedia.length - 1));
+  const hero = effectiveMedia[currentIdx];
   // Per-platform creator card: when a connected account exists for this
   // platform, show its real avatar + @handle here. TikTok specifically
   // requires the creator info to appear on the compose screen BEFORE
@@ -1088,13 +1092,33 @@ function PlatformPreview({
                 }}
               />
             )}
-            {media.length > 1 && (
-              <span
-                className="absolute top-2 right-2 px-2 py-0.5 rounded-full text-[10px] font-semibold text-white"
-                style={{ background: "rgba(0,0,0,0.6)" }}
-              >
-                1 / {media.length}
-              </span>
+            {effectiveMedia.length > 1 && (
+              <>
+                <span
+                  className="absolute top-2 right-2 px-2 py-0.5 rounded-full text-[10px] font-semibold text-white z-10"
+                  style={{ background: "rgba(0,0,0,0.6)" }}
+                >
+                  {currentIdx + 1} / {effectiveMedia.length}
+                </span>
+                {currentIdx > 0 && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setMediaIdx(i => i - 1); }}
+                    className="absolute left-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full flex items-center justify-center bg-black/50 text-white hover:bg-black/70 transition-colors z-10"
+                    aria-label="Previous media"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                  </button>
+                )}
+                {currentIdx < effectiveMedia.length - 1 && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setMediaIdx(i => i + 1); }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full flex items-center justify-center bg-black/50 text-white hover:bg-black/70 transition-colors z-10"
+                    aria-label="Next media"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                  </button>
+                )}
+              </>
             )}
           </>
         ) : (
