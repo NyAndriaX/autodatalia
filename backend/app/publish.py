@@ -76,9 +76,9 @@ def record_publish(target_id: str, content: str, media_url: str | None) -> None:
 def _meta_error_message(resp_text: str) -> str | None:
     """Extract Meta's human-readable error message from an upstream response.
 
-    Meta errors come back as {"error": {"message": "...", "code": N, ...}}.
-    Surfacing this in the notification beats the generic "publish failed"
-    string when debugging permission / token / URL-fetch issues.
+    Meta errors come back as {"error": {"message": "...", "code": N, "error_subcode": N,
+    "error_user_title": "...", "error_user_msg": "..."}}. Surfacing the user-facing
+    fields beats the generic "publish failed" string.
     """
     try:
         body = json.loads(resp_text)
@@ -89,8 +89,18 @@ def _meta_error_message(resp_text: str) -> str | None:
         return None
     msg = err.get("message")
     code = err.get("code")
+    subcode = err.get("error_subcode") or err.get("subcode")
+    user_title = err.get("error_user_title")
+    user_msg = err.get("error_user_msg")
     if msg and code is not None:
-        return f"Meta {code}: {msg}"
+        parts = [f"Meta {code}: {msg}"]
+        if subcode is not None:
+            parts.append(f"subcode {subcode}")
+        if user_title:
+            parts.append(user_title)
+        if user_msg:
+            parts.append(user_msg)
+        return " — ".join(parts)
     return msg
 
 # ── Result type ─────────────────────────────────────────────────────
@@ -175,6 +185,7 @@ async def publish_facebook_page(
     page_label: str,
     content: str,
     media_url: str | None = None,
+    media_urls: list[str] | None = None,
     link: str | None = None,
     media_kind: str = "image",
 ) -> PublishResult:
@@ -197,7 +208,35 @@ async def publish_facebook_page(
     """
     base = "https://graph.facebook.com/v21.0"
     try:
-        if media_url and media_kind == "video":
+        effective_urls = media_urls or ([media_url] if media_url else [])
+        if len(effective_urls) > 1 and media_kind == "image":
+            # Multi-image carousel
+            attached_media = []
+            for url in effective_urls:
+                photo = await _post_json(
+                    f"{base}/{page_id}/photos",
+                    data={
+                        "url": url,
+                        "published": "false",
+                        "access_token": page_access_token,
+                    },
+                )
+                attached_media.append({"media_fbid": photo.get("id")})
+            
+            feed_data = {
+                "message": content,
+                "access_token": page_access_token,
+                "published": "true",
+            }
+            # Pass attached_media as a JSON-encoded array of objects
+            feed_data["attached_media"] = json.dumps(attached_media)
+                
+            data = await _post_json(
+                f"{base}/{page_id}/feed",
+                data=feed_data,
+            )
+            post_id = data.get("id")
+        elif media_url and media_kind == "video":
             # /videos accepts `file_url` for URL ingest. Returns {id} —
             # the post-id needed to build a permalink isn't surfaced
             # the same way as /photos, so we fetch it separately.
@@ -268,7 +307,8 @@ async def publish_instagram(
     *,
     ig_label: str,
     content: str,
-    media_url: str,
+    media_url: str | None = None,
+    media_urls: list[str] | None = None,
     media_kind: str = "image",
 ) -> PublishResult:
     """Publish to an Instagram Business account via the Graph API.
@@ -288,38 +328,91 @@ async def publish_instagram(
     base = "https://graph.facebook.com/v21.0"
 
     try:
-        # Step 1 — create container
-        container_params: dict[str, Any] = {
-            "caption": content,
-            "access_token": page_access_token,
-        }
-        if media_kind == "video":
-            # Prefer REELS over legacy VIDEO — REELS allows up to 15min
-            # and is the only path Meta still actively develops. Legacy
-            # VIDEO returns `Meta 100: Invalid parameter` for clips that
-            # exceed 60s; REELS goes up to 15min so the same upload that
-            # would fail as a feed video posts cleanly as a reel.
-            container_params["media_type"] = "REELS"
-            container_params["video_url"] = media_url
-            # Also surface in feed (default is reels-tab-only). Without
-            # this flag the post is technically published but invisible
-            # in the regular profile timeline.
-            container_params["share_to_feed"] = "true"
-        else:
-            container_params["image_url"] = media_url
+        effective_urls = media_urls or ([media_url] if media_url else [])
+        if len(effective_urls) > 1:
+            # Step 1 — create carousel children
+            children = []
+            for idx, url in enumerate(effective_urls[:10]): # IG max is 10
+                child_params: dict[str, Any] = {
+                    "access_token": page_access_token,
+                    "is_carousel_item": "true",
+                }
+                if media_kind == "video":
+                    child_params["media_type"] = "VIDEO"
+                    child_params["video_url"] = url
+                else:
+                    child_params["image_url"] = url
 
-        container = await _post_json(
-            f"{base}/{ig_user_id}/media",
-            data=container_params,
-        )
-        creation_id = container.get("id")
-        if not creation_id:
-            raise HTTPException(
-                502, "Instagram returned no creation_id from /media."
+                try:
+                    child = await _post_json(f"{base}/{ig_user_id}/media", data=child_params)
+                except HTTPException as exc:
+                    detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+                    detail["carousel_child_index"] = idx
+                    detail["carousel_child_url"] = url
+                    raise HTTPException(status_code=502, detail=detail)
+                children.append(child.get("id"))
+            
+            # We MUST wait for each child (video OR image) to be FINISHED
+            # before we can attach them to a CAROUSEL container.
+            for child_id in children:
+                for _ in range(30):
+                    status = await _get_json(
+                        f"{base}/{child_id}",
+                        params={"fields": "status_code", "access_token": page_access_token},
+                    )
+                    code = status.get("status_code")
+                    if code == "FINISHED":
+                        break
+                    if code == "ERROR":
+                        raise HTTPException(502, f"IG child processing failed: {status}")
+                    await asyncio.sleep(2)
+            
+            # Create carousel container
+            container = await _post_json(
+                f"{base}/{ig_user_id}/media",
+                data={
+                    "caption": content,
+                    "media_type": "CAROUSEL",
+                    "children": ",".join(children),
+                    "access_token": page_access_token,
+                },
             )
+            creation_id = container.get("id")
+            if not creation_id:
+                raise HTTPException(502, "Instagram returned no creation_id for carousel.")
+        else:
+            # Step 1 — create container
+            container_params: dict[str, Any] = {
+                "caption": content,
+                "access_token": page_access_token,
+            }
+            if media_kind == "video":
+                # Prefer REELS over legacy VIDEO — REELS allows up to 15min
+                # and is the only path Meta still actively develops. Legacy
+                # VIDEO returns `Meta 100: Invalid parameter` for clips that
+                # exceed 60s; REELS goes up to 15min so the same upload that
+                # would fail as a feed video posts cleanly as a reel.
+                container_params["media_type"] = "REELS"
+                container_params["video_url"] = media_url
+                # Also surface in feed (default is reels-tab-only). Without
+                # this flag the post is technically published but invisible
+                # in the regular profile timeline.
+                container_params["share_to_feed"] = "true"
+            else:
+                container_params["image_url"] = media_url
+
+            container = await _post_json(
+                f"{base}/{ig_user_id}/media",
+                data=container_params,
+            )
+            creation_id = container.get("id")
+            if not creation_id:
+                raise HTTPException(
+                    502, "Instagram returned no creation_id from /media."
+                )
 
         # Step 2 — for video, wait for processing; for image we can publish
-        # right away.
+        # right away (or retry if Meta servers are slow to download).
         if media_kind == "video":
             for _ in range(30):  # up to ~60s
                 status = await _get_json(
@@ -335,13 +428,26 @@ async def publish_instagram(
                     )
                 await asyncio.sleep(2)
 
-        publish = await _post_json(
-            f"{base}/{ig_user_id}/media_publish",
-            data={
-                "creation_id": creation_id,
-                "access_token": page_access_token,
-            },
-        )
+        publish = None
+        for attempt in range(10):
+            try:
+                publish = await _post_json(
+                    f"{base}/{ig_user_id}/media_publish",
+                    data={
+                        "creation_id": creation_id,
+                        "access_token": page_access_token,
+                    },
+                )
+                break
+            except HTTPException as exc:
+                err_str = str(exc.detail).lower()
+                if "9007" in err_str or "not ready" in err_str:
+                    if attempt == 9:
+                        raise
+                    await asyncio.sleep(3)
+                else:
+                    raise
+
 
         media_id = publish.get("id")
         # IG doesn't return the permalink with the publish response — one
@@ -414,83 +520,136 @@ async def publish_tiktok_photo(
     handle_label: str,
     content: str,
     photo_url: str,
+    photo_urls: list[str] | None = None,
     privacy_level: str = "SELF_ONLY",
     disclose_video_branded: bool = False,
     disclose_video_your_brand: bool = False,
     audit_mode: str = "inbox",
+    upload_mode: str | None = None,
 ) -> PublishResult:
-    """Publish a photo to TikTok via /v2/post/publish/content/init/.
+    """Publish a photo to TikTok.
 
-    TikTok's photo flow ONLY supports PULL_FROM_URL (no FILE_UPLOAD), so
-    the photo_url's prefix must be pre-verified under "URL Properties"
-    in the TikTok Developer Portal. If verification is pending the init
-    call comes back with `url_ownership_unverified` — we surface that
-    verbatim so the user knows what to fix.
+    TikTok's Content Posting API for photos ONLY supports PULL_FROM_URL.
+    It does not support local file upload (FILE_UPLOAD) like video does.
+    The public URL (usually tunnel or public server URL) is fetched directly
+    by TikTok's servers.
 
-    `post_mode`:
-      - "MEDIA_UPLOAD"  → draft / inbox. The user opens TikTok and taps
-                          Publish manually. Works with the sandbox
-                          `video.upload` scope.
-      - "DIRECT_POST"   → posts directly. Requires post-audit
-                          `video.publish` scope.
+    Both Direct Post and Inbox (Draft) modes use the same initialization endpoint:
+      POST /v2/post/publish/content/init/
+
+    The mode is selected by sending post_mode="DIRECT_POST" or "MEDIA_UPLOAD".
     """
-    base = "https://open.tiktokapis.com/v2/post/publish"
-    init_path = f"{base}/content/init/"
-    post_mode = "DIRECT_POST" if audit_mode == "direct" else "MEDIA_UPLOAD"
+    effective_urls = photo_urls or ([photo_url] if photo_url else [])
+    if not effective_urls:
+        return PublishResult(
+            target_id=open_id,
+            target_label=handle_label,
+            platform="tiktok",
+            ok=False,
+            error="tiktok_photo_requires_url",
+        )
 
-    body = {
-        "post_info": {
-            "title": (content or "")[:90],
-            "description": (content or "")[:2200],
-            "disable_comment": False,
-            "privacy_level": privacy_level,
-            "auto_add_music": True,
-            "brand_content_toggle": bool(disclose_video_branded),
-            "brand_organic_toggle": bool(disclose_video_your_brand),
-        },
-        "source_info": {
-            "source": "PULL_FROM_URL",
-            "photo_cover_index": 0,
-            "photo_images": [photo_url],
-        },
-        "post_mode": post_mode,
-        "media_type": "PHOTO",
+    base = "https://open.tiktokapis.com/v2/post/publish"
+    effective_audit = audit_mode
+    init_path = f"{base}/content/init/"  # ALWAYS the same endpoint for photo
+
+    # Build source_info — photos ALWAYS use PULL_FROM_URL
+    source_info: dict[str, Any] = {
+        "source": "PULL_FROM_URL",
+        "photo_cover_index": 0,
+        "photo_images": effective_urls,
     }
 
-    try:
+    # Build bodies for both modes
+    def _build_body(_audit: str) -> dict[str, Any]:
+        if _audit == "direct":
+            return {
+                "post_info": {
+                    "description": (content or "")[:4000],
+                    "disable_comment": False,
+                    "privacy_level": privacy_level,
+                },
+                "source_info": source_info,
+                "post_mode": "DIRECT_POST",
+                "media_type": "PHOTO",
+            }
+        else:
+            return {
+                "post_info": {
+                    "title": (content or "")[:90],
+                    "description": (content or "")[:4000],
+                },
+                "source_info": source_info,
+                "post_mode": "MEDIA_UPLOAD",
+                "media_type": "PHOTO",
+            }
+
+    init_body = _build_body(effective_audit)
+
+    async def _do_init(path: str, body: dict[str, Any]) -> tuple[int, str, dict[str, Any]]:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            init_resp = await client.post(
-                init_path,
+            r = await client.post(
+                path,
                 headers={
                     "Authorization": f"Bearer {access_token}",
                     "Content-Type": "application/json; charset=UTF-8",
                 },
                 json=body,
             )
-        if init_resp.status_code >= 400:
-            # Try to surface TikTok's structured error.
-            try:
-                err = init_resp.json().get("error") or {}
-                code = err.get("code") or ""
-                msg = err.get("message") or init_resp.text[:200]
-            except ValueError:
-                code = ""
-                msg = init_resp.text[:200]
+        try:
+            j = r.json()
+        except ValueError:
+            j = {}
+        return r.status_code, r.text, j
+
+    try:
+        print(f"[tiktok-photo] POST {init_path}")
+        print(f"[tiktok-photo] body={json.dumps(init_body, indent=2)}")
+        init_status, init_text, init_json = await _do_init(init_path, init_body)
+        print(f"[tiktok-photo] response status={init_status} body={init_text[:500]}")
+
+        init_resp_status = init_status
+        init_resp_text = init_text
+        init_resp_json = init_json
+
+        if init_resp_status >= 400:
+            err_body = init_resp_json if isinstance(init_resp_json, dict) else {}
+            err_obj = err_body.get("error") or {}
+            err_code = err_obj.get("code") or ""
+            err_msg = err_obj.get("message") or init_resp_text[:300]
             hint = ""
-            if "url_ownership" in code or "url_ownership" in msg.lower():
+            cl = err_code.lower()
+            if "url_ownership" in cl:
                 hint = (
-                    " — verify the host prefix under TikTok Developer Portal "
+                    " — verify your host prefix under TikTok Developer Portal "
                     "→ URL Properties before retrying"
                 )
+            elif "unaudited" in cl:
+                hint = (
+                    " — unaudited apps can only direct-post to PRIVATE TikTok accounts. "
+                    "Toggle 'Private account' ON in your TikTok app "
+                    "(Settings & Privacy → Privacy) to unblock direct post. "
+                    "Already retried as inbox draft."
+                )
+            elif "privacy_level" in cl:
+                hint = (
+                    " — unaudited apps must use SELF_ONLY. "
+                    "Already retried as inbox draft."
+                )
+            elif "spam_risk" in cl:
+                hint = " — rate-limited; wait a few minutes and retry."
+            elif "access_token" in cl:
+                hint = " — token may be expired or revoked; reconnect TikTok in Settings."
             return PublishResult(
                 target_id=open_id,
                 target_label=handle_label,
                 platform="tiktok",
                 ok=False,
-                error=f"tiktok_photo_init_failed: {code or 'HTTP ' + str(init_resp.status_code)}: {msg}{hint}",
-                raw={"response": init_resp.text[:800]},
+                error=f"tiktok_photo_init_failed: {err_code or 'HTTP ' + str(init_resp_status)}: {err_msg}{hint}",
+                raw={"response": init_resp_text[:800]},
             )
-        init_data = init_resp.json().get("data") or {}
+
+        init_data = init_resp_json.get("data") or {}
         publish_id = init_data.get("publish_id")
         if not publish_id:
             return PublishResult(
@@ -499,17 +658,17 @@ async def publish_tiktok_photo(
                 platform="tiktok",
                 ok=False,
                 error="tiktok_init_returned_no_publish_id",
-                raw=init_resp.json(),
+                raw=init_resp_json,
             )
 
-        # Poll the status endpoint for terminal state, just like video.
+        # Poll the status endpoint for terminal state.
         terminal_success = {"SEND_TO_USER_INBOX", "PUBLISH_COMPLETE"}
         terminal_failure = {"FAILED"}
         status_url = f"{base}/status/fetch/"
         permalink: str | None = None
         last_status: str | None = None
         last_payload: dict[str, Any] | None = None
-        for _ in range(30):
+        for _ in range(30):  # ~60s budget at 2s poll
             async with httpx.AsyncClient(timeout=30.0) as client:
                 status_resp = await client.post(
                     status_url,
@@ -536,12 +695,13 @@ async def publish_tiktok_photo(
             if last_status in terminal_success:
                 break
             if last_status in terminal_failure:
+                fail_reason = last_payload.get("fail_reason") or last_status
                 return PublishResult(
                     target_id=open_id,
                     target_label=handle_label,
                     platform="tiktok",
                     ok=False,
-                    error=f"tiktok_publish_failed: {last_payload.get('fail_reason') or last_status}",
+                    error=f"tiktok_publish_failed: {fail_reason}",
                     raw=last_payload,
                 )
             await asyncio.sleep(2)
@@ -558,7 +718,7 @@ async def publish_tiktok_photo(
             ok=True,
             platform_post_id=permalink or publish_id,
             permalink_url=permalink_url,
-            raw={"status": last_status, "data": last_payload},
+            raw={"status": last_status, "data": last_payload, "effective_audit": effective_audit},
         )
     except Exception as exc:
         return PublishResult(
@@ -958,6 +1118,7 @@ async def build_targets_from_post(
     *,
     platforms: dict[str, bool],
     media_url: str | None,
+    media_urls: list[str] | None = None,
     media_kind: str = "image",
     link: str | None = None,
     ratios: dict[str, str] | None = None,
@@ -987,6 +1148,7 @@ async def build_targets_from_post(
 
     pages = await _fetch_meta_pages(user_meta_token) if user_meta_token else []
     resolved: list[dict[str, Any]] = []
+    effective_urls = media_urls or ([media_url] if media_url else [])
 
     for platform in enabled:
         if platform == "facebook":
@@ -997,6 +1159,7 @@ async def build_targets_from_post(
                     "label": page["page_name"],
                     "access_token": page["page_access_token"],
                     "media_url": media_url,
+                    "media_urls": effective_urls,
                     "media_kind": "image",
                     "link": link,
                 })
@@ -1011,6 +1174,7 @@ async def build_targets_from_post(
                     "label": f"@{ig['username']}" if ig.get("username") else ig["ig_id"],
                     "access_token": page["page_access_token"],
                     "media_url": media_url,
+                    "media_urls": effective_urls,
                     "media_kind": media_kind,
                 })
         elif platform == "tiktok":
@@ -1021,13 +1185,21 @@ async def build_targets_from_post(
             raw = record.get("raw") or {}
             open_id = record.get("open_id") or raw.get("open_id")
             handle = record.get("username") or record.get("display_name")
+            
+            tk_kind = media_kind
+            if tk_kind not in ("image", "video"):
+                tk_kind = "image" if (media_url or "").lower().rsplit(".", 1)[-1] in {
+                    "png", "jpg", "jpeg", "webp", "gif"
+                } else "video"
+
             resolved.append({
                 "platform": "tiktok",
                 "id": open_id or "tiktok",
                 "label": f"@{handle}" if handle else (open_id or "tiktok"),
                 "access_token": token,
                 "media_url": media_url,
-                "media_kind": "video",  # TikTok is video-only
+                "media_urls": effective_urls,
+                "media_kind": tk_kind,
             })
         elif platform == "linkedin":
             record = tokens.get(platform) or {}
@@ -1041,6 +1213,7 @@ async def build_targets_from_post(
                 "label": platform,
                 "access_token": token,
                 "media_url": media_url,
+                "media_urls": effective_urls,
                 "media_kind": media_kind,
             })
 
@@ -1050,6 +1223,15 @@ async def build_targets_from_post(
             ratios=ratios,
             platform=r["platform"],
         )
+        if r.get("media_urls"):
+            r["media_urls"] = [
+                crop_for_targets(
+                    media_url=url,
+                    ratios=ratios,
+                    platform=r["platform"],
+                )
+                for url in r["media_urls"]
+            ]
     return resolved
 
 
@@ -1101,6 +1283,7 @@ async def publish_to_targets(
                 page_label=t.get("label") or t["id"],
                 content=content,
                 media_url=t.get("media_url"),
+                media_urls=t.get("media_urls"),
                 link=t.get("link"),
                 media_kind=fb_kind,
             )
@@ -1119,6 +1302,7 @@ async def publish_to_targets(
                 ig_label=t.get("label") or t["id"],
                 content=content,
                 media_url=media,
+                media_urls=t.get("media_urls"),
                 media_kind=t.get("media_kind", "image"),
             )
         if platform == "tiktok":
@@ -1131,10 +1315,12 @@ async def publish_to_targets(
                     handle_label=t.get("label") or t["id"],
                     content=content,
                     photo_url=t.get("media_url") or "",
+                    photo_urls=t.get("media_urls"),
                     privacy_level=t.get("privacy_level", "SELF_ONLY"),
                     disclose_video_branded=t.get("disclose_video_branded", False),
                     disclose_video_your_brand=t.get("disclose_video_your_brand", False),
                     audit_mode=t.get("audit_mode", "inbox"),
+                    upload_mode=t.get("upload_mode"),
                 )
             return await publish_tiktok(
                 t["id"], t["access_token"],
