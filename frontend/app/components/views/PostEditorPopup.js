@@ -28,6 +28,7 @@ import {
 } from "../../lib/platforms";
 import { isoDateKey, parseDateKey, startOfToday } from "../../lib/dateUtils";
 import { addNotification, addTokenUsage, recordCacheHit } from "../../store/uiSlice";
+import TikTokOptionsPanel from "./TikTokOptionsPanel";
 import {
   ACCEPTED_TYPES,
   toMediaItem,
@@ -36,6 +37,10 @@ import {
   revokeMediaItem,
 } from "../../lib/uploadService";
 import { generateContent } from "../../lib/aiService";
+import {
+  generateImageAsset,
+  generateVideoAsset,
+} from "../../lib/mediaGenerationService";
 import { getScheduleTimezone } from "../../lib/timezone";
 import DatePicker from "./DatePicker";
 import TimePicker from "./TimePicker";
@@ -74,10 +79,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
 
   const activeIds = useMemo(() => activePlatformIds(platforms), [platforms]);
   const [tabIdx, setTabIdx] = useState(0);
-  // Keep the selected preview tab in range when platforms toggle.
-  useEffect(() => {
-    if (tabIdx >= activeIds.length) setTabIdx(Math.max(0, activeIds.length - 1));
-  }, [activeIds, tabIdx]);
+  const safeTabIdx = Math.min(tabIdx, Math.max(0, activeIds.length - 1));
 
   // Track previewUrls *this popup* created so we can revoke them on close.
   // Media that came in via `post.media` keeps its own lifecycle (the upload
@@ -133,12 +135,14 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
     }
   };
 
-  const onPickFile = (kind) => async (e) => {
+  const handlePickedFile = async (e, kind) => {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
     await ingestFile(file, kind);
   };
+  const onPickImageFile = (e) => handlePickedFile(e, "image");
+  const onPickVideoFile = (e) => handlePickedFile(e, "video");
 
   const hashtagCount = (content.match(/#\w+/g) || []).length;
   const hasPending = media.some((m) => m.status === "uploading");
@@ -150,6 +154,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
   // local content state so opening this popup never clobbers an in-flight
   // editor draft.
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generatingMediaKind, setGeneratingMediaKind] = useState(null);
   const onGenerate = async () => {
     if (isGenerating) return;
     setIsGenerating(true);
@@ -204,6 +209,44 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
     return hasFutureSchedule ? "scheduled" : "draft";
   };
 
+  const handleGenerateMedia = async (kind) => {
+    const prompt = content.trim();
+    if (!prompt) {
+      dispatch(
+        addNotification({
+          message: `Enter a prompt before generating a ${kind}.`,
+          type: "error",
+        })
+      );
+      return;
+    }
+    setGeneratingMediaKind(kind);
+    try {
+      const ratio =
+        Object.values(ratios || {})[0] || (kind === "video" ? "9:16" : "1:1");
+      const result =
+        kind === "video"
+          ? await generateVideoAsset({ prompt, ratio })
+          : await generateImageAsset({ prompt, ratio });
+      setMedia((list) => [...list, result.mediaItem]);
+      dispatch(
+        addNotification({
+          message: `${kind === "video" ? "Video" : "Image"} generated via ${result.data?.provider || "backend"}.`,
+          type: "success",
+        })
+      );
+    } catch (err) {
+      dispatch(
+        addNotification({
+          message: `${kind === "video" ? "Video" : "Image"} generation failed: ${err.message || "unknown error"}`,
+          type: "error",
+        })
+      );
+    } finally {
+      setGeneratingMediaKind(null);
+    }
+  };
+
   const handleSave = () => {
     onSave({
       content: content.trim(),
@@ -231,8 +274,8 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
   const nextStatus = computeNextStatus();
   const status = nextStatus;
 
-  const activeTabPlatform = activeIds[tabIdx]
-    ? PLATFORM_MAP[activeIds[tabIdx]]
+  const activeTabPlatform = activeIds[safeTabIdx]
+    ? PLATFORM_MAP[activeIds[safeTabIdx]]
     : null;
 
   return (
@@ -287,16 +330,24 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
 
         {/* Body — split layout */}
         <div
-          className="flex-1 overflow-hidden grid"
+          className="flex-1 grid"
           style={{
             gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
             minHeight: 0,
+            /* overflow visible on the grid so each column manages its
+               own scroll independently. The previous overflow-hidden
+               was clipping the left pane's scrollbar, making publish
+               results and the delete button unreachable. */
+            overflow: "visible",
           }}
         >
           {/* LEFT — editor */}
           <div
             className="overflow-y-auto p-5"
-            style={{ borderRight: "1px solid var(--border-default)" }}
+            style={{
+              borderRight: "1px solid var(--border-default)",
+              minHeight: 0, /* required for grid child scroll */
+            }}
           >
             <div className="flex items-center justify-between mb-1.5">
               <label
@@ -364,20 +415,33 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
               >
                 <Film size={13} /> Video
               </button>
+            </div>
+            <div className="flex flex-wrap gap-2 mb-3">
               <button
-                onClick={() =>
-                  dispatch(
-                    addNotification({
-                      message:
-                        "AI image generation isn't wired yet — upload from your device for now.",
-                      type: "info",
-                    })
-                  )
-                }
+                onClick={() => handleGenerateMedia("image")}
+                disabled={!!generatingMediaKind}
                 className="btn-secondary text-xs inline-flex items-center gap-1.5"
-                title="AI generation not wired yet"
+                title="Generate an image from the current prompt"
               >
-                <Sparkles size={13} /> AI
+                {generatingMediaKind === "image" ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <Sparkles size={13} />
+                )}{" "}
+                AI image
+              </button>
+              <button
+                onClick={() => handleGenerateMedia("video")}
+                disabled={!!generatingMediaKind}
+                className="btn-secondary text-xs inline-flex items-center gap-1.5"
+                title="Generate a motion video from the current prompt"
+              >
+                {generatingMediaKind === "video" ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <Film size={13} />
+                )}{" "}
+                AI video
               </button>
             </div>
             <input
@@ -385,14 +449,14 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
               type="file"
               accept={ACCEPTED_TYPES.filter((t) => t.startsWith("image/")).join(",")}
               className="hidden"
-              onChange={onPickFile("image")}
+              onChange={onPickImageFile}
             />
             <input
               ref={videoInputRef}
               type="file"
               accept={ACCEPTED_TYPES.filter((t) => t.startsWith("video/")).join(",")}
               className="hidden"
-              onChange={onPickFile("video")}
+              onChange={onPickVideoFile}
             />
             {media.length > 0 && (
               <div className="flex flex-col gap-1.5 mb-4">
@@ -519,6 +583,12 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
                   })}
                 </div>
               </>
+            )}
+
+            {platforms.tiktok && (
+              <div className="mb-4">
+                <TikTokOptionsPanel />
+              </div>
             )}
 
             <label
@@ -667,7 +737,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
                   {activeIds.map((id, idx) => {
                     const p = PLATFORM_MAP[id];
                     const Icon = p.icon;
-                    const isActive = idx === tabIdx;
+                    const isActive = idx === safeTabIdx;
                     return (
                       <button
                         key={id}
@@ -766,6 +836,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
    with platform-appropriate aspect ratio, char/hashtag limits, and chrome.
    ─────────────────────────────────────────────────────────────────────── */
 function PostMiniPreview({ platform, content, media, hashtagCount, ratio }) {
+  const [mediaIdx, setMediaIdx] = useState(0);
   const Icon = platform.icon;
   // Caller supplies the active ratio; fall back to the platform default
   // when called without one so the component is still usable elsewhere.
@@ -779,7 +850,9 @@ function PostMiniPreview({ platform, content, media, hashtagCount, ratio }) {
   const hashOverLimit = hashtagCount > platform.maxHashtags;
   const charOverLimit = content.length > platform.maxChars;
   const avatarBg = platform.id === "tiktok" ? "#0f172a" : platform.color;
-  const hero = media[0];
+  const effectiveMedia = media.slice(0, 10);
+  const currentIdx = Math.min(mediaIdx, Math.max(0, effectiveMedia.length - 1));
+  const hero = effectiveMedia[currentIdx];
 
   return (
     <article
@@ -872,13 +945,33 @@ function PostMiniPreview({ platform, content, media, hashtagCount, ratio }) {
             </p>
           </div>
         )}
-        {media.length > 1 && (
-          <span
-            className="absolute top-2 right-2 px-2 py-0.5 rounded-full text-[10px] font-semibold text-white"
-            style={{ background: "rgba(0,0,0,0.6)" }}
-          >
-            1 / {media.length}
-          </span>
+        {effectiveMedia.length > 1 && (
+          <>
+            <span
+              className="absolute top-2 right-2 px-2 py-0.5 rounded-full text-[10px] font-semibold text-white z-10"
+              style={{ background: "rgba(0,0,0,0.6)" }}
+            >
+              {currentIdx + 1} / {effectiveMedia.length}
+            </span>
+            {currentIdx > 0 && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setMediaIdx(i => i - 1); }}
+                className="absolute left-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full flex items-center justify-center bg-black/50 text-white hover:bg-black/70 transition-colors z-10"
+                aria-label="Previous media"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+              </button>
+            )}
+            {currentIdx < effectiveMedia.length - 1 && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setMediaIdx(i => i + 1); }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full flex items-center justify-center bg-black/50 text-white hover:bg-black/70 transition-colors z-10"
+                aria-label="Next media"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+              </button>
+            )}
+          </>
         )}
       </div>
 

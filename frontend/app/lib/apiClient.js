@@ -3,8 +3,18 @@ import { config } from "./config";
 /** Build the headers to send on every API call. */
 function authHeaders(extra) {
   const base = { "Content-Type": "application/json", ...extra };
-  if (config.backendAuthToken) {
-    base.Authorization = `Bearer ${config.backendAuthToken}`;
+  let token = config.backendAuthToken;
+  try {
+    if (typeof window !== "undefined") {
+      const session = JSON.parse(window.localStorage.getItem("datalia-session"));
+      if (session && session.token) {
+        token = session.token;
+      }
+    }
+  } catch (e) {}
+
+  if (token) {
+    base.Authorization = `Bearer ${token}`;
   }
   return base;
 }
@@ -17,7 +27,17 @@ export async function apiFetch(path, options = {}) {
     ...rest,
   });
   if (!res.ok) {
-    const err = new Error(`API ${res.status} ${path}`);
+    let detail = "";
+    try {
+      const data = await res.json();
+      detail =
+        data?.detail?.message ||
+        data?.detail?.error ||
+        (typeof data?.detail === "string" ? data.detail : "") ||
+        data?.message ||
+        "";
+    } catch {}
+    const err = new Error(detail || `API ${res.status} ${path}`);
     err.status = res.status;
     throw err;
   }
@@ -28,8 +48,18 @@ export async function apiFetch(path, options = {}) {
 export async function apiUpload(path, formData) {
   if (!config.apiBaseUrl) throw new Error("NEXT_PUBLIC_API_BASE_URL not configured");
   const headers = {};
-  if (config.backendAuthToken) {
-    headers.Authorization = `Bearer ${config.backendAuthToken}`;
+  let token = config.backendAuthToken;
+  try {
+    if (typeof window !== "undefined") {
+      const session = JSON.parse(window.localStorage.getItem("datalia-session"));
+      if (session && session.token) {
+        token = session.token;
+      }
+    }
+  } catch (e) {}
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
   }
   const res = await fetch(`${config.apiBaseUrl}${path}`, {
     method: "POST",

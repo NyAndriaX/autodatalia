@@ -18,6 +18,9 @@ import {
 import { generateContent, applyQuickAction, isGenerationCached } from "../lib/aiService";
 import { fetchConnections, publishToTargets } from "../lib/oauthService";
 import { publishHashKey } from "../lib/publishHash";
+import { submitValidation } from "../lib/validationService";
+import { loadSettings } from "../lib/settingsStorage";
+import { getScheduleTimezone } from "../lib/timezone";
 
 // Frontend-side cooldown after a publish — locks the button so a fast
 // second click can't double-post (the backend has the same guard).
@@ -49,15 +52,26 @@ export function generateContentThunk(force = false, count = 1) {
     // only after the upload finished so we pass the server-side filename
     // (the backend resolves it against its content dir). Local-only previews
     // are skipped to avoid paying for an unusable URL.
-    const firstImage = currentPost.media.find(
+    const hasUploading = () => getState().editor.currentPost.media.some((m) => m.status === "uploading");
+    if (hasUploading()) {
+      let attempts = 0;
+      while (hasUploading() && attempts < 10) {
+        await new Promise((r) => setTimeout(r, 500));
+        attempts++;
+      }
+    }
+
+    // Re-read after the wait
+    const currentPostRefreshed = getState().editor.currentPost;
+    const firstImage = currentPostRefreshed.media.find(
       (m) => m.kind === "image" && m.status === "uploaded" && m.filename
     );
 
     const args = {
-      prompt: currentPost.content,
-      platforms: currentPost.platforms,
-      template: currentPost.template,
-      tone: currentPost.tone || null,
+      prompt: currentPostRefreshed.content,
+      platforms: currentPostRefreshed.platforms,
+      template: currentPostRefreshed.template,
+      tone: currentPostRefreshed.tone || null,
       variants: count,
       image: firstImage?.filename ?? null,
     };
@@ -129,9 +143,36 @@ export function saveDraftThunk() {
 }
 
 export function submitForValidationThunk() {
-  return async (dispatch) => {
-    dispatch(setStatus("pending"));
-    dispatch(addNotification({ message: "Submitted for validation.", type: "success" }));
+  return async (dispatch, getState) => {
+    const { currentPost } = getState().editor;
+    try {
+      const localSettings = loadSettings();
+      const resp = await submitValidation({
+        content: currentPost.content,
+        platforms: currentPost.platforms,
+        scheduledDate: currentPost.scheduledDate || undefined,
+        timezone: getScheduleTimezone(),
+        media: currentPost.media || [],
+        ratios: currentPost.ratios || undefined,
+        tiktok: currentPost.tiktok || undefined,
+        chat_id: localSettings.telegramChatId || undefined,
+      });
+      dispatch(setStatus(resp?.status || "pending"));
+      dispatch(
+        addNotification({
+          message: `Submitted for Telegram validation${resp?.chat_id ? ` (${resp.chat_id})` : ""}.`,
+          type: "success",
+        })
+      );
+    } catch (err) {
+      dispatch(setStatus("error"));
+      dispatch(
+        addNotification({
+          message: `Validation submit failed: ${err.message || "unknown error"}`,
+          type: "error",
+        })
+      );
+    }
   };
 }
 
@@ -169,7 +210,6 @@ export function publishNowThunk() {
       // before giving up (covers the worst realistic short-form video).
       const deadline = Date.now() + 5 * 60_000;
       while (Date.now() < deadline && !isUploadDone()) {
-        // eslint-disable-next-line no-await-in-loop
         await new Promise((r) => setTimeout(r, 500));
       }
       if (!isUploadDone()) {
@@ -235,27 +275,24 @@ export function publishNowThunk() {
       return;
     }
 
-    // Pick the first successfully-uploaded media's public URL. Anything
-    // still local-only (no remoteUrl) can't be fetched by Meta/IG.
-    const uploadedMedia = currentPost.media.find(
+    // Pick all successfully-uploaded media items' public URLs.
+    const uploadedMedias = (currentPost.media || []).filter(
       (m) => m.status === "uploaded" && m.remoteUrl
     );
-    const mediaUrl = uploadedMedia?.remoteUrl || null;
-    const mediaKind = uploadedMedia?.kind || null;
-    // Tag every target with the actual media kind so each platform handler
-    // routes correctly. Without this, Facebook defaults to /photos for
-    // videos (Meta 324), and TikTok auto-detects from extension — both
-    // brittle compared to "the editor said it's a video, trust it".
+    const mediaUrls = uploadedMedias.map((m) => m.remoteUrl);
+    const mediaUrl = mediaUrls.length > 0 ? mediaUrls[0] : null;
+    const mediaKind = uploadedMedias.length > 0 ? uploadedMedias[0].kind : null;
+    // Tag every target with the actual media kind and include all media URLs.
     if (mediaKind) {
       for (const t of targets) {
         t.media_kind = mediaKind;
+        t.media_urls = mediaUrls;
       }
     }
 
     // Diagnostic — when publish gets media_url=MISSING despite a media
     // preview showing in the editor, this tells us exactly what's in the
     // store: which items, what status, what remoteUrl.
-    // eslint-disable-next-line no-console
     console.log(
       "[publish-thunk] media state:",
       (currentPost.media || []).map((m) => ({
@@ -314,7 +351,7 @@ export function publishNowThunk() {
     // applies safe defaults when omitted.
     const tiktokOpts = targets.some((t) => t.platform === "tiktok")
       ? {
-          privacy_level: currentPost.tiktok?.privacy_level || "PUBLIC_TO_EVERYONE",
+          privacy_level: currentPost.tiktok?.privacy_level || "SELF_ONLY",
           disclose_video_branded: !!currentPost.tiktok?.disclose_video_branded,
           disclose_video_your_brand: !!currentPost.tiktok?.disclose_video_your_brand,
           music_confirmed: !!currentPost.tiktok?.music_confirmed,
@@ -330,6 +367,7 @@ export function publishNowThunk() {
       const resp = await publishToTargets({
         content: currentPost.content,
         mediaUrl,
+        mediaUrls,
         targets,
         ratios: currentPost.ratios,
         tiktok: tiktokOpts,

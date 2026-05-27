@@ -366,7 +366,8 @@ async def _describe_image(image_path: Path) -> str:
     }
     try:
         text, _usage = await _post_chat(payload)
-    except HTTPException:
+    except HTTPException as e:
+        print(f"[debug] _describe_image AI error: {e.detail}")
         return ""
     text = text.strip()
     if text:
@@ -411,7 +412,7 @@ async def generate_post_variants(
         image_description = await _describe_image(image_path)
 
     cache_key = _cache_key(
-        "generate", prompt, sorted(active), template, n, image_fingerprint,
+        "generate", prompt, sorted(active), template, n, image_fingerprint, image_description,
     )
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -574,11 +575,11 @@ def delete_media(relative_path: str) -> bool:
     if not target.is_file():
         return False
     target.unlink()
-    # Drop the optional sidecar description too (.txt/.md beside the file).
-    for ext in DESCRIPTION_EXTENSIONS:
-        sidecar = target.with_suffix(ext)
-        if sidecar.is_file():
-            sidecar.unlink()
+    # Drop the optional sidecar description too (.txt/.md beside the file)
+    # and any AI/Publish derivative images (_converted, _cropped).
+    for p in target.parent.glob(f"{target.stem}*"):
+        if p.is_file():
+            p.unlink()
     return True
 
 
@@ -880,6 +881,82 @@ def posts_delete(post_id: str) -> bool:
         if len(remaining) == len(posts):
             return False
         _posts_write_raw(remaining)
+        return True
+
+
+# ── Automation rules CRUD ──────────────────────────────────────────────
+# Same JSON-file pattern as posts, separate file so a corrupt one doesn't
+# brick the other. Phase 2 will add a worker that reads this file.
+
+_AUTOMATION_FILE = settings.content_dir / "automation_rules.json"
+_AUTOMATION_LOCK = _threading.Lock()
+
+
+def _automation_read_raw() -> list[dict[str, Any]]:
+    try:
+        data = json.loads(_AUTOMATION_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+
+
+def _automation_write_raw(rules: list[dict[str, Any]]) -> None:
+    _AUTOMATION_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _AUTOMATION_FILE.write_text(json.dumps(rules, indent=2), encoding="utf-8")
+
+
+def automation_list() -> list[dict[str, Any]]:
+    with _AUTOMATION_LOCK:
+        return list(_automation_read_raw())
+
+
+def automation_get(rule_id: str) -> dict[str, Any] | None:
+    with _AUTOMATION_LOCK:
+        for rule in _automation_read_raw():
+            if rule.get("id") == rule_id:
+                return dict(rule)
+    return None
+
+
+def automation_create(payload: dict[str, Any]) -> dict[str, Any]:
+    with _AUTOMATION_LOCK:
+        rules = _automation_read_raw()
+        rule = dict(payload)
+        if not rule.get("id"):
+            rule["id"] = f"ar_{_uuid.uuid4().hex[:10]}"
+        now = time.time()
+        rule.setdefault("created_at", now)
+        rule["updated_at"] = now
+        rule.setdefault("active", True)
+        rules.append(rule)
+        _automation_write_raw(rules)
+        return rule
+
+
+def automation_update(rule_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+    with _AUTOMATION_LOCK:
+        rules = _automation_read_raw()
+        for rule in rules:
+            if rule.get("id") == rule_id:
+                for key, value in patch.items():
+                    if value is None:
+                        continue
+                    rule[key] = value
+                rule["updated_at"] = time.time()
+                _automation_write_raw(rules)
+                return rule
+    return None
+
+
+def automation_delete(rule_id: str) -> bool:
+    with _AUTOMATION_LOCK:
+        rules = _automation_read_raw()
+        remaining = [r for r in rules if r.get("id") != rule_id]
+        if len(remaining) == len(rules):
+            return False
+        _automation_write_raw(remaining)
         return True
 
 

@@ -1,9 +1,15 @@
 """End-to-end route tests for the public Caption API surface."""
 
+import asyncio
 import httpx
 import pytest
 
 from app.config import settings
+from app.oauth import _save_tokens
+from app import telegram_validation as tg
+from app import media_generation as mg
+from app.publish import publish_linkedin
+from app.services import messages_list, posts_list
 
 
 # ── Health & basic openness ──────────────────────────────────────────
@@ -240,3 +246,142 @@ def test_generate_returns_cached_variants(client, monkeypatch):
     assert r2.status_code == 200
     assert r2.json()["usage"]["total_tokens"] == 0  # cache hit
     assert call_count["n"] == 1
+
+
+def test_validation_submit_creates_pending_post_and_message(client, monkeypatch):
+    settings.telegram_bot_token = "telegram-test"
+    settings.telegram_default_chat_id = "12345"
+
+    async def fake_send_validation_card(post, chat_id):
+        assert chat_id == "12345"
+        assert post["status"] == "pending"
+        return 321
+
+    monkeypatch.setattr(tg, "_send_validation_card", fake_send_validation_card)
+
+    r = client.post(
+        "/validation/submit",
+        json={
+            "content": "Need approval",
+            "platforms": {"linkedin": True},
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "pending"
+    assert body["message_id"] == 321
+    posts = posts_list()
+    assert len(posts) == 1
+    assert posts[0]["status"] == "pending"
+    feed = messages_list()
+    assert any("Telegram validation" in m["message"] or "Submitted post" in m["message"] for m in feed)
+
+
+def test_telegram_webhook_approve_updates_post(client, monkeypatch):
+    settings.telegram_bot_token = "telegram-test"
+    # Clear the webhook secret so the handler doesn't require the
+    # X-Telegram-Bot-Api-Secret-Token header — this test exercises the
+    # callback handling logic, not the auth path.
+    settings.telegram_webhook_secret = ""
+    post = tg.posts_create(
+        {
+            "id": "post-1",
+            "content": "approve me",
+            "platforms": {"facebook": True},
+            "status": "pending",
+            "scheduledDate": "2026-06-01",
+        }
+    )
+
+    async def fake_answer_callback(callback_query_id, text=""):
+        assert callback_query_id == "cb_1"
+
+    monkeypatch.setattr(tg, "_answer_callback", fake_answer_callback)
+
+    r = client.post(
+        "/telegram/webhook",
+        json={
+            "callback_query": {
+                "id": "cb_1",
+                "data": "va|a|post-1",
+                "message": {"chat": {"id": 123}},
+            }
+        },
+    )
+    assert r.status_code == 200
+    refreshed = next(p for p in posts_list() if p["id"] == post["id"])
+    assert refreshed["status"] == "approved"
+
+
+def test_media_generate_image_uses_fallback_and_persists_asset(client):
+    settings.ai_image_model = ""
+    r = client.post(
+        "/media/generate/image",
+        json={"prompt": "Blue launch poster", "ratio": "1:1"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["kind"] == "image"
+    assert body["provider"] == "fallback-poster"
+    assert (settings.content_dir / "generated" / body["filename"]).exists()
+
+
+def test_media_generate_video_persists_motion_asset(client, monkeypatch):
+    async def fake_render_motion_video(source, dest, width, height, duration_seconds):
+        dest.write_bytes(b"fake-mp4")
+
+    monkeypatch.setattr(mg, "_render_motion_video", fake_render_motion_video)
+    settings.ai_image_model = ""
+    r = client.post(
+        "/media/generate/video",
+        json={"prompt": "Motion teaser", "ratio": "9:16", "duration_seconds": 6},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["kind"] == "video"
+    assert body["provider"] == "fallback-poster+motion"
+    assert (settings.content_dir / "generated" / body["filename"]).exists()
+
+
+def test_oauth_connections_surfaces_linkedin_target(client):
+    _save_tokens(
+        {
+            "linkedin": {
+                "access_token": "lk",
+                "urn": "urn:li:person:abc123",
+                "display_name": "Alice LinkedIn",
+                "avatar_url": "https://example.com/alice.jpg",
+                "raw": {"urn": "urn:li:person:abc123"},
+            }
+        }
+    )
+    r = client.get("/oauth/connections")
+    assert r.status_code == 200
+    targets = r.json()["providers"]["linkedin"]["targets"]
+    assert targets[0]["id"] == "urn:li:person:abc123"
+    assert targets[0]["kind"] == "linkedin_member"
+
+
+def test_publish_linkedin_text_success(monkeypatch):
+    class _Resp:
+        status_code = 201
+        text = '{"id":"urn:li:share:1"}'
+
+        def json(self):
+            return {"id": "urn:li:share:1"}
+
+    async def fake_post(self, url, **kwargs):
+        assert url == "https://api.linkedin.com/rest/posts"
+        return _Resp()
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    result = asyncio.run(
+        publish_linkedin(
+            "urn:li:person:abc123",
+            "token",
+            label="Alice LinkedIn",
+            content="Hello LinkedIn",
+        )
+    )
+    assert result.ok is True
+    assert result.platform_post_id == "urn:li:share:1"

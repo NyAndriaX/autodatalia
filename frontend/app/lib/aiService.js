@@ -31,7 +31,7 @@ function mockDelay(ms = 1200) {
 
 const MAX_PROMPT_CHARS = 2000; // bound input tokens regardless of textarea size
 const ZERO_USAGE = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-const CACHE_KEY = "datalia.ai.genCache";
+const CACHE_KEY = "datalia.ai.genCache.v2";
 
 // Normalize so cosmetic edits (extra spaces, case, trailing newline) map to
 // the SAME signature → trivial changes reuse the cached result, no re-prompt.

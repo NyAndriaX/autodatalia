@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Clock } from "lucide-react";
 import { getScheduleTimezone } from "../../lib/timezone";
@@ -50,9 +50,6 @@ export default function TimePicker({ value = "09:00", onChange, minuteStep = 5 }
   const [popoverPos, setPopoverPos] = useState(null); // { top, left }
   const triggerRef = useRef(null);
   const popoverRef = useRef(null);
-  // Track whether we're mounted so the portal call doesn't run during SSR.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
 
   // Compute popover position relative to the trigger. Used both on open
   // (initial placement) and whenever the user scrolls/resizes (so the
@@ -105,15 +102,23 @@ export default function TimePicker({ value = "09:00", onChange, minuteStep = 5 }
   // and adjust placement so the flip-up math uses the actual height.
   useLayoutEffect(() => {
     if (open) reposition();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const [hStr = "09", mStr = "00"] = (value || "09:00").split(":");
   const selectedH = Math.max(0, Math.min(23, parseInt(hStr, 10) || 0));
   const selectedM = Math.max(0, Math.min(59, parseInt(mStr, 10) || 0));
 
-  const minutes = [];
-  for (let m = 0; m < 60; m += minuteStep) minutes.push(m);
+  // Memoise by `minuteStep` so the array reference stays stable across
+  // unrelated parent re-renders. Without this, every re-render of the
+  // popover handed WheelColumn a new `items` array → its useLayoutEffect
+  // re-fired → isProgScroll flipped true for ~70ms → user scrolls/clicks
+  // on the minute column were silently swallowed. The hour column never
+  // showed the bug because HOURS is a module-level constant.
+  const minutes = useMemo(() => {
+    const arr = [];
+    for (let m = 0; m < 60; m += minuteStep) arr.push(m);
+    return arr;
+  }, [minuteStep]);
 
   // Snap the displayed minute to the nearest step so the highlight is honest
   // when callers pass a value the column can't represent exactly (e.g. 02 with
@@ -185,7 +190,9 @@ export default function TimePicker({ value = "09:00", onChange, minuteStep = 5 }
       {/* Portal-render so the popover escapes the modal's overflow:auto.
           Without this it gets clipped inside calendar's edit dialog and
           the user has to scroll to see the columns — the CEO's complaint. */}
-      {mounted && popover ? createPortal(popover, document.body) : null}
+      {popover && typeof document !== "undefined"
+        ? createPortal(popover, document.body)
+        : null}
     </>
   );
 }
@@ -330,6 +337,25 @@ function WheelColumn({ ariaLabel, items, selected, onSelect }) {
   const ref = useRef(null);
   const half = Math.floor(VISIBLE_ROWS / 2);
   const padPx = ROW_PX * half;
+  // Track whether a programmatic scroll is in progress so the scroll
+  // handler doesn't fight external value changes (presets, clicks).
+  const isProgScroll = useRef(false);
+  // Debounce timer for scroll-end detection.
+  const scrollTimer = useRef(null);
+  // Pointer-down origin so we can distinguish "tap on a row" from
+  // "drag to scroll the column". Without this, scroll-snap-mandatory
+  // can swallow taps on touch devices (the press is interpreted as a
+  // 0-px drag and `onClick` never resolves).
+  const pressOrigin = useRef(null);
+
+  // Helper: re-enable scroll-snap. Kept as a function so both the
+  // programmatic scroll and the user-scroll-end paths can call it.
+  const enableSnap = () => {
+    if (ref.current) ref.current.style.scrollSnapType = "y mandatory";
+  };
+  const disableSnap = () => {
+    if (ref.current) ref.current.style.scrollSnapType = "none";
+  };
 
   // Scroll the selected row into the centred tray. useLayoutEffect (vs.
   // useEffect) so the scroll lands before paint — otherwise the user sees
@@ -338,8 +364,43 @@ function WheelColumn({ ariaLabel, items, selected, onSelect }) {
     if (!ref.current) return;
     const idx = items.indexOf(selected);
     if (idx < 0) return;
-    ref.current.scrollTop = idx * ROW_PX;
+    const target = idx * ROW_PX;
+    // No-op when we're already on the right row. This matters because
+    // unrelated parent re-renders would otherwise flip isProgScroll true
+    // for ~70 ms and silently swallow a mid-flight user scroll/tap.
+    if (ref.current.scrollTop === target) return;
+    isProgScroll.current = true;
+    disableSnap();
+    ref.current.scrollTop = target;
+    requestAnimationFrame(() => {
+      enableSnap();
+      setTimeout(() => { isProgScroll.current = false; }, 60);
+    });
   }, [selected, items]);
+
+  // After the user stops scrolling (touch swipe, mouse wheel, trackpad),
+  // figure out which item sits in the centred tray and commit it.
+  // Snap is disabled WHILE scrolling so the column doesn't jitter under
+  // the finger, then re-enabled at the end so the final position locks.
+  const handleScroll = () => {
+    if (isProgScroll.current) return;
+    disableSnap();
+    if (scrollTimer.current) clearTimeout(scrollTimer.current);
+    scrollTimer.current = setTimeout(() => {
+      if (!ref.current || isProgScroll.current) return;
+      const idx = Math.round(ref.current.scrollTop / ROW_PX);
+      const clamped = Math.max(0, Math.min(items.length - 1, idx));
+      enableSnap();
+      if (items[clamped] !== selected) {
+        onSelect(items[clamped]);
+      } else {
+        // Snap manually to the exact row when the value didn't change —
+        // otherwise the column can end up a few pixels off after the
+        // user's flick decelerates.
+        ref.current.scrollTop = clamped * ROW_PX;
+      }
+    }, 140);
+  };
 
   return (
     <div
@@ -351,13 +412,19 @@ function WheelColumn({ ariaLabel, items, selected, onSelect }) {
         height: ROW_PX * VISIBLE_ROWS,
         scrollSnapType: "y mandatory",
         scrollbarWidth: "none", // Firefox
+        WebkitOverflowScrolling: "touch",
+        msOverflowStyle: "none", // IE/Edge
+        touchAction: "pan-y", // let vertical drags scroll, intercept the rest
       }}
+      onScroll={handleScroll}
       onWheel={(e) => {
         // Default browser wheel handling already produces a nice scroll;
         // we just make sure the popover container doesn't also scroll.
         e.stopPropagation();
       }}
     >
+      {/* Hide Webkit scrollbar */}
+      <style>{`[role="listbox"]::-webkit-scrollbar { display: none; }`}</style>
       {/* Top spacer so item index 0 can centre. */}
       <div aria-hidden="true" style={{ height: padPx }} />
       {items.map((v) => {
@@ -368,7 +435,24 @@ function WheelColumn({ ariaLabel, items, selected, onSelect }) {
             type="button"
             role="option"
             aria-selected={isSel}
-            onClick={() => onSelect(v)}
+            // Tap-vs-drag detection: record where the press started on
+            // pointerdown; on pointerup, only treat it as a tap if the
+            // pointer barely moved. A real drag falls through to the
+            // browser's native scroll and `handleScroll` picks up the
+            // final row.
+            onPointerDown={(e) => {
+              pressOrigin.current = { x: e.clientX, y: e.clientY };
+            }}
+            onPointerUp={(e) => {
+              const o = pressOrigin.current;
+              pressOrigin.current = null;
+              if (!o) return;
+              const moved = Math.hypot(e.clientX - o.x, e.clientY - o.y);
+              if (moved < 6 && v !== selected) onSelect(v);
+            }}
+            onPointerCancel={() => {
+              pressOrigin.current = null;
+            }}
             className="w-full text-center tabular-nums transition-colors"
             style={{
               height: ROW_PX,
@@ -380,6 +464,7 @@ function WheelColumn({ ariaLabel, items, selected, onSelect }) {
               background: "transparent",
               border: "none",
               cursor: "pointer",
+              touchAction: "pan-y",
             }}
           >
             {pad(v)}

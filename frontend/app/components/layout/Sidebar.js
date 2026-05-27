@@ -14,6 +14,7 @@ import {
   Zap,
   LayoutDashboard,
   Coins,
+  Bot,
 } from "lucide-react";
 
 const navItems = [
@@ -28,6 +29,12 @@ const navItems = [
     label: "Creation & Editor",
     icon: Sparkles,
     description: "Create & generate content",
+  },
+  {
+    id: "automation",
+    label: "Automation",
+    icon: Bot,
+    description: "Auto-generate & validate",
   },
   {
     id: "calendar",

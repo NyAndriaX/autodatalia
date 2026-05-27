@@ -4,9 +4,12 @@ import {
   setSearchResults,
   setMessages,
   setMessagesStatus,
+  markMessageRead,
+  markAllMessagesRead,
 } from "./uiSlice";
 import { search } from "../lib/searchService";
 import { fetchMessages } from "../lib/messagesService";
+import { addReadId, addReadIds, getReadIds } from "../lib/notificationsReadStore";
 
 let searchTimer = null;
 let searchSeq = 0;
@@ -43,9 +46,35 @@ export function loadMessagesThunk() {
     dispatch(setMessagesStatus("loading"));
     try {
       const items = await fetchMessages();
-      dispatch(setMessages(items));
+      // Merge the localStorage "seen" set so notifications that were
+      // marked read in a previous session don't bounce back as unread
+      // when the user re-signs in.
+      const readIds = getReadIds();
+      const merged = (items || []).map((m) => ({
+        ...m,
+        read: Boolean(m.read) || readIds.has(m.id),
+      }));
+      dispatch(setMessages(merged));
     } catch {
       dispatch(setMessagesStatus("error"));
     }
+  };
+}
+
+// Wrappers around the reducer actions that also persist the "seen"
+// state to localStorage. Components should call these instead of
+// dispatching markMessageRead / markAllMessagesRead directly.
+export function markMessageReadThunk(id) {
+  return (dispatch) => {
+    dispatch(markMessageRead(id));
+    addReadId(id);
+  };
+}
+
+export function markAllMessagesReadThunk() {
+  return (dispatch, getState) => {
+    const ids = getState().ui.messages.items.map((m) => m.id).filter(Boolean);
+    dispatch(markAllMessagesRead());
+    addReadIds(ids);
   };
 }

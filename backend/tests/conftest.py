@@ -34,7 +34,7 @@ def client():
 @pytest.fixture(autouse=True)
 def _isolate_state():
     """Wipe per-test artefacts: posts file, messages file, AI cache."""
-    for f in ("posts.json", "messages.json", ".ai_cache.json"):
+    for f in ("posts.json", "messages.json", ".ai_cache.json", "automation_rules.json"):
         p = TEST_CONTENT / f
         if p.exists():
             p.unlink()

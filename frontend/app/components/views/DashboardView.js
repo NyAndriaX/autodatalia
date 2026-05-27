@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSelector, useDispatch } from "react-redux";
-import { fetchConnections, readCachedConnections } from "../../lib/oauthService";
+import { fetchConnections } from "../../lib/oauthService";
 import {
   Sparkles,
   CalendarDays,
@@ -44,6 +44,21 @@ const fmt = (n) =>
     .replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
 const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const WEEKDAY_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTH_LONG = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
 
 /**
  * Landing dashboard.
@@ -82,25 +97,20 @@ export default function DashboardView() {
   // fetchConnections refreshes anything older than the TTL.
   const [oauthState, setOauthState] = useState(null);
   useEffect(() => {
-    const cached = readCachedConnections();
-    if (cached?.providers) setOauthState(cached.providers);
-    fetchConnections().then((d) => setOauthState(d?.providers || {}));
+    let alive = true;
+    fetchConnections().then((d) => {
+      if (alive) setOauthState(d?.providers || {});
+    });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   // Locale-formatted date — render only after mount to avoid SSR/client
   // hydration mismatch (server locale ≠ browser locale in some configs).
-  const [dateLabel, setDateLabel] = useState("");
-  useEffect(() => {
-    setDateLabel(
-      today.toLocaleDateString(undefined, {
-        weekday: "long",
-        month: "long",
-        day: "numeric",
-      })
-    );
-    // `today` is a stable per-render Date; recomputing once on mount is fine.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const dateLabel = `${WEEKDAY_LONG[today.getDay()]}, ${
+    MONTH_LONG[today.getMonth()]
+  } ${today.getDate()}`;
 
   const PLATFORM_TO_PROVIDER = {
     facebook: "meta",

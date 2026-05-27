@@ -33,7 +33,7 @@ TikTok test account before touching anything Datalia-branded.
 
 - **`oauth.py`** — on TikTok callback, after the token exchange, hit
   `GET /v2/user/info/` and persist `display_name`, `avatar_url`,
-  `open_id`, `union_id` into `oauth_tokens.json` next to the access
+  `open_id`, `union_id` into `.oauth_tokens.json` next to the access
   token. The frontend needs these for the compose-screen UX
   requirements below.
 - **`publish.py`** — implement `publish_tiktok` for real:
@@ -211,7 +211,7 @@ Upload to the review form:
 
 **Daily-active-user estimate**: `10–50 at launch, 100–500 within 6 months`.
 
-**Stored fields** (list exactly what's in `oauth_tokens.json` and the
+**Stored fields** (list exactly what's in `.oauth_tokens.json` and the
 publish response — nothing more):
 
 ```

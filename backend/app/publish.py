@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import HTTPException
@@ -222,7 +223,7 @@ async def publish_facebook_page(
                     },
                 )
                 attached_media.append({"media_fbid": photo.get("id")})
-            
+
             feed_data = {
                 "message": content,
                 "access_token": page_access_token,
@@ -230,7 +231,7 @@ async def publish_facebook_page(
             }
             # Pass attached_media as a JSON-encoded array of objects
             feed_data["attached_media"] = json.dumps(attached_media)
-                
+
             data = await _post_json(
                 f"{base}/{page_id}/feed",
                 data=feed_data,
@@ -330,49 +331,85 @@ async def publish_instagram(
     try:
         effective_urls = media_urls or ([media_url] if media_url else [])
         if len(effective_urls) > 1:
+            print(f"[ig-carousel] {ig_user_id} starting carousel with {len(effective_urls)} items")
             # Step 1 — create carousel children
             children = []
             for idx, url in enumerate(effective_urls[:10]): # IG max is 10
-                child = await _post_json(
-                    f"{base}/{ig_user_id}/media",
-                    data={
-                        "image_url" if media_kind == "image" else "video_url": url,
-                        "is_carousel_item": "true",
-                        **({"media_type": "VIDEO"} if media_kind == "video" else {}),
-                        "access_token": page_access_token,
-                    },
-                )
-                if child.get("error"):
-                    detail = child["error"].get("message", "IG child container creation failed")
-                    raise HTTPException(status_code=502, detail=detail)
-                children.append(child.get("id"))
-                # Stagger to avoid ngrok 429 Too Many Requests (Meta crawler fetching everything at once)
-                await asyncio.sleep(2)
-            
-            # We MUST wait for each child (video OR image) to be FINISHED
-            # before we can attach them to a CAROUSEL container.
-            for child_id in children:
-                for attempt in range(30):
+                # Retry child creation too — Meta 100/33 can hit here when
+                # the image-URL fetch races the API call.
+                child = None
+                for create_attempt in range(4):
                     try:
-                        status = await _get_json(
-                            f"{base}/{child_id}",
-                            params={"fields": "status_code", "access_token": page_access_token},
+                        child = await _post_json(
+                            f"{base}/{ig_user_id}/media",
+                            data={
+                                "image_url" if media_kind == "image" else "video_url": url,
+                                "is_carousel_item": "true",
+                                **({"media_type": "VIDEO"} if media_kind == "video" else {}),
+                                "access_token": page_access_token,
+                            },
                         )
-                        code = status.get("status_code")
-                        if code == "FINISHED":
-                            break
-                        if code == "ERROR":
-                            raise HTTPException(502, f"IG child processing failed: {status}")
+                        break
                     except HTTPException as exc:
-                        # Meta 100 subcode 33 ("Object does not exist") happens
-                        # due to eventual consistency. Ignore and retry.
-                        if attempt == 29:
+                        detail = str(exc.detail)
+                        print(f"[ig-carousel] child {idx} create attempt {create_attempt+1} failed: {detail[:200]}")
+                        if create_attempt == 3:
                             raise
-                    await asyncio.sleep(2)
-            
-            # Create carousel container
+                        await asyncio.sleep(3)
+                if child is None or child.get("error"):
+                    detail = (child or {}).get("error", {}).get("message", "IG child container creation failed")
+                    raise HTTPException(status_code=502, detail=detail)
+                child_id = child.get("id")
+                children.append(child_id)
+                print(f"[ig-carousel] child {idx} created id={child_id}")
+                # Stagger to avoid 429s as Meta's crawler fetches everything at once
+                await asyncio.sleep(2)
+
+            # Polling strategy is per Meta's actual behavior, not per the
+            # "always wait for FINISHED" guidance:
+            #   - Image children: process synchronously. Meta marks them
+            #     attachable to a CAROUSEL within seconds, and querying
+            #     /{child_id} for status_code returns Meta 100/33
+            #     ("Object does not exist or you don't have permission")
+            #     for ~60s even though the container IS attachable. We
+            #     used to poll and burn 60s of pointless retries here.
+            #   - Video children: actually need polling (Meta processes
+            #     them asynchronously). We keep the loop in that case.
+            if media_kind == "video":
+                for child_id in children:
+                    last_code = None
+                    for attempt in range(30):
+                        try:
+                            status = await _get_json(
+                                f"{base}/{child_id}",
+                                params={"fields": "status_code", "access_token": page_access_token},
+                            )
+                            last_code = status.get("status_code")
+                            if last_code == "FINISHED":
+                                break
+                            if last_code == "ERROR":
+                                raise HTTPException(502, f"IG child processing failed: {status}")
+                        except HTTPException as exc:
+                            if attempt == 29:
+                                print(f"[ig-carousel] child {child_id} polling exhausted: {exc.detail}")
+                                raise
+                        await asyncio.sleep(2)
+                    print(f"[ig-carousel] child {child_id} status={last_code}")
+                # Stabilization beat after video children finish.
+                await asyncio.sleep(4)
+            else:
+                # For images, give Meta a couple seconds to cache the
+                # children as attachable. Skipping the per-child poll
+                # saves ~60s on every failed-attempt-loop and also
+                # avoids the spurious 100/33 we used to surface.
+                print(f"[ig-carousel] skipping per-child poll for image carousel ({len(children)} items)")
+                await asyncio.sleep(3)
+
+            # Create carousel container — bumped from 5 to 8 attempts with
+            # longer backoff since 100/33 propagation can take 20-30s.
             container = None
-            for attempt in range(5):
+            last_err: str | None = None
+            for attempt in range(8):
                 try:
                     container = await _post_json(
                         f"{base}/{ig_user_id}/media",
@@ -383,15 +420,20 @@ async def publish_instagram(
                             "access_token": page_access_token,
                         },
                     )
+                    print(f"[ig-carousel] parent created on attempt {attempt+1}: {container.get('id')}")
                     break
-                except HTTPException:
-                    if attempt == 4:
+                except HTTPException as exc:
+                    last_err = str(exc.detail)[:200]
+                    print(f"[ig-carousel] parent create attempt {attempt+1}/8 failed: {last_err}")
+                    if attempt == 7:
                         raise
-                    await asyncio.sleep(3)
-                    
+                    # Backoff: 3, 4, 5, 6, 7, 8, 9s — gives Meta up to ~42s
+                    # of total wait beyond the initial 4s stabilization delay.
+                    await asyncio.sleep(3 + attempt)
+
             creation_id = container.get("id") if container else None
             if not creation_id:
-                raise HTTPException(502, "Instagram returned no creation_id for carousel.")
+                raise HTTPException(502, f"Instagram returned no creation_id for carousel. last_err={last_err}")
         else:
             # Step 1 — create container
             container_params: dict[str, Any] = {
@@ -569,7 +611,7 @@ async def publish_tiktok_photo(
     source_info: dict[str, Any] = {
         "source": "PULL_FROM_URL",
         "photo_cover_index": 0,
-        "photo_images": [{"image_url": u} for u in effective_urls],
+        "photo_images": effective_urls,
     }
 
     # Build bodies for both modes
@@ -587,7 +629,10 @@ async def publish_tiktok_photo(
             }
         else:
             return {
-                # TikTok throws 'invalid_params' if post_info is included for inbox drafts
+                "post_info": {
+                    "title": (content or "")[:90],
+                    "description": (content or "")[:4000],
+                },
                 "source_info": source_info,
                 "post_mode": "MEDIA_UPLOAD",
                 "media_type": "PHOTO",
@@ -1095,6 +1140,85 @@ async def publish_tiktok(
 # ── LinkedIn stub ───────────────────────────────────────────────────
 
 
+def _linkedin_headers(access_token: str, *, json_body: bool = True) -> dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Linkedin-Version": settings.linkedin_api_version,
+        "X-Restli-Protocol-Version": "2.0.0",
+    }
+    if json_body:
+        headers["Content-Type"] = "application/json"
+    return headers
+
+
+async def _linkedin_upload_image(
+    member_or_org_urn: str,
+    access_token: str,
+    media_url: str,
+) -> str:
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        init_resp = await client.post(
+            "https://api.linkedin.com/rest/images?action=initializeUpload",
+            headers=_linkedin_headers(access_token),
+            json={"initializeUploadRequest": {"owner": member_or_org_urn}},
+        )
+        if init_resp.status_code >= 400:
+            raise HTTPException(
+                502,
+                {
+                    "message": "LinkedIn image initializeUpload failed.",
+                    "status_code": init_resp.status_code,
+                    "response": init_resp.text[:800],
+                },
+            )
+        init_data = init_resp.json()
+        value = init_data.get("value") or {}
+        image_urn = value.get("image")
+        upload_url = value.get("uploadUrl")
+        if not image_urn or not upload_url:
+            raise HTTPException(502, "LinkedIn image upload did not return image/uploadUrl.")
+
+        source = await client.get(media_url)
+        if source.status_code >= 400:
+            raise HTTPException(502, f"LinkedIn could not fetch media_url ({source.status_code}).")
+        content_type = (
+            source.headers.get("content-type")
+            or mimetypes.guess_type(media_url)[0]
+            or "image/png"
+        )
+        upload_resp = await client.put(
+            upload_url,
+            headers={"Content-Type": content_type},
+            content=source.content,
+        )
+        if upload_resp.status_code >= 400:
+            raise HTTPException(
+                502,
+                {
+                    "message": "LinkedIn binary image upload failed.",
+                    "status_code": upload_resp.status_code,
+                    "response": upload_resp.text[:800],
+                },
+            )
+
+        encoded = quote(image_urn, safe="")
+        for _ in range(10):
+            status_resp = await client.get(
+                f"https://api.linkedin.com/rest/images/{encoded}",
+                headers=_linkedin_headers(access_token, json_body=False),
+            )
+            if status_resp.status_code >= 400:
+                break
+            status = (status_resp.json().get("status") or "").upper()
+            if status in {"AVAILABLE", "READY"}:
+                return image_urn
+            if status in {"PROCESSING", "WAITING_UPLOAD"}:
+                await asyncio.sleep(1)
+                continue
+            break
+    return image_urn
+
+
 async def publish_linkedin(
     member_or_org_urn: str,
     access_token: str,
@@ -1123,6 +1247,105 @@ async def publish_linkedin(
     )
 
 
+async def publish_linkedin(
+    member_or_org_urn: str,
+    access_token: str,
+    *,
+    label: str,
+    content: str,
+    media_url: str | None = None,
+) -> PublishResult:
+    """Publish a LinkedIn member post through the REST Posts API."""
+    if not access_token:
+        return PublishResult(
+            target_id=member_or_org_urn,
+            target_label=label,
+            platform="linkedin",
+            ok=False,
+            error="linkedin_not_connected",
+        )
+    try:
+        image_urn = None
+        if media_url:
+            ext = (media_url or "").lower().rsplit(".", 1)[-1]
+            if ext in {"mp4", "mov", "webm", "m4v"}:
+                return PublishResult(
+                    target_id=member_or_org_urn,
+                    target_label=label,
+                    platform="linkedin",
+                    ok=False,
+                    error="linkedin_video_not_implemented",
+                )
+            image_urn = await _linkedin_upload_image(
+                member_or_org_urn,
+                access_token,
+                media_url,
+            )
+
+        payload: dict[str, Any] = {
+            "author": member_or_org_urn,
+            "commentary": content,
+            "visibility": "PUBLIC",
+            "distribution": {
+                "feedDistribution": "MAIN_FEED",
+                "targetEntities": [],
+                "thirdPartyDistributionChannels": [],
+            },
+            "lifecycleState": "PUBLISHED",
+            "isReshareDisabledByAuthor": False,
+        }
+        if image_urn:
+            payload["content"] = {
+                "media": {
+                    "id": image_urn,
+                    "title": label or "Datalia post",
+                }
+            }
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                "https://api.linkedin.com/rest/posts",
+                headers=_linkedin_headers(access_token),
+                json=payload,
+            )
+        if resp.status_code >= 400:
+            return PublishResult(
+                target_id=member_or_org_urn,
+                target_label=label,
+                platform="linkedin",
+                ok=False,
+                error=f"linkedin_publish_failed: HTTP {resp.status_code}",
+                raw={"response": resp.text[:800]},
+            )
+        data = resp.json() if resp.text else {}
+        return PublishResult(
+            target_id=member_or_org_urn,
+            target_label=label,
+            platform="linkedin",
+            ok=True,
+            platform_post_id=data.get("id"),
+            raw=data,
+        )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+        return PublishResult(
+            target_id=member_or_org_urn,
+            target_label=label,
+            platform="linkedin",
+            ok=False,
+            error=detail.get("message") or "linkedin_publish_failed",
+            raw=detail,
+        )
+    except Exception as exc:
+        return PublishResult(
+            target_id=member_or_org_urn,
+            target_label=label,
+            platform="linkedin",
+            ok=False,
+            error=f"linkedin_exception: {exc}",
+        )
+
+
 # ── Public surface (for the FastAPI route) ──────────────────────────
 
 
@@ -1132,6 +1355,7 @@ async def build_targets_from_post(
     media_url: str | None = None,
     media_urls: list[str] | None = None,
     media_kind: str = "image",
+    link: str | None = None,
     ratios: dict[str, str] | None = None,
     tiktok_options: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
@@ -1190,18 +1414,24 @@ async def build_targets_from_post(
                     "media_kind": media_kind,
                 })
         elif platform == "tiktok":
+            # Scheduler path: refresh TikTok token if it's expired (24h
+            # short-lived). Mirrors what /publish does inline. Without this,
+            # any scheduled post >24h after the last manual reconnect would
+            # 401 silently.
+            from .oauth import resolve_tiktok_access_token
+            token = await resolve_tiktok_access_token()
+            tokens = _load_tokens()
             record = tokens.get("tiktok") or {}
-            token = record.get("access_token")
             if not token:
                 continue
             raw = record.get("raw") or {}
             open_id = record.get("open_id") or raw.get("open_id")
             handle = record.get("username") or record.get("display_name")
-            
+
             tk_kind = media_kind
             if tk_kind not in ("image", "video"):
                 tk_kind = "image" if (media_url or "").lower().rsplit(".", 1)[-1] in {
-                    "png", "jpg", "jpeg", "webp", "gif"
+                    "png", "jpg", "jpeg", "webp", "gif", "jfif"
                 } else "video"
 
             tk_opts = tiktok_options or {}
@@ -1226,8 +1456,8 @@ async def build_targets_from_post(
             raw = record.get("raw") or {}
             resolved.append({
                 "platform": platform,
-                "id": raw.get("urn") or platform,
-                "label": platform,
+                "id": record.get("urn") or raw.get("urn") or platform,
+                "label": record.get("display_name") or "LinkedIn",
                 "access_token": token,
                 "media_url": media_url,
                 "media_urls": effective_urls,
@@ -1274,102 +1504,134 @@ async def publish_to_targets(
     started = time.time()
 
     async def _dispatch(t: dict[str, Any]) -> PublishResult:
-        platform = t.get("platform")
-        # Spam guard: cooldown + duplicate-content check per target. Runs
-        # before any upstream call so a flood never reaches the platform.
-        guard = check_spam_guard(t["id"], content, t.get("media_url"))
-        if guard:
-            return PublishResult(
-                target_id=t["id"],
-                target_label=t.get("label") or t["id"],
-                platform=platform or "unknown",
-                ok=False,
-                error=guard,
-            )
-        if platform == "facebook":
-            # Auto-detect image vs video from URL extension if the caller
-            # didn't set media_kind. Without this the default routes to
-            # /photos for video URLs and Meta replies with `324: Missing
-            # or invalid image file`.
-            fb_kind = (t.get("media_kind") or "").lower()
-            if fb_kind not in ("image", "video"):
-                ext = (t.get("media_url") or "").lower().rsplit(".", 1)[-1]
-                fb_kind = "video" if ext in {"mp4", "mov", "webm", "m4v"} else "image"
-            return await publish_facebook_page(
-                t["id"], t["access_token"],
-                page_label=t.get("label") or t["id"],
-                content=content,
-                media_url=t.get("media_url"),
-                media_urls=t.get("media_urls"),
-                link=t.get("link"),
-                media_kind=fb_kind,
-            )
-        if platform == "instagram":
-            media = t.get("media_url")
-            if not media:
+        try:
+            platform = t.get("platform")
+            # Spam guard: cooldown + duplicate-content check per target. Runs
+            # before any upstream call so a flood never reaches the platform.
+            guard = check_spam_guard(t["id"], content, t.get("media_url"))
+            if guard:
                 return PublishResult(
                     target_id=t["id"],
                     target_label=t.get("label") or t["id"],
-                    platform="instagram",
+                    platform=platform or "unknown",
                     ok=False,
-                    error="instagram_requires_media",
+                    error=guard,
                 )
-            return await publish_instagram(
-                t["id"], t["access_token"],
-                ig_label=t.get("label") or t["id"],
-                content=content,
-                media_url=media,
-                media_urls=t.get("media_urls"),
-                media_kind=t.get("media_kind", "image"),
-            )
-        if platform == "tiktok":
-            # Route image vs video to the correct TikTok endpoint —
-            # /video/init/ rejects non-video bytes with
-            # `file_format_check_failed` during processing.
-            if t.get("media_kind") == "image":
-                return await publish_tiktok_photo(
+            if platform == "facebook":
+                # Auto-detect image vs video from URL extension if the caller
+                # didn't set media_kind. Without this the default routes to
+                # /photos for video URLs and Meta replies with `324: Missing
+                # or invalid image file`.
+                fb_kind = (t.get("media_kind") or "").lower()
+                if fb_kind not in ("image", "video"):
+                    ext = (t.get("media_url") or "").lower().rsplit(".", 1)[-1]
+                    fb_kind = "video" if ext in {"mp4", "mov", "webm", "m4v"} else "image"
+                return await publish_facebook_page(
+                    t["id"], t["access_token"],
+                    page_label=t.get("label") or t["id"],
+                    content=content,
+                    media_url=t.get("media_url"),
+                    media_urls=t.get("media_urls"),
+                    link=t.get("link"),
+                    media_kind=fb_kind,
+                )
+            if platform == "instagram":
+                media = t.get("media_url")
+                if not media:
+                    return PublishResult(
+                        target_id=t["id"],
+                        target_label=t.get("label") or t["id"],
+                        platform="instagram",
+                        ok=False,
+                        error="instagram_requires_media",
+                    )
+                return await publish_instagram(
+                    t["id"], t["access_token"],
+                    ig_label=t.get("label") or t["id"],
+                    content=content,
+                    media_url=media,
+                    media_urls=t.get("media_urls"),
+                    media_kind=t.get("media_kind", "image"),
+                )
+            if platform == "tiktok":
+                # Route image vs video to the correct TikTok endpoint —
+                # /video/init/ rejects non-video bytes with
+                # `file_format_check_failed` during processing.
+                if t.get("media_kind") == "image":
+                    return await publish_tiktok_photo(
+                        t["id"], t["access_token"],
+                        handle_label=t.get("label") or t["id"],
+                        content=content,
+                        photo_url=t.get("media_url") or "",
+                        photo_urls=t.get("media_urls"),
+                        privacy_level=t.get("privacy_level", "SELF_ONLY"),
+                        disclose_video_branded=t.get("disclose_video_branded", False),
+                        disclose_video_your_brand=t.get("disclose_video_your_brand", False),
+                        audit_mode=t.get("audit_mode", "inbox"),
+                        upload_mode=t.get("upload_mode"),
+                    )
+                return await publish_tiktok(
                     t["id"], t["access_token"],
                     handle_label=t.get("label") or t["id"],
                     content=content,
-                    photo_url=t.get("media_url") or "",
-                    photo_urls=t.get("media_urls"),
+                    video_url=t.get("media_url") or "",
                     privacy_level=t.get("privacy_level", "SELF_ONLY"),
                     disclose_video_branded=t.get("disclose_video_branded", False),
                     disclose_video_your_brand=t.get("disclose_video_your_brand", False),
                     audit_mode=t.get("audit_mode", "inbox"),
-                    upload_mode=t.get("upload_mode"),
                 )
-            return await publish_tiktok(
-                t["id"], t["access_token"],
-                handle_label=t.get("label") or t["id"],
-                content=content,
-                video_url=t.get("media_url") or "",
-                privacy_level=t.get("privacy_level", "SELF_ONLY"),
-                disclose_video_branded=t.get("disclose_video_branded", False),
-                disclose_video_your_brand=t.get("disclose_video_your_brand", False),
-                audit_mode=t.get("audit_mode", "inbox"),
+            if platform == "linkedin":
+                return await publish_linkedin(
+                    t["id"], t["access_token"],
+                    label=t.get("label") or t["id"],
+                    content=content,
+                    media_url=t.get("media_url"),
+                )
+            return PublishResult(
+                target_id=t.get("id", "?"),
+                target_label=t.get("label", "?"),
+                platform=platform or "unknown",
+                ok=False,
+                error=f"unknown_platform:{platform}",
             )
-        if platform == "linkedin":
-            return await publish_linkedin(
-                t["id"], t["access_token"],
-                label=t.get("label") or t["id"],
-                content=content,
-                media_url=t.get("media_url"),
+        except Exception as exc:
+            import traceback
+            print(f"[publish] exception in _dispatch for {t.get('platform')}/{t.get('id')}: {exc}")
+            traceback.print_exc()
+            return PublishResult(
+                target_id=t.get("id", "?"),
+                target_label=t.get("label") or t.get("id", "?"),
+                platform=t.get("platform", "unknown"),
+                ok=False,
+                error=f"dispatch_failed: {exc}",
             )
-        return PublishResult(
-            target_id=t.get("id", "?"),
-            target_label=t.get("label", "?"),
-            platform=platform or "unknown",
-            ok=False,
-            error=f"unknown_platform:{platform}",
-        )
 
-    results = await asyncio.gather(*(_dispatch(t) for t in targets), return_exceptions=False)
-    # Record each success so future calls to check_spam_guard see it.
+    results = await asyncio.gather(*(_dispatch(t) for t in targets), return_exceptions=True)
+
+    # Convert any unhandled exceptions into failed PublishResults so one
+    # platform's crash never kills the response for the others.  Before
+    # this fix, a single IG/TikTok error would cause the entire /publish
+    # endpoint to return HTTP 500, hiding Facebook's successful result.
+    safe_results: list[PublishResult] = []
     for r, t in zip(results, targets):
+        if isinstance(r, BaseException):
+            print(f"[publish] unhandled exception for {t.get('platform')}/{t.get('id')}: {r}")
+            safe_results.append(PublishResult(
+                target_id=t.get("id", "?"),
+                target_label=t.get("label", "?"),
+                platform=t.get("platform", "unknown"),
+                ok=False,
+                error=f"internal_error: {r}",
+            ))
+        else:
+            safe_results.append(r)
+
+    # Record each success so future calls to check_spam_guard see it.
+    for r, t in zip(safe_results, targets):
         if r.ok:
             record_publish(t["id"], content, t.get("media_url"))
     elapsed_ms = int((time.time() - started) * 1000)
     return [
-        {**r.to_dict(), "elapsed_ms_total": elapsed_ms} for r in results
+        {**r.to_dict(), "elapsed_ms_total": elapsed_ms} for r in safe_results
     ]
+

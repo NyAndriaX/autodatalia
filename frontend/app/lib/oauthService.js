@@ -198,6 +198,7 @@ export async function disconnect(providerId) {
 export async function publishToTargets({
   content,
   mediaUrl = null,
+  mediaUrls = null,
   link = null,
   targets,
   ratios = null,
@@ -209,6 +210,7 @@ export async function publishToTargets({
     body: JSON.stringify({
       content,
       media_url: mediaUrl,
+      media_urls: mediaUrls,
       link,
       targets,
       ratios: ratios || undefined,

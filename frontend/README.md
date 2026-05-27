@@ -26,7 +26,7 @@ frontend/
 │   ├── store/                  # Redux slices + plain thunk factories
 │   │                           #   editor/ui/auth slices, *Thunks
 │   └── lib/                    # Service layer (config, apiClient, aiService,
-│                               #   webhookService, authService, searchService,
+│                               #   oauthService, authService, searchService,
 │                               #   messagesService, uploadService, theme)
 ├── .env.example                # Copy to .env.local
 └── next.config.mjs             # Includes a /api/backend rewrite proxy
@@ -58,19 +58,18 @@ All client-side, so they use the `NEXT_PUBLIC_` prefix and are read in one place
 | Variable | Purpose |
 |---|---|
 | `NEXT_PUBLIC_API_BASE_URL` | Backend base URL. Empty → AI uses the local mock only. Set to `/api/backend` to use the built-in CORS-free rewrite proxy to `localhost:8000`. |
-| `NEXT_PUBLIC_N8N_SAVE_DRAFT_URL` | n8n webhook for "Save as Draft". Blank → button updates status + notifies locally, no POST. |
-| `NEXT_PUBLIC_N8N_SUBMIT_VALIDATION_URL` | n8n webhook for "Submit for Validation". |
-| `NEXT_PUBLIC_N8N_PUBLISH_URL` | n8n webhook for "Publish Now". |
+| `NEXT_PUBLIC_BACKEND_AUTH_TOKEN` | Bearer token sent to protected backend routes. Must match `BACKEND_AUTH_TOKEN`; empty matches backend open mode. |
 
 ### Graceful degradation
 
-The backend, n8n and Telegram bot are not all built yet. The frontend is fully
-usable regardless:
+The backend and Telegram validation flow are not always available in local dev.
+The frontend is still usable regardless:
 
 - **AI generation** calls the backend; on any error / unreachable / incompatible
   response it transparently falls back to a local mock generator.
 - **Action buttons** update Redux post status and raise an in-app notification;
-  they only POST to n8n when the corresponding webhook URL is configured.
+  publish flows call the backend when an API base URL and connections are
+  configured.
 - **Telegram indicator** reflects backend `/health` reachability (honest 3-state:
   online / offline / unknown) instead of a hardcoded value.
 - **Media upload** previews images/video locally (object URLs) and attempts a
@@ -88,7 +87,6 @@ and follows the OS when set to `system`. A blocking inline script in
 `layout.js` applies the resolved theme before first paint (no flash); the
 Topbar toggle flips it. Honors `prefers-reduced-motion`.
 
-> The backend's `/captions/generate` captions server-side images and does not yet
-> accept a free-text prompt, so with the backend up the editor still uses the mock
-> for prompt-driven generation. Swapping to a future free-prompt endpoint is a
-> one-function change in `app/lib/aiService.js`.
+> Prompt-driven generation uses backend `/generate` when
+> `NEXT_PUBLIC_API_BASE_URL` is configured. With no backend, or on backend
+> failure, `app/lib/aiService.js` falls back to the local mock generator.

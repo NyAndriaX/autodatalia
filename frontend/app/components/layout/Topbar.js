@@ -6,15 +6,17 @@ import {
   markNotificationRead,
   markAllNotificationsRead,
   clearNotifications,
-  markMessageRead,
-  markAllMessagesRead,
   setConnectivity,
   setTheme,
   setActiveView,
   clearSearch,
   toggleMobileNav,
 } from "../../store/uiSlice";
-import { searchThunk } from "../../store/searchThunks";
+import {
+  searchThunk,
+  markMessageReadThunk,
+  markAllMessagesReadThunk,
+} from "../../store/searchThunks";
 import { logoutThunk } from "../../store/authThunks";
 import { apiHealthCheck } from "../../lib/apiClient";
 import { useIsMobile } from "../../lib/useIsMobile";
@@ -147,19 +149,19 @@ export default function Topbar() {
      "I just want to skip these" case without any click at all. */
   const onFeedItemClick = (item) => {
     if (item.read) return;
-    if (item.source === "message") dispatch(markMessageRead(item.id));
+    if (item.source === "message") dispatch(markMessageReadThunk(item.id));
     else dispatch(markNotificationRead(item.id));
   };
 
   /* When the bell opens, every visible notification + message gets
      marked as read in bulk. Matches the Slack / Linear / Notion
-     pattern: opening the inbox = seen. The visual "newness" tint on
-     each row stays for the current open since React renders synchronously
-     before the reducer runs; next open they all read as plain. */
+     pattern: opening the inbox = seen. The message-side path goes
+     through the thunk so the read flag persists across re-signins
+     (otherwise the badge re-shoots to 40 every time you log back in). */
   useEffect(() => {
     if (!showNotifications) return;
     dispatch(markAllNotificationsRead());
-    dispatch(markAllMessagesRead());
+    dispatch(markAllMessagesReadThunk());
   }, [showNotifications, dispatch]);
 
   // Clicking a search result navigates to the owning view, then resets search.
@@ -188,7 +190,7 @@ export default function Topbar() {
         style={{
           background: searchFocused ? "var(--bg-tertiary)" : "var(--bg-secondary)",
           border: searchFocused ? "1px solid var(--accent-primary)" : "1px solid var(--border-default)",
-          boxShadow: searchFocused ? "0 0 0 3px rgba(59, 130, 246, 0.12)" : "none",
+          boxShadow: searchFocused ? "0 0 0 3px rgba(29, 63, 190, 0.14)" : "none",
         }}
       >
         <Search size={16} className="ml-3" style={{ color: "var(--text-muted)" }} aria-hidden="true" />
@@ -454,13 +456,20 @@ export default function Topbar() {
               <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid var(--border-default)" }}>
                 <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Messages</span>
                 <div className="flex items-center gap-2">
-                  {notifications.length > 0 && (
+                  {feed.length > 0 && (
                     <button
                       className="text-xs btn-ghost py-1 px-2"
                       style={{ color: "var(--text-muted)" }}
-                      onClick={() => dispatch(clearNotifications())}
+                      onClick={() => {
+                        // Clear local (in-memory) + mark all backend
+                        // messages as read so the badge doesn't bounce
+                        // back on the next poll.
+                        dispatch(clearNotifications());
+                        dispatch(markAllMessagesReadThunk());
+                      }}
+                      title="Mark everything as read"
                     >
-                      Clear local
+                      Clear all
                     </button>
                   )}
                   <button onClick={() => setShowNotifications(false)} className="btn-ghost p-1" aria-label="Close messages">
@@ -483,7 +492,7 @@ export default function Topbar() {
                       key={`${item.source}-${item.id}`}
                       className="flex items-start gap-3 px-4 py-3 cursor-pointer"
                       style={{
-                        background: item.read ? "transparent" : "rgba(59,130,246,0.06)",
+                        background: item.read ? "transparent" : "rgba(29, 63, 190, 0.07)",
                         borderBottom: "1px solid var(--border-default)",
                       }}
                       onClick={() => onFeedItemClick(item)}

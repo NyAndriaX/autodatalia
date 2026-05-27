@@ -66,13 +66,43 @@ export default function AppBootstrap() {
 
   // Keep <html data-theme> + storage in sync with the preference, and follow
   // the OS when the preference is "system".
+  //
+  // The `data-theme-transitioning` flag is set for a brief window around
+  // every theme flip so the global CSS rule in globals.css can transition
+  // colors on every element synchronously — without it the body transition
+  // raced the inline-styled surfaces and the user saw a segment-by-segment
+  // wipe.
+  const lastApplied = useRef(null);
   useEffect(() => {
-    applyTheme(resolveTheme(theme));
+    const next = resolveTheme(theme);
+    const prev = lastApplied.current;
+    lastApplied.current = next;
+    if (prev && prev !== next && typeof document !== "undefined") {
+      const html = document.documentElement;
+      html.dataset.themeTransitioning = "true";
+      const t = window.setTimeout(() => {
+        delete html.dataset.themeTransitioning;
+      }, 260);
+      applyTheme(next);
+      storeThemePref(theme);
+      return () => window.clearTimeout(t);
+    }
+    applyTheme(next);
     storeThemePref(theme);
 
     if (theme !== "system") return;
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = () => applyTheme(resolveTheme("system"));
+    const onChange = () => {
+      const resolved = resolveTheme("system");
+      if (resolved !== lastApplied.current) {
+        document.documentElement.dataset.themeTransitioning = "true";
+        window.setTimeout(() => {
+          delete document.documentElement.dataset.themeTransitioning;
+        }, 260);
+        lastApplied.current = resolved;
+      }
+      applyTheme(resolved);
+    };
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
   }, [theme]);

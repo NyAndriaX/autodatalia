@@ -12,18 +12,23 @@ Run via Docker Compose from [`../infra/`](../infra/) (recommended), or standalon
 backend/
 ├── Dockerfile
 ├── requirements.txt
-├── content/                 # Uploaded media + JSON state (volume-mounted)
+├── content/                  # Uploaded media + JSON state (volume-mounted)
 └── app/
-    ├── main.py              # FastAPI entrypoint, CORS, /content mount, TikTok verify
-    ├── config.py            # Env-loaded settings
-    ├── auth.py              # Bearer-token dependency
-    ├── models.py            # Pydantic request/response schemas
-    ├── routes.py            # REST endpoints
-    ├── services.py          # AI generation + image-desc cache + posts CRUD
-    ├── oauth.py             # OAuth providers (meta/tiktok/linkedin/google)
-    ├── publish.py           # Per-platform publish + spam guard
-    ├── images.py            # Pillow center-crop per aspect ratio
-    └── tunnel.py            # Cloudflare quick-tunnel helper (opt-in)
+    ├── main.py               # FastAPI entrypoint, CORS, /content mount, TikTok verify
+    ├── config.py             # Env-loaded settings
+    ├── auth.py               # /auth/* routes + bearer-token dependency
+    ├── db.py                 # SQLite user store (users.db)
+    ├── models.py             # Pydantic request/response schemas
+    ├── routes.py             # Core REST endpoints
+    ├── services.py           # AI generation + image-desc cache + posts CRUD
+    ├── scheduler.py          # In-process async loop firing scheduled posts
+    ├── oauth.py              # OAuth providers (meta/tiktok/linkedin/google)
+    ├── publish.py            # Per-platform publish + spam guard
+    ├── images.py             # Pillow center-crop per aspect ratio
+    ├── media_generation.py   # /media/generate/{image,video}
+    ├── telegram_validation.py # Telegram bot webhook + approval flow
+    ├── legal.py              # /privacy + /terms HTML pages
+    └── tunnel.py             # Cloudflare quick-tunnel helper (opt-in)
 ```
 
 ## API surface
@@ -31,14 +36,31 @@ backend/
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/health` | Health check |
+| GET | `/tunnel-status` | Cloudflare quick-tunnel URL (if `TUNNEL_ENABLED=true`) |
 | POST | `/generate` | AI content generation |
 | POST | `/transform` | AI quick actions (rewrite, shorten, hashtags…) |
+| POST | `/captions/generate` | Batch caption generation over content items |
+| GET | `/content-items` | Enumerate media in the content dir with descriptions |
 | POST | `/upload` | Upload media to `content/`, returns public URL |
+| DELETE | `/media/{path}` | Remove a previously-uploaded media file |
+| GET | `/search` | Search media in the content directory |
+| GET | `/messages` | Notification feed for the bell menu |
 | GET / POST / PATCH / DELETE | `/posts` | Calendar post CRUD |
 | POST | `/publish` | Fan-out to selected social targets |
+| POST | `/media/generate/image` | AI image generation (external provider or Pillow fallback) |
+| POST | `/media/generate/video` | AI video generation (Ken Burns clip from generated image) |
+| POST | `/auth/register`, `/auth/login` | Local user accounts (JWT) |
+| GET | `/auth/me` | Current authenticated user |
+| GET | `/oauth/status` | Per-provider connection state |
 | GET | `/oauth/{provider}/start` | Begin OAuth flow (returns authorize URL) |
 | GET | `/oauth/{provider}/callback` | OAuth callback (posts message to opener) |
+| DELETE | `/oauth/{provider}` | Disconnect a provider |
 | GET | `/oauth/connections` | List connected providers + postable targets |
+| GET | `/oauth/meta/accounts` | Pages + IG accounts behind the current Meta token |
+| GET | `/telegram/status` | Telegram bot connectivity + chat-id presence |
+| POST | `/telegram/webhook` | Inline-button callbacks from the validation bot |
+| POST | `/validation/submit` | Push a draft to the Telegram approval queue |
+| GET | `/privacy`, `/terms` | HTML pages required by Meta/TikTok/LinkedIn portals |
 | GET | `/tiktok{token}.txt` | TikTok domain-verification file |
 | - | `/content/*` | Static-mounted uploaded media |
 

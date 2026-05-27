@@ -1,89 +1,113 @@
-# DATALIA Infra — Orchestration & Deployment
+# DATALIA Infra - Orchestration & Deployment
 
-Docker Compose stack that runs **n8n** (workflow automation / orchestration) next
-to the **[backend](../backend/) Caption API**. n8n is the central API gateway for
-CRON jobs, webhooks, and the publication/validation workflows in
-[`plans/architecture_plan.md`](../plans/architecture_plan.md).
+Docker Compose configuration for running the FastAPI backend locally and in
+production.
 
-```
-n8n (:5678) ──HTTP──▶ caption-api (:8000) ──HTTPS──▶ OpenRouter (AI)
-```
+The active runtime is direct frontend -> backend. n8n is not part of the current
+compose stack.
 
 ## Layout
 
-```
+```text
 infra/
-├── docker-compose.yml   # n8n + caption-api (builds ../backend)
-├── .env.example         # Safe env template → copy to .env
-├── .env                 # Your secrets (git-ignored)
-└── .gitignore
+|-- docker-compose.yml           # Local dev: caption-api only
+|-- docker-compose.prod.yml      # Production: Caddy + caption-api
+|-- .env.example                 # Safe local env template
+|-- .env                         # Local secrets, git-ignored
+|-- .env.production.example      # Safe production env template
+`-- caddy/
+    `-- Caddyfile                # HTTPS reverse proxy for production API
 ```
 
-The `caption-api` service builds from `../backend` (build context `../backend`,
-content volume `../backend/content`). Editing the backend code? Change
-[`../backend/`](../backend/), not this folder.
+The local `caption-api` service builds from `../backend` and bind-mounts
+`../backend/content` to `/app/content`.
 
-## Quick start
+## Local Backend
 
 ```bash
-cd infra
-cp .env.example .env          # then add your OpenRouter API key
-# add images to caption: cp ~/photos/post.jpg ../backend/content/
-docker compose up --build
+docker compose -f infra/docker-compose.yml up -d --build caption-api
 ```
 
-| Service     | URL                   |
-|-------------|-----------------------|
-| n8n         | http://localhost:5678 |
+Service URL:
+
+| Service | URL |
+|---|---|
 | caption-api | http://localhost:8000 |
 
-## Environment variables (`infra/.env`)
+Useful commands:
 
-| Variable | Default | Description |
+```bash
+docker compose -f infra/docker-compose.yml restart caption-api
+docker compose -f infra/docker-compose.yml logs -f caption-api
+```
+
+Rebuild for code, dependency, or Dockerfile changes. A restart is enough for
+most `infra/.env` changes, but force-recreate the service if the live container
+still has stale environment values.
+
+## Local Environment
+
+Compose reads `infra/.env` automatically.
+
+| Variable | Default | Purpose |
 |---|---|---|
-| `AI_API_BASE_URL` | `https://openrouter.ai/api/v1` | OpenAI-compatible endpoint |
-| `AI_API_KEY` | _(required)_ | Provider API key |
-| `AI_MODEL` | `google/gemini-2.0-flash-lite-001` | Model slug |
-| `AI_INCLUDE_IMAGES` | `true` | Send images for vision-based captioning |
+| `AI_API_BASE_URL` | `https://openrouter.ai/api/v1` | OpenAI-compatible provider endpoint |
+| `AI_API_KEY` | empty | Provider API key |
+| `AI_MODEL` | `google/gemini-2.0-flash-lite-001` | Default generation model |
+| `AI_MODEL_FAST` | `AI_MODEL` | Cheap/fast model for low-risk tasks |
+| `AI_MODEL_PREMIUM` | `AI_MODEL` | Reserved premium model |
+| `AI_INCLUDE_IMAGES` | `false` | Whether AI calls include image bytes by default |
+| `AI_DAILY_LIMIT` | `200` | Per-client daily non-cached AI call cap |
+| `CORS_ALLOW_ORIGINS` | localhost frontend origins | Direct browser access allowlist |
+| `BACKEND_AUTH_TOKEN` | empty | Bearer token gate for mutating routes |
+| `OAUTH_REDIRECT_BASE` | `http://localhost:8000` | Public HTTPS callback base for OAuth |
+| `PUBLIC_BASE_URL` | request base URL | Optional public media URL override |
+| provider secrets | empty | Meta, TikTok, LinkedIn, Google credentials |
 
-Compose reads these from `infra/.env` automatically.
+`BACKEND_AUTH_TOKEN` should be set before any public deployment.
 
-## n8n workflows — native nodes only
+## Public HTTPS For OAuth
 
-We **do not use the Instagram node** (or any 3rd-party upload node). All
-external calls are plain **HTTP Request** nodes. See
-[`n8n/README.md`](n8n/README.md) for the full setup and import
-[`n8n/webhook-template.json`](n8n/webhook-template.json) as the starter.
+Meta and TikTok require HTTPS callbacks. For local OAuth testing, point a public
+HTTPS tunnel at the backend and set:
 
+```env
+OAUTH_REDIRECT_BASE=https://<public-host>
+PUBLIC_BASE_URL=https://<public-host>
 ```
-Webhook ─▶ Code (normalize) ─▶ HTTP Request (Graph API / Telegram / backend) ─▶ Respond
+
+The same host must serve uploaded media under `/content/*` so social platforms
+can fetch media during publish.
+
+## Production Backend
+
+Production uses:
+
+```bash
+docker compose -f infra/docker-compose.prod.yml --env-file infra/.env.production up -d --build
 ```
 
-- **AI captions/generation**: HTTP Request → `POST http://caption-api:8000/generate`
-  (or `/captions/generate`). From inside n8n use the compose service name
-  `caption-api`, not `localhost`.
-- **Media**: uploaded via the backend `POST /upload`, which returns a public
-  URL. n8n forwards that URL to the platform API — no upload node needed.
-- **Publish to Instagram**: 2 HTTP Request nodes (create container →
-  `media_publish`) against `graph.facebook.com` — details in
-  [`n8n/README.md`](n8n/README.md).
+The production compose runs:
 
-## Frontend webhooks
+| Service | Purpose |
+|---|---|
+| `caddy` | HTTPS reverse proxy and Let's Encrypt certificate management |
+| `caption-api` | FastAPI backend, exposed only on the Docker network |
 
-The dashboard's Save / Submit-for-Validation / Publish / **Schedule** buttons
-POST the post JSON to n8n webhooks when configured. Import the template once
-per endpoint (paths & env-var mapping in [`n8n/README.md`](n8n/README.md)),
-then set the matching `NEXT_PUBLIC_N8N_*` vars in
-[`../frontend/.env.local`](../frontend/). Until set, the frontend updates
-status locally and notifies the user — no breakage.
+Persistent data lives in the `caption-content` named volume. It holds uploads,
+cropped media, posts, messages, AI caches, and OAuth tokens.
 
-## Backend endpoints available to n8n / the dashboard
+## Backend Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET`  | `/health` | Liveness (Topbar status dot) |
-| `POST` | `/generate` | Prompt-driven content (editor "Generate via AI") |
-| `POST` | `/transform` | Quick AI actions (shorten/expand/tone) |
-| `POST` | `/upload` | Store image/video, returns public URL |
-| `GET`  | `/search?q=` | Search media in the content dir |
-| `POST` | `/captions/generate` | Caption server-side `content/` images |
+| `GET` | `/health` | Liveness |
+| `POST` | `/generate` | Prompt-driven content generation |
+| `POST` | `/transform` | Quick AI actions |
+| `POST` | `/upload` | Store image/video and return public URL |
+| `GET/POST/PATCH/DELETE` | `/posts` | Calendar post persistence |
+| `POST` | `/publish` | Publish to selected social targets |
+| `GET` | `/oauth/{provider}/start` | Begin OAuth |
+| `GET` | `/oauth/{provider}/callback` | OAuth callback |
+| `GET` | `/oauth/connections` | Connected providers and publish targets |
+| `GET` | `/content/*` | Static uploaded media |

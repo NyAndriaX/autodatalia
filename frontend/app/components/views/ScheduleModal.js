@@ -23,6 +23,11 @@ import {
   revokeMediaItem,
 } from "../../lib/uploadService";
 import { generateContent } from "../../lib/aiService";
+import {
+  generateImageAsset,
+  generateVideoAsset,
+} from "../../lib/mediaGenerationService";
+import TikTokOptionsPanel from "./TikTokOptionsPanel";
 import { getScheduleTimezone } from "../../lib/timezone";
 import DatePicker from "./DatePicker";
 import TimePicker from "./TimePicker";
@@ -136,12 +141,14 @@ export default function ScheduleModal({
     }
   };
 
-  const onPickFile = (kind) => async (e) => {
+  const handlePickedFile = async (e, kind) => {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
     await ingestFile(file, kind);
   };
+  const onPickImageFile = (e) => handlePickedFile(e, "image");
+  const onPickVideoFile = (e) => handlePickedFile(e, "video");
 
   const onChooseSource = (s) => {
     if (s.source === "upload") {
@@ -166,6 +173,7 @@ export default function ScheduleModal({
   // force: true on explicit Regenerate so the second click actually
   // produces new text instead of returning a cached result.
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generatingMediaKind, setGeneratingMediaKind] = useState(null);
   const onGenerate = async () => {
     if (isGenerating) return;
     setIsGenerating(true);
@@ -204,6 +212,44 @@ export default function ScheduleModal({
     month: "long",
     day: "numeric",
   });
+
+  const handleGenerateMedia = async (kind) => {
+    const prompt = content.trim();
+    if (!prompt) {
+      dispatch(
+        addNotification({
+          message: `Enter a prompt before generating a ${kind}.`,
+          type: "error",
+        })
+      );
+      return;
+    }
+    setGeneratingMediaKind(kind);
+    try {
+      const ratio =
+        Object.values(ratios || {})[0] || (kind === "video" ? "9:16" : "1:1");
+      const result =
+        kind === "video"
+          ? await generateVideoAsset({ prompt, ratio })
+          : await generateImageAsset({ prompt, ratio });
+      setMedia((list) => [...list, result.mediaItem]);
+      dispatch(
+        addNotification({
+          message: `${kind === "video" ? "Video" : "Image"} generated via ${result.data?.provider || "backend"}.`,
+          type: "success",
+        })
+      );
+    } catch (err) {
+      dispatch(
+        addNotification({
+          message: `${kind === "video" ? "Video" : "Image"} generation failed: ${err.message || "unknown error"}`,
+          type: "error",
+        })
+      );
+    } finally {
+      setGeneratingMediaKind(null);
+    }
+  };
 
   return (
     <div
@@ -309,19 +355,47 @@ export default function ScheduleModal({
             );
           })}
         </div>
+        <div className="flex flex-wrap gap-2 mb-3">
+          <button
+            type="button"
+            onClick={() => handleGenerateMedia("image")}
+            disabled={!!generatingMediaKind}
+            className="btn-secondary text-xs inline-flex items-center gap-1.5"
+          >
+            {generatingMediaKind === "image" ? (
+              <Loader2 size={13} className="animate-spin" />
+            ) : (
+              <Sparkles size={13} />
+            )}{" "}
+            AI image
+          </button>
+          <button
+            type="button"
+            onClick={() => handleGenerateMedia("video")}
+            disabled={!!generatingMediaKind}
+            className="btn-secondary text-xs inline-flex items-center gap-1.5"
+          >
+            {generatingMediaKind === "video" ? (
+              <Loader2 size={13} className="animate-spin" />
+            ) : (
+              <Film size={13} />
+            )}{" "}
+            AI video
+          </button>
+        </div>
         <input
           ref={imageInputRef}
           type="file"
           accept={ACCEPTED_TYPES.filter((t) => t.startsWith("image/")).join(",")}
           className="hidden"
-          onChange={onPickFile("image")}
+          onChange={onPickImageFile}
         />
         <input
           ref={videoInputRef}
           type="file"
           accept={ACCEPTED_TYPES.filter((t) => t.startsWith("video/")).join(",")}
           className="hidden"
-          onChange={onPickFile("video")}
+          onChange={onPickVideoFile}
         />
 
         {media.length > 0 && (
@@ -413,6 +487,12 @@ export default function ScheduleModal({
               })}
             </div>
           </>
+        )}
+
+        {platforms.tiktok && (
+          <div className="mb-4">
+            <TikTokOptionsPanel />
+          </div>
         )}
 
         {/* Date + time — custom calendar popover for the date so the modal

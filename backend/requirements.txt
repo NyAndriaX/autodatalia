@@ -6,9 +6,13 @@ httpx==0.28.1
 # the host to install ffmpeg system-wide.
 imageio-ffmpeg==0.6.0
 pillow==11.0.0
+pillow-heif==0.21.0
 pydantic==2.11.3
 python-multipart==0.0.20
 # tzdata: scheduler interprets posts in their IANA timezone; Windows
 # / slim Linux images don't always ship system tzdata.
 tzdata==2025.2
 uvicorn[standard]==0.34.2
+PyJWT==2.8.0
+passlib==1.7.4
+bcrypt==4.1.2

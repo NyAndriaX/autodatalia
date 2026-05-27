@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Iterable
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote, quote
 
 from PIL import Image
 
@@ -55,7 +55,7 @@ def _local_path_from_public_url(url: str) -> Path | None:
     marker = "/content/"
     if marker not in path:
         return None
-    rel = path.split(marker, 1)[1]
+    rel = unquote(path.split(marker, 1)[1])
     if not rel:
         return None
     candidate = (settings.content_dir / rel).resolve()
@@ -79,36 +79,77 @@ def crop_media_to_ratio(media_url: str, ratio_spec: str) -> str:
     target_ratio = parse_ratio(ratio_spec)
     if target_ratio is None:
         return media_url
+        
+    sep = ":" if ":" in ratio_spec else "/" if "/" in ratio_spec else None
+    if not sep:
+        return media_url
+        
+    try:
+        # Extract integer factors to ensure the final crop is mathematically exact.
+        w_str, h_str = ratio_spec.split(sep, 1)
+        tw = int(float(w_str.strip()) * 100)
+        th = int(float(h_str.strip()) * 100)
+        import math
+        g = math.gcd(tw, th)
+        tw //= g
+        th //= g
+    except Exception:
+        return media_url
+        
     src = _local_path_from_public_url(media_url)
     if src is None:
         return media_url
     suffix = _ratio_suffix(ratio_spec)
-    out = src.with_name(f"{src.stem}_r{suffix}{src.suffix}")
+    out = src.with_name(f"{src.stem}_r{suffix}_cropped.jpg")
     if not out.exists():
         try:
             with Image.open(src) as img:
                 img = img.convert("RGB") if img.mode in ("P", "RGBA") else img
                 w, h = img.size
                 cur = w / h
-                if abs(cur - target_ratio) < 0.005:
-                    return media_url  # already close enough, skip
-                if cur > target_ratio:
-                    # Too wide — crop sides.
-                    new_w = int(round(h * target_ratio))
-                    left = (w - new_w) // 2
-                    box = (left, 0, left + new_w, h)
+                
+                # We always crop to ensure the ratio is exact
+                if abs(cur - target_ratio) > 0.001:
+                    if cur > target_ratio:
+                        # Too wide — crop sides.
+                        new_h = (h // th) * th
+                        new_w = new_h * tw // th
+                        left = (w - new_w) // 2
+                        top = (h - new_h) // 2
+                        box = (left, top, left + new_w, top + new_h)
+                    else:
+                        # Too tall — crop top/bottom.
+                        new_w = (w // tw) * tw
+                        new_h = new_w * th // tw
+                        left = (w - new_w) // 2
+                        top = (h - new_h) // 2
+                        box = (left, top, left + new_w, top + new_h)
+                    img = img.crop(box)
+
+                # TikTok requires all images in a carousel to have the exact same dimensions.
+                # To guarantee this, we scale the cropped image to standard TikTok resolutions.
+                target_dims = None
+                if target_ratio == (9/16):
+                    target_dims = (1080, 1920)
+                elif target_ratio == 1.0:
+                    target_dims = (1080, 1080)
+                elif target_ratio == (4/5):
+                    target_dims = (1080, 1350)
+                elif target_ratio == (1.91/1):
+                    target_dims = (1080, 565)
                 else:
-                    # Too tall — crop top/bottom.
-                    new_h = int(round(w / target_ratio))
-                    top = (h - new_h) // 2
-                    box = (0, top, w, top + new_h)
-                img.crop(box).save(out, quality=92, optimize=True)
-        except (OSError, ValueError):
+                    # Fallback standard width
+                    target_dims = (1080, int(1080 / target_ratio))
+
+                img = img.resize(target_dims, Image.Resampling.LANCZOS)
+                img.save(out, "JPEG", quality=95, optimize=True)
+        except (OSError, ValueError) as e:
+            print(f"[images] crop error for {src}: {e}")
             return media_url
     # Replace the filename in the public URL while preserving the host
-    # and the /content/ prefix the caller already gave us.
-    return media_url.replace(src.name, out.name, 1)
-
+    # and the /content/ prefix the caller already gave us. We use quote
+    # to match the URL-encoded filename in media_url.
+    return media_url.replace(quote(src.name), quote(out.name), 1)
 
 def crop_for_targets(
     *,
@@ -147,17 +188,23 @@ def crop_for_targets(
     # to prevent file_format_check_failed.
     if platform == "tiktok":
         ext = (media_url or "").lower().rsplit(".", 1)[-1]
-        is_photo = ext in {"png", "jpg", "jpeg", "webp", "gif"}
-        
+        is_photo = ext in {"png", "jpg", "jpeg", "webp", "gif", "jfif"}
+
         if is_photo and spec and spec not in {"9:16", "1:1", "4:5"}:
             # TikTok strictly rejects 16:9 for photos/carousels with picture_size_check_failed
             spec = "1:1"
+
+        # Default TikTok photos to 9:16 (the native full-screen format).
+        # 1:1 and 4:5 are accepted but get letterboxed with blurred bars.
+        # This ensures consistent display when the user hasn't picked a ratio.
+        if is_photo and not spec:
+            spec = "9:16"
 
         src = _local_path_from_public_url(media_url)
         if src and src.exists():
             ext = src.suffix.lower()
             if ext not in {".jpg", ".jpeg", ".webp"}:
-                # Convert PNG/other to JPG with white background for transparency
+                # Convert PNG/other/jfif to JPG with white background for transparency
                 out = src.with_name(f"{src.stem}_converted.jpg")
                 if not out.exists():
                     try:
@@ -169,10 +216,11 @@ def crop_for_targets(
                             else:
                                 img = img.convert("RGB")
                             img.save(out, "JPEG", quality=95, optimize=True)
-                    except Exception:
+                    except Exception as e:
+                        print(f"[images] convert error for {src}: {e}")
                         out = None
                 if out and out.exists():
-                    media_url = media_url.replace(src.name, out.name, 1)
+                    media_url = media_url.replace(quote(src.name), quote(out.name), 1)
 
     if not spec:
         return media_url

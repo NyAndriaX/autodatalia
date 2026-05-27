@@ -12,16 +12,19 @@ import {
   startConnect,
   disconnect as oauthDisconnect,
 } from "../../lib/oauthService";
+import { fetchTelegramStatus, sendTelegramTest } from "../../lib/validationService";
 import {
   Send,
   KeyRound,
   Palette,
   Plug,
   Check,
+  BadgeCheck,
   Loader2,
   Trash2,
   RefreshCw,
   Clock,
+  Users,
 } from "lucide-react";
 import { COMMON_TIMEZONES, getBrowserTimezone } from "../../lib/timezone";
 
@@ -40,6 +43,15 @@ const TARGET_KIND_FOR_PLATFORM = {
   facebook: "facebook_page",
   instagram: "instagram_business",
 };
+
+// Locale-independent compact format (12.3K / 4.5M). Avoids Intl variance
+// between server and browser that would trip Next.js hydration checks.
+function formatCompactCount(n) {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
+  return `${(n / 1_000_000_000).toFixed(1)}B`;
+}
 
 function Section({ icon: Icon, title, desc, children }) {
   return (
@@ -145,6 +157,7 @@ export default function SettingsView() {
   const [connections, setConnections] = useState(null); // backend-driven OAuth state
   const [pendingProvider, setPendingProvider] = useState(null); // provider being connected
   const [refreshing, setRefreshing] = useState(false);
+  const [telegramStatus, setTelegramStatus] = useState(null);
 
   // Hydrate from localStorage on mount. The intentional cascading render is
   // how we avoid a SSR/client value mismatch on controlled inputs — server
@@ -181,6 +194,18 @@ export default function SettingsView() {
     // older than the TTL without blocking the initial paint.
     refreshConnections();
   }, [refreshConnections]);
+
+  useEffect(() => {
+    fetchTelegramStatus()
+      .then((data) => setTelegramStatus(data))
+      .catch(() =>
+        setTelegramStatus({
+          configured: false,
+          default_chat_configured: false,
+          webhook_secret_configured: false,
+        })
+      );
+  }, []);
 
   if (s === null) {
     // First client tick before hydration — render nothing to avoid SSR mismatch.
@@ -243,19 +268,60 @@ export default function SettingsView() {
   };
 
   const handlePairTelegram = () => {
-    if (!s.telegramBotToken || !s.telegramChatId) {
+    if (!telegramStatus?.configured) {
       dispatch(
-        addNotification({ message: "Enter both the bot token and your chat ID.", type: "error" })
+        addNotification({
+          message: "Backend Telegram bot token is not configured yet.",
+          type: "error",
+        })
+      );
+      return;
+    }
+    if (!s.telegramChatId) {
+      dispatch(
+        addNotification({ message: "Enter your Telegram chat ID.", type: "error" })
       );
       return;
     }
     saveSettings(s);
     dispatch(
       addNotification({
-        message: "Telegram pairing saved.",
+        message: "Telegram chat ID saved for validation requests on this device.",
         type: "info",
       })
     );
+  };
+
+  const [testingTelegram, setTestingTelegram] = useState(false);
+  const handleTestTelegram = async () => {
+    if (!telegramStatus?.configured) {
+      dispatch(
+        addNotification({
+          message: "Backend Telegram bot token is not configured.",
+          type: "error",
+        })
+      );
+      return;
+    }
+    setTestingTelegram(true);
+    try {
+      const result = await sendTelegramTest(s.telegramChatId || null);
+      dispatch(
+        addNotification({
+          message: `Test message sent to chat ${result.chat_id}.`,
+          type: "success",
+        })
+      );
+    } catch (err) {
+      dispatch(
+        addNotification({
+          message: `Test failed: ${err.message}`,
+          type: "error",
+        })
+      );
+    } finally {
+      setTestingTelegram(false);
+    }
   };
 
   return (
@@ -409,18 +475,46 @@ export default function SettingsView() {
                           className="flex items-center gap-2 text-xs"
                           style={{ color: "var(--text-secondary)" }}
                         >
-                          <span
-                            className="w-1.5 h-1.5 rounded-full shrink-0"
-                            style={{ background: p.color }}
-                            aria-hidden="true"
-                          />
+                          {t.profile_picture_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={t.profile_picture_url}
+                              alt=""
+                              className="w-4 h-4 rounded-full shrink-0 object-cover"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <span
+                              className="w-1.5 h-1.5 rounded-full shrink-0"
+                              style={{ background: p.color }}
+                              aria-hidden="true"
+                            />
+                          )}
                           <span className="truncate">{t.label}</span>
+                          {t.is_verified && (
+                            <BadgeCheck
+                              size={12}
+                              className="shrink-0"
+                              style={{ color: p.color }}
+                              aria-label="Verified"
+                            />
+                          )}
                           {t.category && (
                             <span
                               className="text-[10px]"
                               style={{ color: "var(--text-muted)" }}
                             >
                               · {t.category}
+                            </span>
+                          )}
+                          {typeof t.audience === "number" && t.audience > 0 && (
+                            <span
+                              className="ml-auto inline-flex items-center gap-1 text-[10px] tabular-nums"
+                              style={{ color: "var(--text-muted)" }}
+                              title={`${t.audience.toLocaleString("en-US")} followers`}
+                            >
+                              <Users size={10} aria-hidden="true" />
+                              {formatCompactCount(t.audience)}
                             </span>
                           )}
                         </div>
@@ -493,10 +587,32 @@ export default function SettingsView() {
         <Section
           icon={Send}
           title="Telegram Validation Bot"
-          desc="Pair your Telegram bot for the approve/reject flow."
+          desc="Store the reviewer chat ID locally. The bot token stays on the backend."
         >
+          <div
+            className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] mb-3"
+            style={{ color: "var(--text-muted)" }}
+          >
+            {[
+              { label: "Bot token", on: telegramStatus?.configured },
+              { label: "Default chat", on: telegramStatus?.default_chat_configured },
+              { label: "Webhook secret", on: telegramStatus?.webhook_secret_configured },
+            ].map((s) => (
+              <span key={s.label} className="inline-flex items-center gap-1">
+                <span
+                  className="w-1.5 h-1.5 rounded-full"
+                  style={{
+                    background: s.on
+                      ? "var(--status-approved)"
+                      : "var(--status-error)",
+                  }}
+                />
+                {s.label}: {s.on ? "ok" : "missing"}
+              </span>
+            ))}
+          </div>
           <Field
-            label="Bot token"
+            label="Bot token note"
             name="telegramBotToken"
             value={s.telegramBotToken}
             onChange={update}
@@ -510,13 +626,30 @@ export default function SettingsView() {
             onChange={update}
             placeholder="e.g. 84217734"
           />
-          <button
-            type="button"
-            onClick={handlePairTelegram}
-            className="btn-primary text-sm mt-1"
-          >
-            Pair bot
-          </button>
+          <div className="flex flex-wrap gap-2 mt-1">
+            <button
+              type="button"
+              onClick={handlePairTelegram}
+              className="btn-primary text-sm"
+            >
+              Pair bot
+            </button>
+            <button
+              type="button"
+              onClick={handleTestTelegram}
+              disabled={testingTelegram || !telegramStatus?.configured}
+              className="btn-secondary text-sm inline-flex items-center gap-2"
+              title="Send a one-shot test message to the chat id below (or the backend default if empty)"
+            >
+              {testingTelegram ? (
+                <>
+                  <Loader2 size={13} className="animate-spin" /> Sending…
+                </>
+              ) : (
+                "Send test message"
+              )}
+            </button>
+          </div>
         </Section>
 
         <Section

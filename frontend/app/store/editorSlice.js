@@ -29,7 +29,7 @@ const initialState = {
        PublishConfirmModal reads/writes one source of truth and the publish
        thunk can forward them to the backend on every fire. */
     tiktok: {
-      privacy_level: "PUBLIC_TO_EVERYONE", // forced to SELF_ONLY by TikTok in sandbox anyway
+      privacy_level: "SELF_ONLY", // forced to SELF_ONLY by TikTok in sandbox anyway
       disclose_video_branded: false,       // "Disclose branded content"
       disclose_video_your_brand: false,    // "Your brand"
       music_confirmed: false,              // gate — Publish disabled until ticked

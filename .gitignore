@@ -50,6 +50,7 @@ yarn-error.log*
 .env.development.local
 .env.test.local
 .env.production.local
+.env.production
 !.env.example
 
 # Vercel
@@ -92,3 +93,24 @@ docker-compose.override.yml
 *.log
 .cache/
 tmp/
+
+# Scratch / debug captures left at the repo root (logs.txt is the docker
+# compose logs dump we tail during debugging; not a build artifact, not
+# meant to ship).
+/logs.txt
+/logs-*.txt
+
+# Test images / one-off scratch fixtures dropped at backend/ root during
+# image-conversion debugging (test.png, test_conv.jpg). Real test fixtures
+# live under backend/tests/.
+backend/test.png
+backend/test.jpg
+backend/test.jpeg
+backend/test_*.png
+backend/test_*.jpg
+backend/test_*.jpeg
+
+# OAuth token store + per-user token files — already covered by
+# backend/content/* above, but listed here explicitly so it's obvious
+# why nothing in content/ is tracked.
+backend/content/.oauth_tokens*.json

@@ -153,13 +153,26 @@ export function activePlatformIds(platforms) {
  * Post statuses. `badgeClass` + `colorVar` reuse the existing
  * .badge-* utility classes and --status-* CSS variables in globals.css.
  */
-export const STATUSES = ["draft", "scheduled", "pending", "approved", "published", "error"];
+export const STATUSES = [
+  "draft",
+  "scheduled",
+  "pending",
+  "awaiting_validation",
+  "approved",
+  "rejected",
+  "cancelled",
+  "published",
+  "error",
+];
 
 export const STATUS_META = {
   draft: { label: "Draft", badgeClass: "badge-draft", colorVar: "var(--status-draft)" },
   scheduled: { label: "Scheduled", badgeClass: "badge-pending", colorVar: "var(--status-pending)" },
   pending: { label: "Pending", badgeClass: "badge-pending", colorVar: "var(--status-pending)" },
+  awaiting_validation: { label: "Awaiting Telegram", badgeClass: "badge-awaiting", colorVar: "var(--status-awaiting)" },
   approved: { label: "Approved", badgeClass: "badge-approved", colorVar: "var(--status-approved)" },
+  rejected: { label: "Rejected", badgeClass: "badge-rejected", colorVar: "var(--status-rejected)" },
+  cancelled: { label: "Cancelled", badgeClass: "badge-rejected", colorVar: "var(--status-rejected)" },
   published: { label: "Published", badgeClass: "badge-approved", colorVar: "var(--status-published)" },
   error: { label: "Error", badgeClass: "badge-error", colorVar: "var(--status-error)" },
 };

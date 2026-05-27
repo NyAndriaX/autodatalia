@@ -26,8 +26,6 @@ export default function RatioPicker({ platform, value, onChange, compact = false
   const [popoverPos, setPopoverPos] = useState(null);
   const triggerRef = useRef(null);
   const popoverRef = useRef(null);
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
   const spec = RATIOS_BY_PLATFORM[platform.id];
   const options = spec?.options || [];
 
@@ -75,7 +73,6 @@ export default function RatioPicker({ platform, value, onChange, compact = false
   // Re-measure after first paint so the flip-up math uses the real height.
   useLayoutEffect(() => {
     if (open) reposition();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   if (!options.length) return null;
@@ -182,7 +179,9 @@ export default function RatioPicker({ platform, value, onChange, compact = false
       {/* Portal-render so the popover escapes any modal overflow:auto.
           Without this it gets clipped to the modal scroll area and only
           the first option is visible — see screenshot the user shared. */}
-      {mounted && popover ? createPortal(popover, document.body) : null}
+      {popover && typeof document !== "undefined"
+        ? createPortal(popover, document.body)
+        : null}
     </>
   );
 }

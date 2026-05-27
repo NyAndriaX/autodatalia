@@ -12,6 +12,7 @@ import {
   Trash2,
   Wand2,
   CalendarClock,
+  X,
 } from "lucide-react";
 import { listMedia } from "../../lib/searchService";
 import {
@@ -35,7 +36,7 @@ const TABS = [
    secondary actions (delete) appear in the corners. The "Used in N posts"
    badge top-left tells the team which assets are doing work so cleanup
    decisions don't accidentally delete an in-use image. */
-function Tile({ item, onDelete, onUse, usageCount = 0 }) {
+function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect, selectionMode }) {
   const Icon = item.kind === "video" ? Film : ImageIcon;
   // Prefer the persisted server URL — the local blob: previewUrl can be
   // revoked or invalidated by a dev HMR reload or after sitting unused.
@@ -46,17 +47,25 @@ function Tile({ item, onDelete, onUse, usageCount = 0 }) {
   const hasVideoPreview = previewSrc && isVideo;
   const canDelete = !!onDelete && item.status !== "uploading";
   const canUse = !!onUse && item.status === "uploaded" && !!item.remoteUrl;
+  const canSelect = item.status === "uploaded" || !!item.remoteUrl;
+  
   return (
     <div
-      className="group relative rounded-xl overflow-hidden flex items-center justify-center"
+      className={`group relative rounded-xl overflow-hidden flex items-center justify-center ${canSelect ? "cursor-pointer" : ""}`}
       style={{
         aspectRatio: "1 / 1",
         background: hasImagePreview
           ? `center / cover no-repeat url(${previewSrc})`
           : "linear-gradient(135deg, var(--bg-tertiary), var(--bg-elevated))",
-        border: "1px solid var(--border-default)",
+        border: selected ? "2px solid var(--accent-primary)" : "1px solid var(--border-default)",
+        boxShadow: selected ? "0 0 0 2px var(--accent-primary-hover)" : "none",
       }}
       title={item.name}
+      onClick={() => {
+        if (selectionMode && canSelect) {
+          onToggleSelect(item);
+        }
+      }}
     >
       {hasVideoPreview && (
         <video
@@ -71,8 +80,28 @@ function Tile({ item, onDelete, onUse, usageCount = 0 }) {
         <Icon size={28} style={{ color: "var(--text-muted)", opacity: 0.5 }} />
       )}
 
-      {/* Top-left badges (stacked) — video kind first, then usage count. */}
-      <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
+      {/* Selection Checkbox */}
+      {canSelect && (
+        <div 
+          className={`absolute top-1.5 left-1.5 z-10 transition-opacity ${selected ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleSelect(item);
+          }}
+        >
+          <input 
+            type="checkbox" 
+            checked={!!selected} 
+            onChange={() => {}} // Read-only, handled by onClick
+            className="w-5 h-5 cursor-pointer accent-indigo-500 rounded border-gray-300"
+            style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.5))" }}
+            aria-label={`Select ${item.name}`}
+          />
+        </div>
+      )}
+
+      {/* Top-left badges (stacked) — shifted down if checkbox is present. */}
+      <div className={`absolute left-1.5 flex flex-col items-start gap-1 transition-all pointer-events-none ${canSelect ? "top-8" : "top-1.5"}`}>
         {isVideo && (
           <span
             className="inline-flex items-center justify-center w-5 h-5 rounded-full"
@@ -199,9 +228,19 @@ export default function MediaLibraryView() {
   const [remoteHits, setRemoteHits] = useState([]);
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
   const fileInputRef = useRef(null);
   const seq = useRef(0);
   const useSeq = useRef(0);
+
+  const handleToggleSelect = useCallback((item) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(item.id)) next.delete(item.id);
+      else next.add(item.id);
+      return next;
+    });
+  }, []);
 
   // Map of media filename / remote URL → number of scheduled or published
   // posts that reference it. Built once per scheduledPosts change so the
@@ -393,7 +432,43 @@ export default function MediaLibraryView() {
 
     setUploads((prev) => prev.filter((u) => u.id !== item.id));
     setRemoteHits((prev) => prev.filter((h) => h.id !== item.id));
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(item.id);
+      return next;
+    });
   }, []);
+
+  const handleBulkDelete = useCallback(async () => {
+    if (!selectedIds.size) return;
+    if (!window.confirm(`Delete ${selectedIds.size} item(s)? This cannot be undone.`)) return;
+
+    // Optimistically mark as deleting
+    setUploads((prev) => prev.map((u) => (selectedIds.has(u.id) ? { ...u, status: "deleting" } : u)));
+    setRemoteHits((prev) => prev.map((h) => (selectedIds.has(h.id) ? { ...h, status: "deleting" } : h)));
+
+    // Gather all items that are selected from both arrays (we need their names/ids to send to backend)
+    const itemsToDelete = [...uploads, ...remoteHits].filter((it) => selectedIds.has(it.id));
+
+    // Process in parallel
+    await Promise.all(
+      itemsToDelete.map(async (item) => {
+        const isRemote = !!item.remoteUrl || /^[^_].*\.[a-z0-9]+$/i.test(item.id || "");
+        if (!isRemote) return; // Only exists locally (e.g. upload failed)
+
+        const backendPath = item.id?.includes("/") || /\.[a-z0-9]+$/i.test(item.id || "")
+          ? item.id
+          : item.name;
+
+        await deleteFromBackend(backendPath);
+      })
+    );
+
+    // Drop them from the UI (ignoring individual errors to keep it simple, since if one fails it will just reappear on next refresh)
+    setUploads((prev) => prev.filter((u) => !selectedIds.has(u.id)));
+    setRemoteHits((prev) => prev.filter((h) => !selectedIds.has(h.id)));
+    setSelectedIds(new Set());
+  }, [selectedIds, uploads, remoteHits]);
 
   // Build the displayed grid: this-session uploads first, then de-duplicated
   // backend hits (avoid showing the same filename twice). The remote hits
@@ -428,8 +503,40 @@ export default function MediaLibraryView() {
       className="h-full overflow-y-auto"
       style={{ padding: 20 }}
       onDragOver={(e) => e.preventDefault()}
-      onDrop={onDrop}
     >
+      {/* Bulk Action Bar */}
+      {selectedIds.size > 0 && tab === "uploads" && (
+        <div 
+          className="flex items-center justify-between mb-5 px-4 py-2.5 rounded-lg border shadow-sm sticky top-0 z-20"
+          style={{ 
+            background: "var(--bg-elevated)", 
+            borderColor: "var(--accent-primary)",
+          }}
+        >
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-semibold" style={{ color: "var(--accent-primary)" }}>
+              {selectedIds.size} selected
+            </span>
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              className="text-xs hover:underline flex items-center gap-1"
+              style={{ color: "var(--text-muted)" }}
+            >
+              <X size={12} /> Clear
+            </button>
+          </div>
+          <button
+            onClick={handleBulkDelete}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+            style={{ background: "rgba(220, 38, 38, 0.1)", color: "#ef4444" }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(220, 38, 38, 0.2)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(220, 38, 38, 0.1)")}
+          >
+            <Trash2 size={14} /> Delete
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div className="flex gap-2 flex-wrap">
           {TABS.map((t) => {
@@ -505,6 +612,9 @@ export default function MediaLibraryView() {
                   onDelete={handleDelete}
                   onUse={onUseInPost}
                   usageCount={usageCountFor(it)}
+                  selected={selectedIds.has(it.id)}
+                  onToggleSelect={handleToggleSelect}
+                  selectionMode={selectedIds.size > 0}
                 />
               ))}
             </div>

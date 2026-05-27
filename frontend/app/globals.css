@@ -19,12 +19,21 @@
   --bg-card-hover: #f8fafc;
   --bg-elevated: #ffffff;
 
-  /* — Accent & Brand — */
-  --accent-primary: #3b82f6;
-  --accent-primary-hover: #2563eb;
-  --accent-secondary: #60a5fa;
-  --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 50%, #38bdf8 100%);
-  --accent-glow: 0 0 20px rgba(59, 130, 246, 0.3);
+  /* — Accent & Brand —
+     Datalia logo is a royal-cobalt medallion with red tricolor accents.
+     Primary palette mirrors the medallion blue (not the sky-blue this
+     repo started with); --accent-red is the punchy companion used
+     sparingly on highlights, focus rings, and live indicators. */
+  --accent-primary: #1d3fbe;
+  --accent-primary-hover: #1a36a1;
+  --accent-secondary: #3b5be3;
+  --accent-deep: #15307f;
+  --accent-red: #dc2626;
+  --accent-red-hover: #b91c1c;
+  --accent-red-soft: rgba(220, 38, 38, 0.12);
+  --accent-gradient: linear-gradient(135deg, #15307f 0%, #1d3fbe 50%, #3b5be3 100%);
+  --accent-gradient-bold: linear-gradient(135deg, #1d3fbe 0%, #dc2626 100%);
+  --accent-glow: 0 0 24px rgba(29, 63, 190, 0.32);
 
   /* — Text — */
   --text-primary: #0f172a;
@@ -35,7 +44,7 @@
   /* — Borders — */
   --border-default: #cbd5e1;
   --border-hover: #94a3b8;
-  --border-active: #3b82f6;
+  --border-active: #1d3fbe;
 
   /* — Platform Colors — */
   --platform-facebook: #1877F2;
@@ -50,6 +59,11 @@
   --status-approved: #22c55e;
   --status-error: #ef4444;
   --status-published: #06b6d4;
+  /* Awaiting Telegram validation — distinct from pending so calendar
+     and bell views can tell a manual-pending post from an autogen one. */
+  --status-awaiting: #a855f7;
+  /* Terminal "user rejected" — heavier than draft, lighter than error. */
+  --status-rejected: #94a3b8;
 
   /* — Sizing — */
   --sidebar-width: 260px;
@@ -79,19 +93,27 @@
   /* — Core Palette —
      Slightly lifted backgrounds + softened text so the contrast is
      comfortable (~9:1 instead of ~15:1) without losing legibility. */
-  --bg-primary: #131a2c;
-  --bg-secondary: #1a2236;
-  --bg-tertiary: #232c41;
-  --bg-card: #1a2236;
-  --bg-card-hover: #232c41;
-  --bg-elevated: #2a3247;
+  --bg-primary: #0f1530;
+  --bg-secondary: #181e3a;
+  --bg-tertiary: #232c4d;
+  --bg-card: #161c35;
+  --bg-card-hover: #1f2745;
+  --bg-elevated: #232c4d;
 
-  /* — Accent & Brand — */
-  --accent-primary: #60a5fa;
-  --accent-primary-hover: #93c5fd;
-  --accent-secondary: #38bdf8;
-  --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #0ea5e9 50%, #38bdf8 100%);
-  --accent-glow: 0 0 24px rgba(96, 165, 250, 0.35);
+  /* — Accent & Brand —
+     Tones lift slightly on dark surfaces so the royal blue reads as
+     light-on-dark instead of muddy. Red stays vivid — it's the brand's
+     "energy" pop and needs to punch through. */
+  --accent-primary: #4866e3;
+  --accent-primary-hover: #6a82ea;
+  --accent-secondary: #6a82ea;
+  --accent-deep: #2540d1;
+  --accent-red: #ef4444;
+  --accent-red-hover: #f87171;
+  --accent-red-soft: rgba(239, 68, 68, 0.18);
+  --accent-gradient: linear-gradient(135deg, #2540d1 0%, #4866e3 50%, #6a82ea 100%);
+  --accent-gradient-bold: linear-gradient(135deg, #4866e3 0%, #ef4444 100%);
+  --accent-glow: 0 0 24px rgba(72, 102, 227, 0.4);
 
   /* — Text —
      Off-white primary instead of near-white so headlines / body don't punch
@@ -104,7 +126,7 @@
   /* — Borders — */
   --border-default: #2a3247;
   --border-hover: #3a4361;
-  --border-active: #60a5fa;
+  --border-active: #4866e3;
 
   /* — Platform Colors — */
   --platform-tiktok-fg: #d4dce8;
@@ -124,8 +146,8 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
 /* ========================================
@@ -158,18 +180,32 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
-  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
-/* Theme-aware transition on surfaces so toggling light/dark is smooth,
-   not jarring. Kept off animated transforms to avoid layout cost. */
+/* Theme-aware transition on surfaces so individual cards animate smoothly
+   on hover. Kept off background/color so the theme-switch path can manage
+   those globally (see [data-theme-transitioning] below); otherwise these
+   selectors would create a 300 ms wave while inline-styled elements snap. */
 .card,
 .glass-card,
 .btn-secondary,
 .btn-ghost,
 .input-field {
-  transition: background-color 0.3s ease, border-color 0.3s ease,
-    color 0.3s ease, box-shadow 0.2s ease;
+  transition: border-color 0.25s ease, box-shadow 0.2s ease;
+}
+
+/* Theme toggle: html gets `data-theme-transitioning` set for ~220 ms when
+   the user flips light/dark. During that window, EVERY element transitions
+   its color-related properties together — no cascade, no segment-by-segment
+   wipe. Outside that window the variables snap instantly, so live cursor
+   moves / hovers stay snappy. */
+:root[data-theme-transitioning],
+:root[data-theme-transitioning] *,
+:root[data-theme-transitioning] *::before,
+:root[data-theme-transitioning] *::after {
+  transition: background-color 0.22s ease, color 0.22s ease,
+    border-color 0.22s ease, fill 0.22s ease, stroke 0.22s ease,
+    box-shadow 0.22s ease !important;
 }
 
 /* Tailwind v4 Preflight no longer sets buttons to a pointer cursor, so
@@ -351,6 +387,16 @@ button:disabled,
 .badge-error {
   background: rgba(239, 68, 68, 0.15);
   color: var(--status-error);
+}
+
+.badge-awaiting {
+  background: rgba(168, 85, 247, 0.15);
+  color: var(--status-awaiting);
+}
+
+.badge-rejected {
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--status-rejected);
 }
 
 /* ========================================

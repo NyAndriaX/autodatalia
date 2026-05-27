@@ -1,0 +1,55 @@
+# Caddy v2 config — public HTTPS entrypoint for the backend.
+#
+# Caddy auto-provisions a Let's Encrypt cert for {$API_DOMAIN} on the
+# first request, and renews ~30 days before expiry. No certbot, no
+# manual renewal, no /etc/letsencrypt to chmod.
+#
+# {$API_DOMAIN} is substituted from the compose `environment:` block,
+# which in turn reads it from `infra/.env.production`. Set it to the
+# bare hostname (e.g. `api.datalia.com`, NOT `https://api.datalia.com`).
+
+{$API_DOMAIN} {
+	# Larger body cap than the default 10MB — videos can be up to ~50MB
+	# (frontend cap is 50MB; backend transcoder pulls from disk).
+	request_body {
+		max_size 100MB
+	}
+
+	# Standard reverse proxy to the caption-api container on the docker
+	# network. `caption-api` resolves via compose's default bridge.
+	reverse_proxy caption-api:8000 {
+		# These two together with uvicorn's --proxy-headers let the
+		# backend see the original scheme/host/IP so OAuth redirect
+		# building and `request.base_url` work correctly.
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+		header_up X-Real-IP {remote_host}
+
+		# TikTok / Meta CDN fetches of /content/<file>.mp4 can take a
+		# while on slow links. Bump the upstream read timeout so a 50MB
+		# video can be served without the proxy cutting it off.
+		transport http {
+			read_timeout 5m
+			write_timeout 5m
+		}
+	}
+
+	# Structured access logs, useful for catching abuse + debugging
+	# OAuth callback failures. Goes to stdout → docker logs.
+	log {
+		output stdout
+		format json
+	}
+
+	# Sensible security headers. None of these change app behaviour;
+	# they just close off the easy footguns (clickjacking, MIME sniff).
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		# Remove the default Caddy server banner so version scanners
+		# don't get a free hint.
+		-Server
+	}
+}

@@ -48,6 +48,7 @@ class GenerateResponse(BaseModel):
 
     variants: list[GenerateVariant]
     usage: TokenUsage = TokenUsage()
+    model: str | None = None
 
 
 class TransformRequest(BaseModel):
@@ -128,6 +129,12 @@ class Post(BaseModel):
     published_at: float | None = None
     publish_results: list[dict] | None = None
     error: str | None = None
+    # Automation provenance — set when the automation worker generated
+    # this post from a rule. Calendar/bell views use these to render the
+    # candidate distinctly and to skip duplicate fires.
+    source_rule_id: str | None = None
+    source_rule_name: str | None = None
+    scheduled_for: float | None = None
 
 
 class PostCreate(BaseModel):
@@ -189,6 +196,7 @@ class PublishTarget(BaseModel):
     # frontend can send an image URL to Facebook and a video URL to TikTok
     # in the same publish call.
     media_url: str | None = None
+    media_urls: list[str] | None = None
 
 
 class TikTokOptions(BaseModel):
@@ -212,6 +220,11 @@ class TikTokOptions(BaseModel):
     # TIKTOK_SCOPES="user.info.basic,video.upload,video.publish" and
     # reconnect TikTok if you switch from inbox to direct.
     audit_mode: str = "direct"  # "inbox" | "direct"
+    # "file" (default, safe) or "pull". FILE_UPLOAD reads the file from
+    # disk and PUTs bytes to TikTok's upload_url — no URL verification
+    # needed. PULL_FROM_URL hands TikTok a public URL; requires the host
+    # prefix to be pre-verified in the TikTok Developer Portal.
+    upload_mode: str | None = None  # "file" | "pull" | None (env default)
 
 
 class PublishRequest(BaseModel):
@@ -219,6 +232,7 @@ class PublishRequest(BaseModel):
 
     content: str = ""
     media_url: str | None = None  # public URL — required for IG
+    media_urls: list[str] | None = None
     link: str | None = None       # optional FB link share
     # Per-platform aspect ratio override ("1:1", "4:5", "9:16", "16:9", ...).
     # When present, the backend center-crops the image to that ratio before
@@ -250,3 +264,144 @@ class PublishResponse(BaseModel):
     """Response for POST /publish."""
 
     results: list[PublishResultModel]
+
+
+class ValidationSubmitRequest(BaseModel):
+    """Body for POST /validation/submit."""
+
+    post_id: str | None = None
+    content: str = ""
+    platforms: dict[str, bool] = {}
+    scheduledDate: str | None = None
+    time: str | None = None
+    timezone: str | None = None
+    media: list[dict[str, Any]] = []
+    ratios: dict[str, str] | None = None
+    tiktok: dict[str, Any] | None = None
+    chat_id: str | None = None
+
+
+class ValidationSubmitResponse(BaseModel):
+    """Response for POST /validation/submit."""
+
+    post_id: str
+    status: str
+    telegram_sent: bool
+    chat_id: str | None = None
+    message_id: int | None = None
+
+
+class TelegramStatusResponse(BaseModel):
+    """Response for GET /telegram/status."""
+
+    configured: bool
+    default_chat_configured: bool
+    webhook_secret_configured: bool
+
+
+class GeneratedMediaResponse(BaseModel):
+    """Response for backend-generated image/video assets."""
+
+    url: str
+    filename: str
+    kind: str
+    status: str = "uploaded"
+    provider: str
+    prompt: str
+
+
+class ImageGenerationRequest(BaseModel):
+    """Body for POST /media/generate/image."""
+
+    prompt: str = Field(min_length=1, max_length=2000)
+    ratio: str = "1:1"
+
+
+class VideoGenerationRequest(BaseModel):
+    """Body for POST /media/generate/video."""
+
+    prompt: str = Field(min_length=1, max_length=2000)
+    ratio: str = "9:16"
+    duration_seconds: int = Field(default=6, ge=3, le=15)
+
+
+# ── Automation rules ──────────────────────────────────────────────────
+# A rule describes "what + when" for autonomous content generation. The
+# Phase 2 worker scans active rules, generates a candidate Post when each
+# rule's next fire-time minus its validation_lead_minutes ≤ now, and gates
+# the publish behind Telegram approval. The rule itself doesn't publish —
+# it only seeds Posts in `awaiting_validation` status.
+
+
+class NumMediaSpec(BaseModel):
+    """How many media items to generate per fire.
+
+    Two modes: `fixed` (always N) or `range` (AI picks within [min,max]).
+    `count` is used in fixed mode; `min`/`max` in range mode.
+    """
+
+    mode: str = Field(default="fixed", pattern="^(fixed|range)$")
+    count: int = Field(default=1, ge=1, le=10)
+    min: int = Field(default=2, ge=1, le=10)
+    max: int = Field(default=4, ge=1, le=10)
+
+
+class AutomationSchedule(BaseModel):
+    """When the rule fires. The worker resolves these into absolute times
+    in the rule's timezone, then compares against now() per tick."""
+
+    frequency: str = Field(
+        default="daily", pattern="^(daily|weekdays|weekly|monthly|custom)$"
+    )
+    times: list[str] = Field(default_factory=lambda: ["10:00"])
+    # 0=Mon … 6=Sun. Used when frequency ∈ {weekdays, weekly}.
+    weekdays: list[int] | None = None
+    # 1–31. Used when frequency == "monthly".
+    month_days: list[int] | None = None
+    timezone: str = "UTC"
+
+
+class AutomationRule(BaseModel):
+    """A single content-automation rule. Persisted to automation_rules.json."""
+
+    id: str | None = None
+    name: str = Field(min_length=1, max_length=80)
+    active: bool = True
+    created_at: float | None = None
+    updated_at: float | None = None
+
+    # Content shape
+    content_type: str = Field(
+        default="photo", pattern="^(photo|video|carousel|template|text)$"
+    )
+    template_id: str | None = None
+    num_media: NumMediaSpec = Field(default_factory=NumMediaSpec)
+
+    # Generation context — feeds the AI prompt
+    domain: str = ""
+    target_audience: str = ""
+    tone: str = ""
+    objective: str = Field(
+        default="informative",
+        pattern="^(informative|promotional|engagement|acquisition)$",
+    )
+    description_style: str = ""
+    extra_brief: str = ""
+
+    # Schedule
+    schedule: AutomationSchedule = Field(default_factory=AutomationSchedule)
+
+    # Validation
+    validation_lead_minutes: int = Field(default=30, ge=1, le=24 * 60)
+    validation_chat_id: str | None = None
+
+    # Publication target — same shape as Post.platforms
+    platforms: dict[str, bool] = Field(default_factory=dict)
+    ratios: dict[str, str] | None = None
+    tiktok: TikTokOptions | None = None
+
+
+class AutomationRulesResponse(BaseModel):
+    """Response for GET /automation-rules."""
+
+    rules: list[AutomationRule]

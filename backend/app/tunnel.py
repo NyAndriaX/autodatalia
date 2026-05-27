@@ -1,6 +1,6 @@
-"""Cloudflared tunnel management.
+"""Ngrok tunnel management.
 
-Starts a free Cloudflare Quick Tunnel in the background so images
+Starts a free ngrok tunnel in the background so images
 can be served via a public URL (required by the Instagram Graph API).
 """
 
@@ -8,36 +8,52 @@ import asyncio
 import re
 import subprocess
 import threading
+import httpx
+import time
+import os
 
 TUNNEL_URL: str | None = None
 _tunnel_ready = threading.Event()
-_tunnel_started = False  # set True only when start_cloudflared() is launched
+_tunnel_started = False  # set True only when start_ngrok() is launched
 
 
-def start_cloudflared() -> None:
-    """Launch cloudflared and capture the generated tunnel URL."""
+def start_ngrok() -> None:
+    """Launch ngrok and capture the generated tunnel URL."""
     global TUNNEL_URL, _tunnel_started
     _tunnel_started = True
-    print("[tunnel] Starting cloudflared...")
+    print("[tunnel] Starting ngrok...")
     try:
+        domain_arg = []
+        domain = os.environ.get("NGROK_DOMAIN")
+        if domain:
+            domain_arg = ["--domain", domain]
+            
         process = subprocess.Popen(
-            ["cloudflared", "tunnel", "--url", "http://127.0.0.1:8000"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
+            ["ngrok", "http", "8000"] + domain_arg,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-        for line in iter(process.stdout.readline, ""):
-            print(f"[tunnel] {line.strip()}")
-            if "trycloudflare.com" in line:
-                match = re.search(
-                    r"(https://[a-zA-Z0-9-]+\.trycloudflare\.com)", line
-                )
-                if match:
-                    TUNNEL_URL = match.group(1)
-                    _tunnel_ready.set()
-                    print(f"[tunnel] *** Public URL: {TUNNEL_URL} ***")
+        
+        # Poll the local ngrok API to get the public URL
+        for _ in range(10):
+            time.sleep(1)
+            try:
+                r = httpx.get("http://127.0.0.1:4040/api/tunnels", timeout=2.0)
+                if r.status_code == 200:
+                    tunnels = r.json().get("tunnels", [])
+                    for t in tunnels:
+                        if t.get("public_url", "").startswith("https://"):
+                            TUNNEL_URL = t["public_url"]
+                            _tunnel_ready.set()
+                            print(f"[tunnel] *** Public URL: {TUNNEL_URL} ***")
+                            return
+            except Exception:
+                pass
+                
+        print("[tunnel] Failed to get ngrok URL from local API")
+        _tunnel_ready.set()
     except Exception as exc:
-        print(f"[tunnel] Failed to start: {exc}")
+        print(f"[tunnel] Failed to start ngrok: {exc}")
         _tunnel_ready.set()  # unblock waiters even on failure
 
 

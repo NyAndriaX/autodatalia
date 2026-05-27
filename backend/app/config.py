@@ -28,6 +28,17 @@ class Settings(BaseModel):
     cors_allow_origins: list[str]
     backend_auth_token: str
     tunnel_enabled: bool
+    jwt_secret: str
+    telegram_bot_token: str
+    telegram_default_chat_id: str
+    telegram_webhook_secret: str
+    linkedin_api_version: str
+    ai_image_api_base_url: str
+    ai_image_api_key: str
+    ai_image_model: str
+    ai_video_api_base_url: str
+    ai_video_api_key: str
+    ai_video_model: str
 
 
 def load_settings() -> Settings:
@@ -74,7 +85,29 @@ def load_settings() -> Settings:
         # publicly with no auth. Opt in via env when IG publishing needs it.
         tunnel_enabled=os.getenv("TUNNEL_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"},
+        jwt_secret=os.getenv("JWT_SECRET", "super-secret-default-key-change-in-prod"),
+        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+        telegram_default_chat_id=os.getenv("TELEGRAM_DEFAULT_CHAT_ID", "").strip(),
+        telegram_webhook_secret=os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip(),
+        linkedin_api_version=os.getenv("LINKEDIN_API_VERSION", "202603").strip(),
+        ai_image_api_base_url=os.getenv(
+            "AI_IMAGE_API_BASE_URL",
+            os.getenv("AI_API_BASE_URL", "https://openrouter.ai/api/v1"),
+        ).rstrip("/"),
+        ai_image_api_key=os.getenv(
+            "AI_IMAGE_API_KEY",
+            os.getenv("AI_API_KEY", ""),
+        ).strip(),
+        ai_image_model=os.getenv("AI_IMAGE_MODEL", "").strip(),
+        ai_video_api_base_url=os.getenv(
+            "AI_VIDEO_API_BASE_URL",
+            os.getenv("AI_API_BASE_URL", "https://openrouter.ai/api/v1"),
+        ).rstrip("/"),
+        ai_video_api_key=os.getenv(
+            "AI_VIDEO_API_KEY",
+            os.getenv("AI_API_KEY", ""),
+        ).strip(),
+        ai_video_model=os.getenv("AI_VIDEO_MODEL", "").strip(),
     )
-
 
 settings = load_settings()

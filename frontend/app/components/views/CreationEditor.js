@@ -1,6 +1,7 @@
 "use client";
 
 import { useSelector, useDispatch } from "react-redux";
+import TikTokOptionsPanel from "./TikTokOptionsPanel";
 import {
   setContent,
   togglePlatform,
@@ -9,6 +10,7 @@ import {
   setTone,
   setPlatformRatio,
   selectVariant,
+  addMedia,
 } from "../../store/editorSlice";
 import {
   generateContentThunk,
@@ -17,6 +19,7 @@ import {
   submitForValidationThunk,
   publishNowThunk,
 } from "../../store/editorThunks";
+import { addNotification } from "../../store/uiSlice";
 import { schedulePostThunk } from "../../store/calendarThunks";
 import {
   Sparkles,
@@ -41,6 +44,7 @@ import {
   ChevronDown,
   Frame,
   MoreHorizontal,
+  Film,
 } from "lucide-react";
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import MediaUploader from "./MediaUploader";
@@ -51,6 +55,10 @@ import {
   fetchConnections,
   readCachedConnections,
 } from "../../lib/oauthService";
+import {
+  generateImageAsset,
+  generateVideoAsset,
+} from "../../lib/mediaGenerationService";
 import {
   PLATFORMS,
   RATIOS_BY_PLATFORM,
@@ -104,6 +112,48 @@ export default function CreationEditor() {
   const [showHashtags, setShowHashtags] = useState(false);
   const [confirmRegen, setConfirmRegen] = useState(false);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
+  const [generatingMediaKind, setGeneratingMediaKind] = useState(null);
+
+  // ─── AI media generation (image / video) ──────────────────────────
+  // Same backend endpoints the PostEditorPopup and ScheduleModal use;
+  // previously missing from the main editor surface.
+  const handleGenerateMedia = async (kind) => {
+    const prompt = currentPost.content.trim();
+    if (!prompt) {
+      dispatch(
+        addNotification({
+          message: `Enter a prompt before generating a ${kind}.`,
+          type: "error",
+        })
+      );
+      return;
+    }
+    setGeneratingMediaKind(kind);
+    try {
+      const ratio =
+        Object.values(currentPost.ratios || {})[0] || (kind === "video" ? "9:16" : "1:1");
+      const result =
+        kind === "video"
+          ? await generateVideoAsset({ prompt, ratio })
+          : await generateImageAsset({ prompt, ratio });
+      dispatch(addMedia([result.mediaItem]));
+      dispatch(
+        addNotification({
+          message: `${kind === "video" ? "Video" : "Image"} generated via ${result.data?.provider || "backend"}.`,
+          type: "success",
+        })
+      );
+    } catch (err) {
+      dispatch(
+        addNotification({
+          message: `${kind === "video" ? "Video" : "Image"} generation failed: ${err.message || "unknown error"}`,
+          type: "error",
+        })
+      );
+    } finally {
+      setGeneratingMediaKind(null);
+    }
+  };
 
   /* Connected accounts → per-platform creator lookup, so the preview
      card shows the real avatar + handle of the account a post would
@@ -493,10 +543,47 @@ export default function CreationEditor() {
             )}
           </div>
 
-          {/* Media upload */}
+          {/* Media upload + AI generation */}
           <div className="mt-5">
             <MediaUploader />
+            {/* AI image / video generation — same backend the popup uses */}
+            <div className="flex gap-2 mt-3">
+              <button
+                id="generate-ai-image-btn"
+                onClick={() => handleGenerateMedia("image")}
+                disabled={!!generatingMediaKind}
+                className="btn-secondary text-xs inline-flex items-center gap-1.5"
+                title="Generate an image from the current prompt"
+              >
+                {generatingMediaKind === "image" ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <Sparkles size={13} />
+                )}{" "}
+                AI image
+              </button>
+              <button
+                id="generate-ai-video-btn"
+                onClick={() => handleGenerateMedia("video")}
+                disabled={!!generatingMediaKind}
+                className="btn-secondary text-xs inline-flex items-center gap-1.5"
+                title="Generate a motion video from the current prompt"
+              >
+                {generatingMediaKind === "video" ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <Film size={13} />
+                )}{" "}
+                AI video
+              </button>
+            </div>
           </div>
+          
+          {currentPost.platforms.tiktok && (
+            <div className="mt-4">
+              <TikTokOptionsPanel />
+            </div>
+          )}
 
           {/* Generate — single primary CTA; secondary controls only appear
               once variants exist, and Regenerate keeps the confirm step so
@@ -659,6 +746,7 @@ export default function CreationEditor() {
               <div className="pointer-events-auto">
                 <RatioPicker
                   platform={activePlatforms[safePreviewIdx]}
+                  media={currentPost.media}
                   value={effectiveRatio(
                     activePlatforms[safePreviewIdx].id,
                     currentPost.ratios
@@ -765,11 +853,18 @@ export default function CreationEditor() {
    (feed vs reels vs link-share). Rather than picking a single global
    ratio, the user picks per platform — sourced from RATIOS_BY_PLATFORM
    in lib/platforms.js. Closes on outside click / Escape. */
-function RatioPicker({ platform, value, onChange }) {
+function RatioPicker({ platform, value, onChange, media }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const spec = RATIOS_BY_PLATFORM[platform.id];
-  const options = spec?.options || [];
+  let options = spec?.options || [];
+
+  // Remove unsupported ratios based on media type.
+  // TikTok explicitly rejects 16:9 for photo carousels.
+  const hasVideo = media?.some((m) => m.kind === "video");
+  if (platform.id === "tiktok" && !hasVideo) {
+    options = options.filter((o) => o.value !== "16:9");
+  }
 
   useEffect(() => {
     if (!open) return;

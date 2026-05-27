@@ -11,7 +11,7 @@ This file helps AI coding agents quickly understand the repository layout, the p
 
 ## Key guidance for code changes
 - The frontend never calls AI or social APIs directly; AI and publish actions flow through the backend.
-- OAuth tokens are stored server-side in `backend/content/oauth_tokens.json` and never round-trip through the browser.
+- OAuth tokens are stored server-side in `backend/content/.oauth_tokens.json` (per-user files use the `.oauth_tokens_<user_id>.json` suffix) and never round-trip through the browser.
 - `infra/docker-compose.yml` is the recommended local run configuration for the backend.
 - Use existing README docs for context:
   - `README.md` for architecture and run instructions

@@ -40,36 +40,38 @@ export const authService = {
     return readSession();
   },
 
-  // Authenticate. Tries the backend, falls back to a mock session.
+  // Authenticate via backend /auth/login.
   async login({ email, password } = {}) {
     if (config.apiBaseUrl) {
-      try {
-        const data = await apiFetch("/auth/login", {
-          method: "POST",
-          body: JSON.stringify({ email, password }),
-        });
-        if (data?.user) {
-          writeSession(data.user);
-          return data.user;
-        }
-      } catch {
-        /* fall through to mock */
+      const data = await apiFetch("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      });
+      if (data?.user && data?.token) {
+        const sessionData = { ...data.user, token: data.token };
+        writeSession(sessionData);
+        return sessionData;
       }
     }
-    await delay();
-    const user = { ...MOCK_USER, email: email || MOCK_USER.email };
-    writeSession(user);
-    return user;
+    throw new Error("Login failed or backend not configured.");
+  },
+
+  async register({ email, password, name } = {}) {
+    if (config.apiBaseUrl) {
+      const data = await apiFetch("/auth/register", {
+        method: "POST",
+        body: JSON.stringify({ email, password, name }),
+      });
+      if (data?.user && data?.token) {
+        const sessionData = { ...data.user, token: data.token };
+        writeSession(sessionData);
+        return sessionData;
+      }
+    }
+    throw new Error("Registration failed or backend not configured.");
   },
 
   async logout() {
-    if (config.apiBaseUrl) {
-      try {
-        await apiFetch("/auth/logout", { method: "POST" });
-      } catch {
-        /* ignore — clear locally regardless */
-      }
-    }
     writeSession(null);
   },
 };

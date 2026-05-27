@@ -97,7 +97,7 @@ export default function MediaUploader() {
         onDrop={onDrop}
         className="flex flex-col items-center justify-center gap-2 rounded-xl px-4 py-7 text-center cursor-pointer transition-all duration-200"
         style={{
-          background: dragOver ? "rgba(59,130,246,0.10)" : "var(--bg-tertiary)",
+          background: dragOver ? "rgba(29, 63, 190, 0.10)" : "var(--bg-tertiary)",
           border: dragOver
             ? "2px dashed var(--accent-primary)"
             : "2px dashed var(--border-default)",

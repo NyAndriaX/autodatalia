@@ -37,35 +37,19 @@ export function revokeMediaItem(item) {
 
 // Push a file to the backend /upload endpoint.
 //
-// IMPORTANT: We post to `/api/upload` (a Next.js Route Handler in
-// app/api/upload/route.js), NOT through `${apiBaseUrl}/upload` which
-// goes via the rewrite proxy. The dev rewrite buffers the entire
-// multipart body in memory and times out at 30s on files larger than
-// ~5-10MB — confirmed via curl. The Route Handler streams the body
-// directly to the backend without buffering, so a 48MB video uploads
-// in ~4s instead of failing after 30s.
-//
-// All other endpoints (small JSON requests) continue using the rewrite
-// proxy via apiBaseUrl — that path works fine for them.
+// IMPORTANT: We now upload directly to the backend bypassing Next.js entirely.
+// The Next.js dev server has known bugs where it intercepts FormData POSTs
+// and mistakenly throws "Failed to find Server Action" 404 errors, or
+// buffers the multipart body causing 30s timeouts.
+// Direct to backend (which has CORS enabled) solves this permanently.
 export async function uploadToBackend(file) {
   try {
     const body = new FormData();
     body.append("file", file);
-    const headers = {};
-    if (config.backendAuthToken) {
-      headers.Authorization = `Bearer ${config.backendAuthToken}`;
-    }
-    const res = await fetch("/api/upload", {
-      method: "POST",
-      headers,
-      body,
-    });
-    if (!res.ok) {
-      const err = new Error(`API ${res.status} /upload`);
-      err.status = res.status;
-      throw err;
-    }
-    const data = await res.json();
+    
+    // We use the same apiUpload client that handles auth headers natively
+    const data = await apiUpload("/upload", body);
+    
     return {
       remoteUrl: data?.url ?? null,
       status: "uploaded",
@@ -91,7 +75,12 @@ export async function deleteFromBackend(relativePath) {
   if (!config.apiBaseUrl) return { ok: false, status: 0 };
   try {
     const headers = {};
-    if (config.backendAuthToken) headers.Authorization = `Bearer ${config.backendAuthToken}`;
+    let token = config.backendAuthToken;
+    try {
+      const session = JSON.parse(window.localStorage.getItem("datalia-session"));
+      if (session && session.token) token = session.token;
+    } catch (e) {}
+    if (token) headers.Authorization = `Bearer ${token}`;
     const res = await fetch(
       `${config.apiBaseUrl}/media/${encodeURI(relativePath)}`,
       { method: "DELETE", headers },

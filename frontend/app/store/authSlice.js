@@ -29,10 +29,14 @@ const authSlice = createSlice({
       state.status = "idle";
       state.error = null;
     },
+    clearAuthError: (state) => {
+      state.error = null;
+      if (state.status === "error") state.status = "idle";
+    },
   },
 });
 
-export const { authStart, authSuccess, authError, authLogout } =
+export const { authStart, authSuccess, authError, authLogout, clearAuthError } =
   authSlice.actions;
 
 export default authSlice.reducer;

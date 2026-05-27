@@ -2,18 +2,24 @@
 
 import os
 import threading
+import mimetypes
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
+from pillow_heif import register_avif_opener, register_heif_opener
+register_avif_opener()
+register_heif_opener()
+
 from .config import settings
 from .legal import router as legal_router
+from .media_generation import router as media_generation_router
 from .oauth import router as oauth_router
 from .routes import router
 from .scheduler import start_scheduler, stop_scheduler
-from .tunnel import start_cloudflared
+from .telegram_validation import router as telegram_validation_router
 
 app = FastAPI(title="Caption API", version="1.0.0")
 
@@ -28,12 +34,23 @@ app.add_middleware(
 )
 
 # ── Static files ───────────────────────────────────────────────────────
+# Register .jfif as image/jpeg — Python's mimetypes module doesn't know
+# about JFIF, so StaticFiles would serve it as application/octet-stream.
+# Meta and TikTok reject non-image content types, causing carousel failures.
+import mimetypes
+mimetypes.add_type("image/jpeg", ".jfif")
+
 settings.content_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/content", StaticFiles(directory=settings.content_dir), name="content")
 
+from .auth import router as auth_router
+
 # ── Routes ─────────────────────────────────────────────────────────────
 app.include_router(router)
+app.include_router(auth_router)
 app.include_router(oauth_router)
+app.include_router(telegram_validation_router)
+app.include_router(media_generation_router)
 # Privacy + Terms pages — TikTok / LinkedIn / Meta dev portals all
 # require publicly-reachable URLs. Served at /privacy and /terms so
 # they're stable regardless of which deployment target is in front.
@@ -54,17 +71,26 @@ async def tiktok_root_verify(token: str) -> str:
 # ── Lifecycle ──────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def on_startup() -> None:
-    # The free quick-tunnel exposes the API publicly with no auth, so it
+    # The free ngrok tunnel exposes the API publicly with no auth, so it
     # only starts when explicitly enabled (e.g. for Instagram publishing).
     if settings.tunnel_enabled:
-        threading.Thread(target=start_cloudflared, daemon=True).start()
+        from .tunnel import start_ngrok
+        threading.Thread(target=start_ngrok, daemon=True).start()
     else:
         print("[tunnel] disabled (set TUNNEL_ENABLED=true to enable)")
     # Scheduler is what turns a "scheduled" Post into a real publish call
     # at its scheduledDate + time. Async startup gives it the live loop.
+    from .scheduler import start_scheduler
     start_scheduler()
-
+    # Automation worker = Phase 2 of the automation module. Scans rules,
+    # generates candidates ahead of their fire time, submits to Telegram.
+    # Approve-handler downstream flips them to status="scheduled" so the
+    # scheduler above picks them up like any other scheduled post.
+    from .automation_worker import start_automation_worker
+    start_automation_worker()
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
     stop_scheduler()
+    from .automation_worker import stop_automation_worker
+    stop_automation_worker()

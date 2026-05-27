@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from . import tunnel
 from .auth import require_token
 from .models import (
+    AutomationRule,
+    AutomationRulesResponse,
     CaptionRequest,
     ContentItem,
     GenerateRequest,
@@ -32,6 +34,11 @@ from .publish import publish_to_targets
 from .services import (
     build_image_data_uri,
     generate_captions,
+    automation_create,
+    automation_delete,
+    automation_get,
+    automation_list,
+    automation_update,
     generate_post_variants,
     iter_content_items,
     messages_append,
@@ -170,9 +177,13 @@ async def publish(body: PublishRequest) -> PublishResponse:
     async def _resolve_meta_pages() -> list[dict[str, Any]]:
         nonlocal meta_pages
         if meta_pages is None:
-            meta_pages = (
-                await _fetch_meta_pages(user_meta_token) if user_meta_token else []
-            )
+            try:
+                meta_pages = (
+                    await _fetch_meta_pages(user_meta_token) if user_meta_token else []
+                )
+            except Exception as e:
+                print(f"[_resolve_meta_pages] Error fetching Meta pages: {e}")
+                meta_pages = []
         return meta_pages
 
     resolved: list[dict[str, Any]] = []
@@ -182,6 +193,7 @@ async def publish(body: PublishRequest) -> PublishResponse:
         # image for facebook in the same call). Falls back to body.media_url
         # when not set, so the old single-media path keeps working.
         t_media_url = t.media_url or body.media_url
+        t_media_urls = t.media_urls or body.media_urls or ([t_media_url] if t_media_url else [])
         if platform in ("facebook", "instagram"):
             if not user_meta_token:
                 resolved.append({
@@ -190,6 +202,7 @@ async def publish(body: PublishRequest) -> PublishResponse:
                     "label": t.label or t.id,
                     "access_token": "",
                     "media_url": t_media_url,
+                    "media_urls": t_media_urls,
                     "link": body.link,
                     "media_kind": t.media_kind or "image",
                     "_unresolved_reason": "meta_not_connected",
@@ -217,6 +230,7 @@ async def publish(body: PublishRequest) -> PublishResponse:
                     "label": t.label or t.id,
                     "access_token": "",
                     "media_url": t_media_url,
+                    "media_urls": t_media_urls,
                     "link": body.link,
                     "media_kind": t.media_kind or "image",
                     "_unresolved_reason": "target_not_found_in_meta_pages",
@@ -228,12 +242,20 @@ async def publish(body: PublishRequest) -> PublishResponse:
                 "label": t.label or page["page_name"],
                 "access_token": page["page_access_token"],
                 "media_url": t_media_url,
+                "media_urls": t_media_urls,
                 "link": body.link,
                 "media_kind": t.media_kind or "image",
             })
         elif platform == "tiktok":
+            # Refresh the access token if it's expired (24h short-lived).
+            # Without this, every publish past the first day 401s with
+            # access_token_invalid until the user manually reconnects.
+            from .oauth import resolve_tiktok_access_token
+            token = await resolve_tiktok_access_token()
+            # Re-read the record — resolve_tiktok_access_token may have
+            # persisted refreshed token + scope back to the store.
+            tokens = _load_tokens()
             record = tokens.get("tiktok") or {}
-            token = record.get("access_token")
             if not token:
                 resolved.append({
                     "platform": "tiktok",
@@ -241,6 +263,7 @@ async def publish(body: PublishRequest) -> PublishResponse:
                     "label": t.label or t.id,
                     "access_token": "",
                     "media_url": t_media_url,
+                    "media_urls": t_media_urls,
                     "media_kind": "video",
                     "_unresolved_reason": "tiktok_not_connected",
                 })
@@ -256,7 +279,7 @@ async def publish(body: PublishRequest) -> PublishResponse:
             tk_kind = (t.media_kind or "").lower()
             if tk_kind not in ("image", "video"):
                 tk_kind = "image" if (t_media_url or "").lower().rsplit(".", 1)[-1] in {
-                    "png", "jpg", "jpeg", "webp", "gif"
+                    "png", "jpg", "jpeg", "webp", "gif", "jfif"
                 } else "video"
             # Scope-aware audit_mode downgrade — direct-post (/video/init/)
             # returns HTTP 401 when the token's granted scope doesn't
@@ -282,6 +305,7 @@ async def publish(body: PublishRequest) -> PublishResponse:
                 "label": t.label or (f"@{handle}" if handle else t.id),
                 "access_token": token,
                 "media_url": t_media_url,
+                "media_urls": t_media_urls,
                 "media_kind": tk_kind,
                 # Forward the compose-screen choices the publish handler
                 # needs. PublishRequest carries these as a tiktok-shaped
@@ -290,6 +314,7 @@ async def publish(body: PublishRequest) -> PublishResponse:
                 "disclose_video_branded": tk.disclose_video_branded,
                 "disclose_video_your_brand": tk.disclose_video_your_brand,
                 "audit_mode": effective_audit,
+                "upload_mode": tk.upload_mode,
                 # Stash whether we downgraded so the publish handler can
                 # surface it in the response message.
                 "audit_downgraded": requested_audit != effective_audit,
@@ -304,6 +329,7 @@ async def publish(body: PublishRequest) -> PublishResponse:
                 "label": t.label or t.id,
                 "access_token": record.get("access_token", ""),
                 "media_url": t_media_url,
+                "media_urls": t_media_urls,
                 "media_kind": t.media_kind or "image",
             })
 
@@ -315,6 +341,15 @@ async def publish(body: PublishRequest) -> PublishResponse:
             ratios=body.ratios,
             platform=r["platform"],
         )
+        if r.get("media_urls"):
+            r["media_urls"] = [
+                crop_for_targets(
+                    media_url=url,
+                    ratios=body.ratios,
+                    platform=r["platform"],
+                )
+                for url in r["media_urls"]
+            ]
 
     # Emit "not connected" results synthetically so the frontend gets a
     # clear per-target error without us calling the upstream API.
@@ -355,27 +390,16 @@ async def publish(body: PublishRequest) -> PublishResponse:
         for t in body.targets
     ]
 
-    # Mirror the manual publish to /messages so a second browser session (or
-    # the bell on a different device) sees the activity, matching what the
-    # scheduler does for its own fires.
-    for r in ordered:
-        platform = r.get("platform") or "?"
-        target = r.get("target_label") or r.get("target_id") or "?"
-        if r.get("ok"):
-            messages_append({
-                "kind": "publish",
-                "platform": platform,
-                "target_label": target,
-                "message": f"Published to {target} ({platform}).",
-                "url": r.get("permalink_url"),
-            })
-        else:
-            messages_append({
-                "kind": "publish_error",
-                "platform": platform,
-                "target_label": target,
-                "message": f"{target} ({platform}) failed: {r.get('error') or 'unknown'}",
-            })
+    # Final log line so server-side evidence exists for every publish.
+    # When the frontend reports "silent fail", grep this for the request and
+    # see exactly what was returned (ok flag + error string per target).
+    print(
+        "[publish] results: "
+        + str([
+            (r["platform"], r["target_id"], r["ok"], (r.get("error") or "")[:120])
+            for r in ordered
+        ])
+    )
 
     return PublishResponse(
         results=[PublishResultModel(**r) for r in ordered]
@@ -401,8 +425,8 @@ async def upload(request: Request, file: UploadFile = File(...)) -> UploadRespon
     meta = await save_upload(file)
     base = (
         os.environ.get("PUBLIC_BASE_URL")
-        or os.environ.get("OAUTH_REDIRECT_BASE")
         or await tunnel.wait_for_tunnel(timeout=5.0)
+        or os.environ.get("OAUTH_REDIRECT_BASE")
         or str(request.base_url).rstrip("/")
     )
     base = base.rstrip("/")
@@ -491,6 +515,58 @@ async def patch_post(post_id: str, body: PostUpdate) -> Post:
 async def delete_post(post_id: str) -> dict[str, bool]:
     if not posts_delete(post_id):
         raise HTTPException(status_code=404, detail="Post not found.")
+    return {"deleted": True}
+
+
+# ── Automation rules ──────────────────────────────────────────────────
+# A rule is a "what + when" template the Phase 2 worker uses to autonomously
+# generate Posts. Endpoints are CRUD only — no firing logic lives here.
+
+
+@router.get("/automation-rules", response_model=AutomationRulesResponse)
+async def list_automation_rules() -> AutomationRulesResponse:
+    rules = [AutomationRule(**r) for r in automation_list()]
+    return AutomationRulesResponse(rules=rules)
+
+
+@router.get("/automation-rules/{rule_id}", response_model=AutomationRule)
+async def get_automation_rule(rule_id: str) -> AutomationRule:
+    rule = automation_get(rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Automation rule not found.")
+    return AutomationRule(**rule)
+
+
+@router.post(
+    "/automation-rules",
+    response_model=AutomationRule,
+    dependencies=[auth_required],
+)
+async def create_automation_rule(body: AutomationRule) -> AutomationRule:
+    # Discard any client-supplied id/timestamps — the store fills them.
+    payload = body.model_dump(exclude={"id", "created_at", "updated_at"})
+    return AutomationRule(**automation_create(payload))
+
+
+@router.patch(
+    "/automation-rules/{rule_id}",
+    response_model=AutomationRule,
+    dependencies=[auth_required],
+)
+async def patch_automation_rule(rule_id: str, body: AutomationRule) -> AutomationRule:
+    # Apply the full body as a patch — automation_update treats None as "skip"
+    # so callers can omit fields they don't want to overwrite by sending null.
+    patch = body.model_dump(exclude={"id", "created_at", "updated_at"})
+    updated = automation_update(rule_id, patch)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Automation rule not found.")
+    return AutomationRule(**updated)
+
+
+@router.delete("/automation-rules/{rule_id}", dependencies=[auth_required])
+async def delete_automation_rule(rule_id: str) -> dict[str, bool]:
+    if not automation_delete(rule_id):
+        raise HTTPException(status_code=404, detail="Automation rule not found.")
     return {"deleted": True}
 
 
