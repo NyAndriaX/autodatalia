@@ -1,0 +1,134 @@
+# Production compose — what runs on the Hetzner / Fly.io VM.
+#
+# Differences from the dev compose (../infra/docker-compose.yml):
+#  - Caddy in front for SSL + reverse proxy (no host port on caption-api)
+#  - Named volume `caption-content` for posts/oauth_tokens/uploads
+#  - Reads env from .env.production (NOT the dev .env)
+#  - No bind-mount of ../backend/content (that mount is dev-only)
+#  - TIKTOK_SCOPES surfaced so direct-post works without code change
+#
+# Usage on the VM:
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+#   docker compose -f docker-compose.prod.yml --env-file .env.production logs -f
+#   docker compose -f docker-compose.prod.yml --env-file .env.production restart caption-api
+
+services:
+  caddy:
+    # Caddy auto-provisions Let's Encrypt certs on first request to the
+    # domain configured in caddy/Caddyfile. No manual certbot setup,
+    # no renewal cron — Caddy renews ~30 days before expiry on its own.
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data        # certs + state — must persist
+      - caddy-config:/config
+    environment:
+      # Caddyfile reads {$API_DOMAIN} — set in .env.production
+      API_DOMAIN: ${API_DOMAIN}
+    depends_on:
+      - caption-api
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  caption-api:
+    build:
+      context: ../backend
+    container_name: caption-api
+    restart: always
+    # NO host port binding — only Caddy reaches it, on the docker network.
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s   # bumped: imageio-ffmpeg unpacks its binary on first run
+      retries: 3
+    environment:
+      # AI
+      AI_API_BASE_URL: ${AI_API_BASE_URL:-https://openrouter.ai/api/v1}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-google/gemini-2.0-flash-lite-001}
+      AI_MODEL_FAST: ${AI_MODEL_FAST:-google/gemini-2.0-flash-lite-001}
+      AI_MODEL_PREMIUM: ${AI_MODEL_PREMIUM:-}
+      AI_INCLUDE_IMAGES: ${AI_INCLUDE_IMAGES:-false}
+      AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-200}
+      # CORS — prod frontend origin goes here. The Vercel preview URLs
+      # (`*.vercel.app`) are NOT included by default; add them if you
+      # want preview deploys to hit prod backend.
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS}
+      # Backend auth — strongly recommended ON in prod, since /generate
+      # / /transform / /upload would otherwise be open to anyone who
+      # finds the API host.
+      BACKEND_AUTH_TOKEN: ${BACKEND_AUTH_TOKEN}
+      # Tunnel — Cloudflare quick-tunnel is a dev convenience; in prod
+      # Caddy serves the public host. Force off.
+      TUNNEL_ENABLED: "false"
+      # Public hostname Meta/TikTok callbacks hit + where /upload builds
+      # served-URL strings. Must match the Caddy-fronted domain exactly,
+      # https only.
+      OAUTH_REDIRECT_BASE: https://${API_DOMAIN}
+      PUBLIC_BASE_URL: https://${API_DOMAIN}
+      # Provider credentials
+      META_APP_ID: ${META_APP_ID}
+      META_APP_SECRET: ${META_APP_SECRET}
+      INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-}
+      INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:-}
+      TIKTOK_CLIENT_KEY: ${TIKTOK_CLIENT_KEY}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET}
+      TIKTOK_DOMAIN_VERIFY: ${TIKTOK_DOMAIN_VERIFY}
+      # Comma-separated. Defaults to sandbox-safe ("user.info.basic,
+      # video.upload"); set to include `video.publish` once the app is
+      # audited.
+      TIKTOK_SCOPES: ${TIKTOK_SCOPES:-user.info.basic,video.upload}
+      # FILE_UPLOAD avoids the URL-Properties prefix verification step;
+      # leave "file" unless you've verified the prefix at TikTok.
+      TIKTOK_UPLOAD_MODE: ${TIKTOK_UPLOAD_MODE:-file}
+      LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
+      LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # JWT secret for user auth tokens — MUST be overridden in prod.
+      # Generate with: openssl rand -hex 32
+      JWT_SECRET: ${JWT_SECRET:-}
+      # Telegram validation (optional — leave empty to disable)
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_DEFAULT_CHAT_ID: ${TELEGRAM_DEFAULT_CHAT_ID:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      # AI image/video generation (optional)
+      AI_IMAGE_API_BASE_URL: ${AI_IMAGE_API_BASE_URL:-}
+      AI_IMAGE_API_KEY: ${AI_IMAGE_API_KEY:-}
+      AI_IMAGE_MODEL: ${AI_IMAGE_MODEL:-}
+      AI_VIDEO_API_BASE_URL: ${AI_VIDEO_API_BASE_URL:-}
+      AI_VIDEO_API_KEY: ${AI_VIDEO_API_KEY:-}
+      AI_VIDEO_MODEL: ${AI_VIDEO_MODEL:-}
+      # Content dir lives on the named volume mounted below.
+      CONTENT_DIR: /home/app/content
+      # Scheduler default timezone — the dashboard already lets the
+      # user override per-post, but unspecified posts use this.
+      DATALIA_DEFAULT_TZ: ${DATALIA_DEFAULT_TZ:-Europe/Paris}
+    volumes:
+      # Named volume — survives `docker compose down`, only removed
+      # explicitly with `docker volume rm`. Holds uploaded media,
+      # cropped variants, posts.json, messages.json, oauth_tokens.json.
+      - caption-content:/home/app/content
+    # Reasonable resource ceiling for a CX22 (4 GB total — leave room
+    # for caddy + ssh + apt). Adjust upward if larger VM.
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+
+volumes:
+  caption-content:
+  caddy-data:
+  caddy-config:

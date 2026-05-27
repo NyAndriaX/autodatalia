@@ -1,0 +1,473 @@
+@import "tailwindcss";
+
+/* ========================================
+   DATALIA MARKETING AUTOMATION — Design System
+   ======================================== */
+
+/* Light is the default theme; [data-theme="dark"] overrides below.
+   The resolved theme attribute is set on <html> by the no-flash script
+   in layout.js before first paint, then kept in sync by AppBootstrap. */
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* — Core Palette — */
+  --bg-primary: #f0f4f8;
+  --bg-secondary: #e2e8f0;
+  --bg-tertiary: #cbd5e1;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f8fafc;
+  --bg-elevated: #ffffff;
+
+  /* — Accent & Brand —
+     Datalia logo is a royal-cobalt medallion with red tricolor accents.
+     Primary palette mirrors the medallion blue (not the sky-blue this
+     repo started with); --accent-red is the punchy companion used
+     sparingly on highlights, focus rings, and live indicators. */
+  --accent-primary: #1d3fbe;
+  --accent-primary-hover: #1a36a1;
+  --accent-secondary: #3b5be3;
+  --accent-deep: #15307f;
+  --accent-red: #dc2626;
+  --accent-red-hover: #b91c1c;
+  --accent-red-soft: rgba(220, 38, 38, 0.12);
+  --accent-gradient: linear-gradient(135deg, #15307f 0%, #1d3fbe 50%, #3b5be3 100%);
+  --accent-gradient-bold: linear-gradient(135deg, #1d3fbe 0%, #dc2626 100%);
+  --accent-glow: 0 0 24px rgba(29, 63, 190, 0.32);
+
+  /* — Text — */
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-tertiary: #475569;
+  --text-muted: #64748b;
+
+  /* — Borders — */
+  --border-default: #cbd5e1;
+  --border-hover: #94a3b8;
+  --border-active: #1d3fbe;
+
+  /* — Platform Colors — */
+  --platform-facebook: #1877F2;
+  --platform-instagram: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888);
+  --platform-tiktok: #000000;
+  --platform-tiktok-fg: #0f172a; /* readable TikTok foreground per theme */
+  --platform-linkedin: #0A66C2;
+
+  /* — Status Colors — */
+  --status-draft: #64748b;
+  --status-pending: #f59e0b;
+  --status-approved: #22c55e;
+  --status-error: #ef4444;
+  --status-published: #06b6d4;
+  /* Awaiting Telegram validation — distinct from pending so calendar
+     and bell views can tell a manual-pending post from an autogen one. */
+  --status-awaiting: #a855f7;
+  /* Terminal "user rejected" — heavier than draft, lighter than error. */
+  --status-rejected: #94a3b8;
+
+  /* — Sizing — */
+  --sidebar-width: 260px;
+  --sidebar-collapsed: 72px;
+  --topbar-height: 64px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+
+  /* — Glass — */
+  --glass-bg: rgba(255, 255, 255, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.3);
+  --glass-blur: blur(16px);
+
+  /* — Shadows — */
+  --shadow-dropdown: 0 20px 60px rgba(15, 23, 42, 0.15);
+
+  /* — Foreground / Background tokens for TW — */
+  --background: #f0f4f8;
+  --foreground: #0f172a;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* — Core Palette —
+     Slightly lifted backgrounds + softened text so the contrast is
+     comfortable (~9:1 instead of ~15:1) without losing legibility. */
+  --bg-primary: #0f1530;
+  --bg-secondary: #181e3a;
+  --bg-tertiary: #232c4d;
+  --bg-card: #161c35;
+  --bg-card-hover: #1f2745;
+  --bg-elevated: #232c4d;
+
+  /* — Accent & Brand —
+     Tones lift slightly on dark surfaces so the royal blue reads as
+     light-on-dark instead of muddy. Red stays vivid — it's the brand's
+     "energy" pop and needs to punch through. */
+  --accent-primary: #4866e3;
+  --accent-primary-hover: #6a82ea;
+  --accent-secondary: #6a82ea;
+  --accent-deep: #2540d1;
+  --accent-red: #ef4444;
+  --accent-red-hover: #f87171;
+  --accent-red-soft: rgba(239, 68, 68, 0.18);
+  --accent-gradient: linear-gradient(135deg, #2540d1 0%, #4866e3 50%, #6a82ea 100%);
+  --accent-gradient-bold: linear-gradient(135deg, #4866e3 0%, #ef4444 100%);
+  --accent-glow: 0 0 24px rgba(72, 102, 227, 0.4);
+
+  /* — Text —
+     Off-white primary instead of near-white so headlines / body don't punch
+     a hole through the dark surfaces. Secondary/tertiary trail accordingly. */
+  --text-primary: #d4dce8;
+  --text-secondary: #a3afc0;
+  --text-tertiary: #828d9d;
+  --text-muted: #5c6573;
+
+  /* — Borders — */
+  --border-default: #2a3247;
+  --border-hover: #3a4361;
+  --border-active: #4866e3;
+
+  /* — Platform Colors — */
+  --platform-tiktok-fg: #d4dce8;
+
+  /* — Glass — */
+  --glass-bg: rgba(23, 32, 54, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.05);
+
+  /* — Shadows — */
+  --shadow-dropdown: 0 20px 60px rgba(0, 0, 0, 0.45);
+
+  /* — Foreground / Background tokens for TW — */
+  --background: #131a2c;
+  --foreground: #d4dce8;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+/* ========================================
+   Base
+   ======================================== */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-hover) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border-hover);
+  border-radius: 3px;
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans, 'Inter', -apple-system, BlinkMacSystemFont, sans-serif);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+/* Theme-aware transition on surfaces so individual cards animate smoothly
+   on hover. Kept off background/color so the theme-switch path can manage
+   those globally (see [data-theme-transitioning] below); otherwise these
+   selectors would create a 300 ms wave while inline-styled elements snap. */
+.card,
+.glass-card,
+.btn-secondary,
+.btn-ghost,
+.input-field {
+  transition: border-color 0.25s ease, box-shadow 0.2s ease;
+}
+
+/* Theme toggle: html gets `data-theme-transitioning` set for ~140 ms when
+   the user flips light/dark. During that window EVERY element transitions
+   its color-related properties together — no cascade, no segment-by-segment
+   wipe. Outside that window the variables snap instantly, so live cursor
+   moves / hovers stay snappy.
+   `background-image` is in the list so gradient surfaces (sidebar header,
+   primary buttons, badges) fade with everything else — without it they
+   snapped while the body slow-faded, which read as "laggy". */
+:root[data-theme-transitioning],
+:root[data-theme-transitioning] *,
+:root[data-theme-transitioning] *::before,
+:root[data-theme-transitioning] *::after {
+  transition: background-color 0.14s ease, background-image 0.14s ease,
+    color 0.14s ease, border-color 0.14s ease, fill 0.14s ease,
+    stroke 0.14s ease, box-shadow 0.14s ease !important;
+}
+
+/* Tailwind v4 Preflight no longer sets buttons to a pointer cursor, so
+   buttons styled with inline styles (profile menu, tabs, chips, …) showed a
+   text/default cursor. Restore the affordance globally. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+label[for],
+summary {
+  cursor: pointer;
+}
+
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/* Accessible keyboard focus ring (mouse clicks stay clean). */
+:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Search input's parent already provides focus styling (blue border + glow),
+   so suppress the default ring to avoid a double-outline. */
+#global-search:focus,
+#global-search:focus-visible {
+  outline: none !important;
+  box-shadow: none;
+}
+
+/* Respect users who prefer reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ========================================
+   Utility Classes
+   ======================================== */
+
+.glass-card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  border-radius: var(--radius-md);
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+}
+
+.card:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-hover);
+}
+
+.accent-gradient {
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.btn-primary {
+  background: var(--accent-gradient);
+  color: white;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 10px 20px;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-primary:hover {
+  box-shadow: var(--accent-glow);
+  transform: translateY(-1px);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-secondary {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 10px 20px;
+  font-weight: 500;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-secondary:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-hover);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-weight: 500;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-ghost:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.input-field {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+  outline: none;
+  width: 100%;
+}
+
+.input-field::placeholder {
+  color: var(--text-muted);
+}
+
+.input-field:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 100px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.badge-draft {
+  background: rgba(100, 116, 139, 0.15);
+  color: var(--status-draft);
+}
+
+.badge-pending {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--status-pending);
+}
+
+.badge-approved {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--status-approved);
+}
+
+.badge-error {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--status-error);
+}
+
+.badge-awaiting {
+  background: rgba(168, 85, 247, 0.15);
+  color: var(--status-awaiting);
+}
+
+.badge-rejected {
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--status-rejected);
+}
+
+/* ========================================
+   Animations
+   ======================================== */
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(99, 102, 241, 0); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.4s ease forwards;
+}
+
+.animate-slide-in-left {
+  animation: slideInLeft 0.3s ease forwards;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* ========================================
+   Platform Tag Colors
+   ======================================== */
+
+.platform-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.platform-facebook {
+  background: rgba(24, 119, 242, 0.15);
+  color: var(--platform-facebook);
+}
+
+.platform-instagram {
+  background: rgba(225, 48, 108, 0.15);
+  color: #E1306C;
+}
+
+.platform-tiktok {
+  background: rgba(127, 127, 127, 0.14);
+  color: var(--platform-tiktok-fg);
+}
+
+.platform-linkedin {
+  background: rgba(10, 102, 194, 0.15);
+  color: var(--platform-linkedin);
+}

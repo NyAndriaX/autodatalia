@@ -1,0 +1,116 @@
+# ========================================
+# DATALIA — Root .gitignore
+# ========================================
+
+# ---------- OS ----------
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+
+# ---------- IDE / Editors ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+.classpath
+
+# ---------- Tool configs (local) ----------
+.claude/
+.sixth/
+.gemini/
+
+# ---------- Node / Frontend ----------
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# Next.js
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Env files (keep examples)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.production
+!.env.example
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Testing
+coverage/
+
+# ---------- Python / Backend ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ---------- Backend runtime content ----------
+# Keep the folder, ignore uploads + generated captions + the AI response
+# cache (the cache can contain prompt/response text — never commit it).
+backend/content/*
+!backend/content/.gitkeep
+
+# ---------- Docker ----------
+docker-compose.override.yml
+
+# ---------- Misc ----------
+*.pem
+*.log
+.cache/
+tmp/
+
+# Scratch / debug captures left at the repo root (logs.txt is the docker
+# compose logs dump we tail during debugging; not a build artifact, not
+# meant to ship).
+/logs.txt
+/logs-*.txt
+
+# Test images / one-off scratch fixtures dropped at backend/ root during
+# image-conversion debugging (test.png, test_conv.jpg). Real test fixtures
+# live under backend/tests/.
+backend/test.png
+backend/test.jpg
+backend/test.jpeg
+backend/test_*.png
+backend/test_*.jpg
+backend/test_*.jpeg
+
+# OAuth token store + per-user token files — already covered by
+# backend/content/* above, but listed here explicitly so it's obvious
+# why nothing in content/ is tracked.
+backend/content/.oauth_tokens*.json

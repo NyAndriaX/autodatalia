@@ -1,0 +1,38 @@
+# What the build context should NOT carry. Anything that lands in the
+# image risks leaking secrets, bloating the image, or being out of sync
+# with the runtime volume.
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.pyo
+
+# VCS
+.git/
+.gitignore
+
+# Local secrets — never bake into image
+.env
+.env.*
+!.env.example
+
+# Docs are not needed at runtime
+*.md
+
+# Runtime data — content/ is a Docker volume in prod; if it ends up in
+# the build context it both bloats the image and risks shipping dev
+# oauth_tokens.json / posts.json / messages.json into production.
+content/
+
+# Logs and editor cruft
+*.log
+.idea/
+.vscode/
+.DS_Store
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+tests/

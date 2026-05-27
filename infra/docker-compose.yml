@@ -1,0 +1,48 @@
+services:
+  caption-api:
+    build:
+      context: ../backend
+    container_name: caption-api
+    restart: always
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    environment:
+      AI_API_BASE_URL: ${AI_API_BASE_URL:-https://openrouter.ai/api/v1}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-google/gemini-2.0-flash-lite-001}
+      AI_MODEL_FAST: ${AI_MODEL_FAST:-google/gemini-2.0-flash-lite-001}
+      AI_MODEL_PREMIUM: ${AI_MODEL_PREMIUM:-}
+      AI_INCLUDE_IMAGES: ${AI_INCLUDE_IMAGES:-false}
+      AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-200}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      BACKEND_AUTH_TOKEN: ${BACKEND_AUTH_TOKEN:-}
+      TUNNEL_ENABLED: ${TUNNEL_ENABLED:-false}
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
+      NGROK_DOMAIN: ${NGROK_DOMAIN:-}
+      # OAuth — provider credentials (paste into infra/.env, not here)
+      OAUTH_REDIRECT_BASE: ${OAUTH_REDIRECT_BASE:-http://localhost:8000}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      META_APP_ID: ${META_APP_ID:-}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-}
+      INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:-}
+      TIKTOK_CLIENT_KEY: ${TIKTOK_CLIENT_KEY:-}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
+      TIKTOK_DOMAIN_VERIFY: ${TIKTOK_DOMAIN_VERIFY:-}
+      TIKTOK_SCOPES: ${TIKTOK_SCOPES:-user.info.basic,video.upload,video.publish}
+      LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
+      LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_DEFAULT_CHAT_ID: ${TELEGRAM_DEFAULT_CHAT_ID:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      CONTENT_DIR: /app/content
+    volumes:
+      - ../backend/content:/app/content

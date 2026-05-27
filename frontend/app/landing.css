@@ -1,0 +1,1387 @@
+/* ========================================
+   DATALIA LANDING PAGE — Dedicated Styles
+   Uses CSS variables from globals.css
+   ======================================== */
+
+/* ── Smooth Scroll ── */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Override body overflow:hidden from globals.css so landing page scrolls */
+body:has(.landing-page) {
+  overflow: visible;
+}
+
+/* ── Landing Page Shell ── */
+.landing-page {
+  overflow-x: hidden;
+  overflow-y: auto;
+  min-height: 100vh;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+/* Full-viewport spinner used while restoring a session or while a
+   logged-in user is being redirected to /dashboard. Suppresses the
+   marketing-page flash. */
+.landing-page--loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+}
+
+/* ── Navbar ── */
+.landing-nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: 14px 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  backdrop-filter: var(--glass-blur);
+  background: var(--glass-bg);
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.landing-nav-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: inherit;
+}
+
+/* Logo holder. The logo PNG is its own self-contained medallion (black
+   ring + cobalt interior), so no gradient backplate behind it — the
+   ring already gives it presence. */
+.landing-nav-logo-mark {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.landing-nav-logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 10px rgba(29, 63, 190, 0.25));
+}
+
+.landing-nav-logo {
+  font-size: 1.45rem;
+  font-weight: 800;
+  letter-spacing: -0.4px;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.landing-nav-links {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+
+.landing-nav-link {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-decoration: none;
+  position: relative;
+  padding: 4px 0;
+  transition: color 0.2s ease;
+}
+
+.landing-nav-link:hover {
+  color: var(--text-primary);
+}
+
+.landing-nav-link::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 2px;
+  background: var(--accent-gradient);
+  border-radius: 2px;
+  transform: scaleX(0);
+  transform-origin: center;
+  transition: transform 0.25s ease;
+}
+
+.landing-nav-link:hover::after {
+  transform: scaleX(1);
+}
+
+/* Theme toggle button — shared between desktop nav and the mobile
+   header cluster. Visually matches .btn-ghost from globals.css but
+   sized for a navbar. */
+.landing-theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+}
+
+.landing-theme-toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--border-hover);
+  transform: translateY(-1px);
+}
+
+/* Compact CTA — same gradient as .cta-primary but tuned for the navbar.
+   Avoids the inline-style sizing override that was easy to forget. */
+.cta-primary--compact {
+  padding: 9px 20px !important;
+  font-size: 0.85rem !important;
+  border-radius: 10px !important;
+}
+
+/* Mobile cluster (theme + hamburger). Hidden on desktop, replaced by
+   the regular nav. */
+.landing-nav-mobile {
+  display: none;
+  align-items: center;
+  gap: 8px;
+}
+
+.landing-mobile-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.landing-mobile-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(4px);
+  border: none;
+  cursor: pointer;
+  animation: landingFadeIn 0.18s ease both;
+}
+
+.landing-mobile-sheet {
+  position: fixed;
+  top: 66px;
+  left: 12px;
+  right: 12px;
+  z-index: 96;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.18);
+  animation: landingSheetDrop 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+:root[data-theme="dark"] .landing-mobile-sheet {
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+
+.landing-mobile-link {
+  display: block;
+  padding: 14px 12px;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-decoration: none;
+  border-radius: 10px;
+  transition: background-color 0.18s ease;
+}
+
+.landing-mobile-link:hover,
+.landing-mobile-link:focus-visible {
+  background: var(--bg-card-hover);
+}
+
+.landing-mobile-cta {
+  margin-top: 8px;
+  justify-content: center;
+}
+
+@keyframes landingSheetDrop {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes landingFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── HERO ── */
+.landing-hero {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 120px 24px 80px;
+  overflow: hidden;
+}
+
+/* Animated gradient blobs */
+.hero-blobs {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.hero-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(100px);
+  opacity: 0.35;
+  will-change: transform;
+}
+
+.hero-blob--1 {
+  width: 620px;
+  height: 620px;
+  background: #1d3fbe;
+  top: -12%;
+  left: -12%;
+  animation: blobDrift1 20s ease-in-out infinite;
+}
+
+/* The second blob is the red counterpart — quieter than the blue
+   primary (lower opacity below) so it reads as a brand whisper rather
+   than a Christmas-tree colour clash. */
+.hero-blob--2 {
+  width: 460px;
+  height: 460px;
+  background: #dc2626;
+  bottom: -18%;
+  right: -8%;
+  animation: blobDrift2 24s ease-in-out infinite;
+  opacity: 0.22;
+}
+
+:root[data-theme="dark"] .hero-blob--2 {
+  opacity: 0.18;
+}
+
+/* Blob 3 retained for animation keyframe compatibility but unused in
+   the new hero — the two-blob composition reads more deliberate. */
+.hero-blob--3 {
+  display: none;
+}
+
+@keyframes blobDrift1 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25%      { transform: translate(80px, 40px) scale(1.08); }
+  50%      { transform: translate(30px, 80px) scale(0.95); }
+  75%      { transform: translate(-40px, 20px) scale(1.05); }
+}
+
+@keyframes blobDrift2 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33%      { transform: translate(-70px, -50px) scale(1.1); }
+  66%      { transform: translate(50px, -30px) scale(0.92); }
+}
+
+@keyframes blobDrift3 {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  20%      { transform: translate(-50px, 30px) scale(1.06); }
+  40%      { transform: translate(40px, -40px) scale(0.94); }
+  60%      { transform: translate(-20px, -60px) scale(1.08); }
+  80%      { transform: translate(60px, 20px) scale(0.97); }
+}
+
+.hero-content {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  max-width: 820px;
+  padding: 0 12px;
+}
+
+/* Blueprint cross-hatch grid behind the hero — the "engineering grid"
+   pattern that Vercel and Linear popularised. Two crossed linear
+   gradients build the grid in CSS without an SVG round-trip. Quieter
+   than the old dot grid; reinforces a "precision instrument" identity. */
+.hero-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, var(--border-default) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border-default) 1px, transparent 1px);
+  background-size: 56px 56px;
+  opacity: 0.45;
+  mask-image: radial-gradient(ellipse at center, black 0%, transparent 65%);
+  -webkit-mask-image: radial-gradient(ellipse at center, black 0%, transparent 65%);
+  z-index: 0;
+  pointer-events: none;
+}
+
+:root[data-theme="dark"] .hero-grid {
+  opacity: 0.32;
+}
+
+/* The brand medallion at hero scale, drifted off-axis and held at low
+   opacity. Anchors the page to the logo without resorting to flat
+   colour blocks. Position-tweaked so it peeks from the right edge,
+   which mirrors the red accent on the logo's right side. */
+.hero-medallion {
+  position: absolute;
+  top: 50%;
+  right: -22%;
+  transform: translateY(-50%);
+  width: 90vmin;
+  max-width: 1100px;
+  aspect-ratio: 1;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.08;
+  filter: blur(1px) saturate(1.1);
+  animation: medallionDrift 22s ease-in-out infinite;
+}
+
+:root[data-theme="dark"] .hero-medallion {
+  opacity: 0.14;
+}
+
+.hero-medallion-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+@keyframes medallionDrift {
+  0%, 100% { transform: translateY(-50%) rotate(0deg); }
+  50%      { transform: translateY(calc(-50% + 18px)) rotate(2.5deg); }
+}
+
+/* Red editorial accent rail above the headline. Picks up the red on
+   the logo's right edge and signals "this isn't a blue SaaS template".
+   Centred, slim, with a deliberate tail dot — the kind of detail that
+   reads as "designed" rather than "default". `display: block` so the
+   auto-margin actually centres it. */
+.hero-rail {
+  display: block;
+  width: 64px;
+  height: 3px;
+  background: var(--accent-red);
+  border-radius: 2px;
+  margin: 0 auto 22px;
+  position: relative;
+  animation: landingFadeInUp 0.7s ease both;
+}
+
+.hero-rail::after {
+  content: "";
+  position: absolute;
+  right: -10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent-red);
+  box-shadow: 0 0 0 4px var(--accent-red-soft);
+}
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 18px 5px 6px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  border-radius: 100px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+  animation: landingFadeInUp 0.8s ease forwards;
+}
+
+/* Small red "NEW" tag inside the badge. The brand's energy colour goes
+   on the pill so it pops at a glance — same visual logic as the red
+   slash on the medallion's right edge. */
+.hero-badge-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 100px;
+  background: var(--accent-red);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 1.4px;
+}
+
+/* Subtle pulse dot reserved for "live product" cue. Sits between the
+   NEW tag and the text — kept tiny so it doesn't compete. */
+.hero-badge-pulse {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-approved);
+  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55);
+  animation: heroPulse 2.2s ease-in-out infinite;
+}
+
+@keyframes heroPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.55); }
+  50%      { box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
+}
+
+/* Hero stats — three honest numbers under the CTAs. Keeps the page
+   feeling like a product instead of an empty marketing page. */
+.hero-stats {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0;
+  margin-top: 36px;
+  padding: 4px 4px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  border-radius: 14px;
+  animation: landingFadeInUp 0.8s 0.6s ease both;
+}
+
+.hero-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 22px;
+  position: relative;
+}
+
+.hero-stat + .hero-stat::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10%;
+  bottom: 10%;
+  width: 1px;
+  background: var(--border-default);
+}
+
+.hero-stat-value {
+  font-size: 1.25rem;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hero-stat-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1.4px;
+  color: var(--text-muted);
+}
+
+.hero-headline {
+  /* Heavier weight + tighter tracking than the previous build — gives
+     the headline the editorial confidence a medallion-style brand
+     should have, rather than a generic SaaS-template feel. */
+  font-size: clamp(2.6rem, 6.4vw, 5rem);
+  font-weight: 900;
+  letter-spacing: -2px;
+  line-height: 1.04;
+  margin-bottom: 24px;
+  animation: landingFadeInUp 0.8s 0.15s ease both;
+  text-wrap: balance;
+}
+
+.hero-headline .gradient-text {
+  background: var(--accent-gradient-bold);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.hero-subtitle {
+  /* Slightly tighter line-height + balanced wrap so the supporting
+     copy reads as one breath, not a stack of three. */
+  text-wrap: balance;
+}
+
+.hero-subtitle {
+  font-size: clamp(1rem, 2vw, 1.25rem);
+  color: var(--text-secondary);
+  max-width: 620px;
+  margin: 0 auto 40px;
+  line-height: 1.7;
+  animation: landingFadeInUp 0.8s 0.3s ease both;
+}
+
+.hero-ctas {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  animation: landingFadeInUp 0.8s 0.45s ease both;
+}
+
+/* ── CTA Buttons ── */
+.cta-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--accent-gradient);
+  color: #fff;
+  font-weight: 700;
+  font-size: 1rem;
+  padding: 14px 32px;
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  text-decoration: none;
+  box-shadow: inset 0 2px 2px rgba(255, 255, 255, 0.3), inset 0 -2px 2px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(29, 63, 190, 0.3);
+}
+
+.cta-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: inset 0 2px 2px rgba(255, 255, 255, 0.4), inset 0 -2px 2px rgba(0, 0, 0, 0.15), var(--accent-glow), 0 8px 24px rgba(29, 63, 190, 0.4);
+}
+
+.cta-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--glass-bg);
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 1rem;
+  padding: 14px 32px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  backdrop-filter: var(--glass-blur);
+  transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
+  text-decoration: none;
+}
+
+.cta-secondary:hover {
+  transform: translateY(-1px);
+  background: var(--bg-card-hover);
+  border-color: var(--border-hover);
+}
+
+/* ── FEATURES Section ── */
+.landing-features {
+  position: relative;
+  padding: 100px 24px;
+}
+
+.section-container {
+  max-width: 1120px;
+  margin: 0 auto;
+}
+
+.section-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--accent-primary);
+  margin-bottom: 14px;
+  padding: 4px 12px;
+  border-radius: 100px;
+  background: var(--accent-red-soft);
+  /* The little red wash under section labels echoes the medallion's red
+     accents and gives every section a brand-coloured "chapter marker"
+     so the page doesn't read as a single uniform blue wall. */
+  border: 1px solid rgba(220, 38, 38, 0.16);
+  color: var(--accent-red);
+}
+
+.section-title {
+  font-size: clamp(1.85rem, 4.2vw, 3rem);
+  font-weight: 900;
+  letter-spacing: -1.2px;
+  line-height: 1.1;
+  margin-bottom: 16px;
+  text-wrap: balance;
+}
+
+.section-subtitle {
+  font-size: 1.05rem;
+  color: var(--text-secondary);
+  max-width: 580px;
+  line-height: 1.7;
+  margin-bottom: 56px;
+}
+
+.section-center {
+  text-align: center;
+}
+
+.section-center .section-subtitle {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 24px;
+}
+
+.feature-card {
+  position: relative;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  border-radius: var(--radius-lg);
+  padding: 36px 28px;
+  transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+  cursor: default;
+  overflow: hidden;
+  /* scroll-reveal initial state */
+  opacity: 0;
+  transform: translateY(24px);
+}
+
+/* The per-card tint (set as inline style `--card-tint` on each card)
+   washes the top of the card with that capability's colour. Subtle —
+   you only really notice it when comparing cards side-by-side, which
+   is exactly when it matters. */
+.feature-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 90px;
+  background: var(--card-tint, transparent);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.feature-card.is-visible::before {
+  opacity: 1;
+}
+
+.feature-card.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.6s ease, transform 0.6s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+.feature-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.1);
+  border-color: var(--border-hover);
+}
+
+.feature-icon-wrap {
+  position: relative;
+  z-index: 1;
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  /* Default background gets overridden by the per-card gradient inline
+     style — kept here as a fallback for any future cards added without
+     one. */
+  background: var(--accent-gradient);
+  color: #fff;
+  margin-bottom: 20px;
+  font-size: 0;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+.feature-card h3,
+.feature-card p {
+  position: relative;
+  z-index: 1;
+}
+
+.feature-card h3 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.feature-card p {
+  font-size: 0.92rem;
+  color: var(--text-secondary);
+  line-height: 1.65;
+}
+
+/* ── HOW IT WORKS Section ── */
+.landing-how-it-works {
+  padding: 80px 24px;
+  position: relative;
+  background: var(--bg-secondary);
+}
+
+.how-it-works-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 32px;
+  margin-top: 48px;
+}
+
+.hiw-step {
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: 40px 32px;
+  text-align: left;
+  transition: transform 0.3s ease, border-color 0.3s ease;
+  opacity: 0;
+  transform: translateY(24px);
+}
+
+.hiw-step.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.6s ease, transform 0.6s ease, border-color 0.3s ease;
+}
+
+.hiw-step:hover {
+  border-color: var(--accent-primary);
+  transform: translateY(-4px);
+}
+
+.hiw-number {
+  font-size: 3.5rem;
+  font-weight: 900;
+  color: var(--text-muted);
+  opacity: 0.2;
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  line-height: 1;
+}
+
+.hiw-title {
+  font-size: 1.25rem;
+  font-weight: 800;
+  margin-bottom: 12px;
+  margin-top: 16px;
+  color: var(--text-primary);
+}
+
+.hiw-desc {
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+/* ── PLATFORMS Section ── */
+.landing-platforms {
+  padding: 80px 24px;
+  position: relative;
+}
+
+.platforms-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+  flex-wrap: wrap;
+  margin-top: 48px;
+}
+
+.platform-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 32px 40px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  border-radius: var(--radius-lg);
+  transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+  cursor: default;
+  opacity: 0;
+  transform: translateY(24px);
+}
+
+.platform-card.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.6s ease, transform 0.6s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+.platform-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.1);
+  border-color: var(--border-hover);
+}
+
+.platform-card-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: #fff;
+}
+
+.platform-card-icon--facebook { background: var(--platform-facebook); }
+.platform-card-icon--instagram { background: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888); }
+.platform-card-icon--tiktok { background: #010101; }
+.platform-card-icon--linkedin { background: var(--platform-linkedin); }
+
+.platform-card-name {
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+/* ── AUTH SECTION ── */
+.landing-auth {
+  padding: 100px 24px;
+  position: relative;
+}
+
+.auth-card {
+  max-width: 460px;
+  margin: 0 auto;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  border-radius: var(--radius-xl);
+  padding: 44px 36px;
+  opacity: 0;
+  transform: translateY(24px);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.08);
+  transition: all 0.3s ease;
+}
+
+:root[data-theme="dark"] .auth-card {
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+}
+
+.auth-card.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1), transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.auth-tabs {
+  display: flex;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-md);
+  padding: 4px;
+  margin-bottom: 28px;
+  border: 1px solid var(--border-default);
+}
+
+.auth-tab {
+  flex: 1;
+  text-align: center;
+  padding: 10px 16px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.auth-tab:hover:not(.auth-tab--active) {
+  color: var(--text-secondary);
+}
+
+.auth-tab--active {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+:root[data-theme="dark"] .auth-tab--active {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.auth-input-group {
+  position: relative;
+}
+
+.auth-input-icon {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+  transition: color 0.2s ease;
+}
+
+.auth-input {
+  width: 100%;
+  padding: 13px 14px 13px 44px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 1rem; /* 16px prevents mobile auto-zoom on iOS focus */
+  outline: none;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.01);
+}
+
+.auth-input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+.auth-input:focus {
+  background: #ffffff;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px rgba(29, 63, 190, 0.15), inset 0 1px 2px rgba(0, 0, 0, 0.01);
+}
+
+.auth-input:focus ~ .auth-input-icon {
+  color: var(--accent-primary);
+}
+
+.auth-input:disabled {
+  opacity: 0.5;
+  background: var(--bg-secondary) !important;
+  cursor: not-allowed;
+}
+
+:root[data-theme="dark"] .auth-input {
+  background: rgba(15, 23, 42, 0.35);
+  border-color: var(--border-default);
+}
+
+:root[data-theme="dark"] .auth-input:focus {
+  background: rgba(15, 23, 42, 0.65);
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px rgba(72, 102, 227, 0.28);
+}
+
+.auth-toggle-pw {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  transition: color 0.2s ease;
+}
+
+.auth-toggle-pw:hover:not(:disabled) {
+  color: var(--text-secondary);
+}
+
+.auth-submit {
+  width: 100%;
+  padding: 14px 20px;
+  background: var(--accent-gradient);
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 1rem;
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 8px;
+  box-shadow: inset 0 2px 2px rgba(255, 255, 255, 0.2), 0 4px 12px rgba(29, 63, 190, 0.25);
+}
+
+.auth-submit:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: inset 0 2px 2px rgba(255, 255, 255, 0.3), var(--accent-glow), 0 8px 20px rgba(29, 63, 190, 0.35);
+}
+
+.auth-submit:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.auth-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.auth-legal {
+  margin-top: 24px;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.auth-legal a {
+  color: var(--accent-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 500;
+}
+
+.auth-legal a:hover {
+  color: var(--accent-primary-hover);
+}
+
+.auth-error {
+  padding: 12px 16px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: var(--radius-md);
+  color: var(--status-error);
+  font-size: 0.875rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.4;
+}
+
+.auth-success {
+  padding: 12px 16px;
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  border-radius: var(--radius-md);
+  color: var(--status-approved);
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-align: center;
+  line-height: 1.4;
+}
+
+/* ── FOOTER ── */
+.landing-footer {
+  padding: 56px 24px 40px;
+  border-top: 1px solid var(--border-default);
+  text-align: center;
+}
+
+.footer-brand-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.footer-logo-img {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 10px rgba(29, 63, 190, 0.25));
+}
+
+.footer-brand {
+  font-size: 1.25rem;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.footer-tagline {
+  max-width: 460px;
+  margin: 0 auto 24px;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  text-wrap: balance;
+}
+
+.footer-links {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.footer-link {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.footer-link:hover {
+  color: var(--text-primary);
+}
+
+.footer-copy {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+/* ── Entrance Animations ── */
+@keyframes landingFadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Respect prefers-reduced-motion — handled globally in globals.css,
+   but also scoped here for safety. */
+@media (prefers-reduced-motion: reduce) {
+  .hero-blob {
+    animation: none !important;
+  }
+  .feature-card,
+  .platform-card,
+  .auth-card {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* ── Responsive ──
+   Tablet down (≤980 px): desktop links retract, mobile cluster appears.
+   Phone (≤640 px): hero collapses to a single column with stacked CTAs.
+   Small phone (≤420 px): tighter spacing + smaller headline. */
+
+/* Hide the mobile cluster on desktop. */
+@media (min-width: 769px) {
+  .landing-nav-mobile { display: none; }
+}
+
+@media (max-width: 980px) {
+  .landing-nav {
+    padding: 12px 20px;
+  }
+  .landing-nav-links {
+    display: none;
+  }
+  .landing-nav-mobile {
+    display: inline-flex;
+  }
+}
+
+@media (max-width: 768px) {
+  .landing-hero {
+    padding: 96px 16px 56px;
+    min-height: auto;
+  }
+
+  /* On phones the off-axis medallion overpowers the layout. Centre it
+     behind the content and dial opacity down so it reads as a watermark. */
+  .hero-medallion {
+    right: 50%;
+    transform: translate(50%, -50%);
+    width: 130vw;
+    opacity: 0.05;
+  }
+  :root[data-theme="dark"] .hero-medallion {
+    opacity: 0.10;
+  }
+
+  .hero-blob {
+    opacity: 0.2;
+  }
+
+  .hero-blob--1 { width: 320px; height: 320px; }
+  .hero-blob--2 { width: 260px; height: 260px; }
+  .hero-blob--3 { width: 220px; height: 220px; }
+
+  .hero-badge {
+    font-size: 0.72rem;
+    padding: 5px 12px 5px 8px;
+  }
+
+  .hero-stats {
+    width: 100%;
+    max-width: 360px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .hero-stat {
+    flex: 1;
+    padding: 10px 6px;
+  }
+
+  .hero-ctas {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .cta-primary,
+  .cta-secondary {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .landing-features,
+  .landing-platforms,
+  .landing-auth {
+    padding: 64px 16px;
+  }
+
+  .landing-how-it-works {
+    padding: 56px 16px;
+  }
+
+  .features-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .feature-card {
+    padding: 28px 22px;
+  }
+
+  .platforms-row {
+    /* On phones, switch to a 2×2 grid so the cards don't waste space
+       wrapping awkwardly. */
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+
+  .platform-card {
+    padding: 22px 16px;
+  }
+
+  .platform-card-icon {
+    width: 48px;
+    height: 48px;
+  }
+
+  .auth-card {
+    padding: 28px 20px;
+    border-radius: var(--radius-lg);
+  }
+
+  .auth-tab {
+    padding: 9px 12px;
+    font-size: 0.82rem;
+  }
+
+  .auth-input {
+    font-size: 0.95rem;
+    padding: 12px 12px 12px 40px;
+  }
+
+  .auth-input-icon {
+    left: 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .landing-nav {
+    padding: 10px 14px;
+  }
+  .landing-nav-logo {
+    font-size: 1.2rem;
+  }
+  .landing-nav-logo-mark {
+    width: 32px;
+    height: 32px;
+  }
+  .hero-headline {
+    font-size: 2.1rem;
+    letter-spacing: -1px;
+  }
+  .hero-subtitle {
+    font-size: 0.98rem;
+  }
+  .section-title {
+    font-size: 1.6rem;
+  }
+  .hero-stat-value {
+    font-size: 1.1rem;
+  }
+  .hero-stat-label {
+    font-size: 0.62rem;
+    letter-spacing: 1.2px;
+  }
+  .hero-stat {
+    padding: 8px 4px;
+  }
+  .hiw-step {
+    padding: 32px 24px;
+  }
+}
+
+/* Touch devices don't get hover lift — feels broken when the card
+   doesn't return on touch-end. */
+@media (hover: none) {
+  .feature-card:hover,
+  .platform-card:hover,
+  .hiw-step:hover {
+    transform: none;
+    box-shadow: none;
+  }
+}
