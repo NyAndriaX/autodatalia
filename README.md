@@ -1,41 +1,74 @@
-# DATALIA — Marketing Automation Platform
+# Datalia — Marketing Automation Platform
 
-Internal tool used by the Datalia team to plan, generate, schedule and publish
-content across Datalia's **own** social accounts (Facebook Pages, Instagram
-Business, TikTok, LinkedIn). It is **not** SaaS-for-clients — there is exactly
-one tenant (Datalia itself) and OAuth connections happen once at setup.
+Internal tool used by the Datalia team to plan, generate, schedule, validate
+and publish content across Datalia's **own** social accounts (Facebook
+Pages, Instagram Business, TikTok, LinkedIn). Not SaaS-for-clients —
+exactly one tenant (Datalia itself), OAuth connections happen once at setup.
 
-For the current source-verified handoff, see [`PROJECT_STATE.md`](PROJECT_STATE.md).
+> ## ▶ Deploying this to production?
+> **Read [`DEPLOY.md`](DEPLOY.md).** It's a top-to-bottom checklist —
+> server setup, secrets, Telegram bot, social-portal config, smoke test.
+> Follow it once and the app is live on your domain.
+
+---
+
+## What's in the box
+
+| Module | Status |
+|---|---|
+| Manual post creation + AI caption generation + image/video uploads | Done |
+| Calendar + scheduling + auto-publish | Done |
+| OAuth for Facebook Pages, Instagram Business, TikTok, LinkedIn | Done |
+| Image cropping per platform ratio + spam guards | Done |
+| **Automation module** — auto-generate posts on a recurring schedule | Done (Phase 1–3) |
+| **Telegram validation gate** — every auto-generated post requires explicit user approval before publish | Done |
+| **Timeout follow-up** — bot prompts resend/regenerate/cancel if no answer by publish time | Done |
+
+For per-platform publish state see [`PROJECT_STATE.md`](PROJECT_STATE.md).
+For engineering reference (file layout, conventions, gotchas) see
+[`CLAUDE.md`](CLAUDE.md).
+
+---
 
 ## Repository layout
 
-| Path | Layer | Stack | Status |
-|---|---|---|---|
-| [`frontend/`](frontend/) | Dashboard UI | Next.js 16 (App Router), React 19, Redux Toolkit, Tailwind v4 | Active |
-| [`backend/`](backend/) | API + AI + OAuth + publishing | Python, FastAPI, Pydantic, Docker | Active |
-| [`infra/`](infra/) | Local orchestration | Docker Compose | Active |
-| [`docs/`](docs/) | Handoff & progress docs | Markdown | — |
-| [`plans/`](plans/) | Original architecture & day-by-day plans | Markdown | Historical |
+| Path | Layer | Stack |
+|---|---|---|
+| [`frontend/`](frontend/) | Dashboard UI | Next.js 16 (App Router), React 19, Redux Toolkit, Tailwind v4 |
+| [`backend/`](backend/) | API + AI + OAuth + publishing + automation worker | Python, FastAPI, Pydantic, Docker |
+| [`infra/`](infra/) | Docker Compose orchestration + Caddy reverse-proxy config | YAML |
+| [`docs/`](docs/) | Per-platform setup notes (TikTok, etc.) | Markdown |
+| [`plans/`](plans/) | Architecture decisions + roadmap | Markdown |
+| [`DEPLOY.md`](DEPLOY.md) | **Production deploy checklist** | Markdown |
+
+---
 
 ## Architecture (current)
 
 ```
-[Frontend (Next.js)] ──HTTP──▶ [Backend (FastAPI)] ──▶ AI provider (OpenRouter)
+[Frontend (Next.js)] ──HTTP──▶ [Backend (FastAPI)] ──▶ OpenRouter (AI)
                                        │
                                        ├──▶ Meta Graph API   (Facebook + Instagram)
-                                       ├──▶ TikTok API       (credentials/audit-dependent)
-                                       └──▶ LinkedIn API     (publish stub)
+                                       ├──▶ TikTok API
+                                       ├──▶ LinkedIn API
+                                       └──▶ Telegram Bot API (validation gate)
 ```
 
-The frontend never calls AI providers or social APIs directly — everything
-flows through the FastAPI backend. There is no orchestration layer between
-them; n8n was evaluated and removed.
+Two background loops inside the backend process:
+- **scheduler** — fires posts whose `status == "scheduled"` and whose
+  `scheduledDate + time` is now in the past.
+- **automation worker** — scans active automation rules, generates
+  candidate posts AI-side, submits them to Telegram for approval.
+  Approved candidates flip to `status="scheduled"` and the scheduler
+  picks them up like any other scheduled post.
 
-OAuth tokens persist server-side in `backend/content/.oauth_tokens.json`
-(per-user files use the `.oauth_tokens_<user_id>.json` suffix). Posts and
-calendar entries persist as JSON under the backend's content directory.
+Storage is file-based: posts, automation rules, OAuth tokens, and the
+activity feed live as JSON in a Docker named volume on prod. Users live
+in a tiny SQLite file. No external database needed.
 
-## Run it
+---
+
+## Run it locally
 
 ### Backend (Docker)
 ```bash
@@ -43,9 +76,11 @@ docker compose -f infra/docker-compose.yml up -d --build caption-api
 # caption-api → http://localhost:8000
 ```
 
-Meta and TikTok require HTTPS OAuth callbacks, so for OAuth testing point a
-public HTTPS host (e.g. `ngrok http --url=<reserved>.ngrok-free.dev 8000`)
-at the backend and set `OAUTH_REDIRECT_BASE` in `infra/.env` to that URL.
+Meta and TikTok require HTTPS OAuth callbacks, so for OAuth testing point
+a public HTTPS host (Tailscale Funnel works without a custom domain) at
+the backend and set `OAUTH_REDIRECT_BASE` + `PUBLIC_BASE_URL` in
+`infra/.env` to that URL. See [`plans/hosting.md`](plans/hosting.md) for
+options.
 
 ### Frontend
 ```bash
@@ -55,18 +90,32 @@ cp .env.example .env.local        # set NEXT_PUBLIC_API_BASE_URL
 npm run dev                       # http://localhost:3000
 ```
 
+### Backend tests
+```bash
+docker compose -f infra/docker-compose.yml exec -T caption-api \
+  python -m pytest tests/ -q
+```
+
+---
+
 ## Per-platform status
 
 | Platform   | OAuth | Publish |
 |------------|-------|---------|
-| Facebook   | Yes   | Text + photo + video + multi-photo carousel — confirmed working |
-| Instagram  | Yes   | Image + video — single-slide confirmed; multi-slide carousel blocked by Meta error 9004 on ngrok hosts (resolves on stable HTTPS) |
-| TikTok     | Yes   | Photo carousels (default 9:16) + video, inbox/direct modes — working |
-| LinkedIn   | Yes   | Text + single image via REST Posts API — implemented, end-to-end smoke pending a connected token |
-| Google     | Partial (sign-in only) | n/a |
+| Facebook   | Yes   | Text + photo + video + multi-photo carousel — confirmed |
+| Instagram  | Yes   | Image + video — single confirmed; carousel hardened (drops per-child polling, longer parent-create backoff) |
+| TikTok     | Yes   | Photo carousels + video, inbox/direct modes, 24h-token auto-refresh |
+| LinkedIn   | Yes   | Text + single image — implemented, end-to-end pending a connected token |
+| Google     | Sign-in only | n/a |
 
-See [`PROJECT_STATE.md`](PROJECT_STATE.md) for the current state,
-[`backend/README.md`](backend/README.md) for the API surface, and
-[`docs/`](docs/) for setup guides and handoff notes. The files under
-[`plans/`](plans/) include historical planning material as well as the current
-priority list.
+---
+
+## Useful docs
+
+- [`DEPLOY.md`](DEPLOY.md) — **production deploy checklist**
+- [`PROJECT_STATE.md`](PROJECT_STATE.md) — current source-verified state
+- [`CLAUDE.md`](CLAUDE.md) — engineering reference (architecture, conventions, file layout)
+- [`backend/README.md`](backend/README.md) — API surface
+- [`docs/tiktok.md`](docs/tiktok.md) — TikTok-specific setup notes
+- [`plans/hosting.md`](plans/hosting.md) — hosting decisions and migration plan
+- [`plans/next-steps.md`](plans/next-steps.md) — priority backlog

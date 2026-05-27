@@ -158,6 +158,12 @@ export default function SettingsView() {
   const [pendingProvider, setPendingProvider] = useState(null); // provider being connected
   const [refreshing, setRefreshing] = useState(false);
   const [telegramStatus, setTelegramStatus] = useState(null);
+  // Telegram "Send test message" button busy state. Declared up here with
+  // the other state — it cannot live below the `if (s === null) return null`
+  // early return at line ~210 without violating the Rules of Hooks (the
+  // hook would skip on the first render and run on the second, tripping
+  // React's "different hook order" detector).
+  const [testingTelegram, setTestingTelegram] = useState(false);
 
   // Hydrate from localStorage on mount. The intentional cascading render is
   // how we avoid a SSR/client value mismatch on controlled inputs — server
@@ -292,7 +298,6 @@ export default function SettingsView() {
     );
   };
 
-  const [testingTelegram, setTestingTelegram] = useState(false);
   const handleTestTelegram = async () => {
     if (!telegramStatus?.configured) {
       dispatch(

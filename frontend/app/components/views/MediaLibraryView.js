@@ -13,6 +13,8 @@ import {
   Wand2,
   CalendarClock,
   X,
+  Check,
+  CheckCheck,
 } from "lucide-react";
 import { listMedia } from "../../lib/searchService";
 import {
@@ -80,24 +82,38 @@ function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect,
         <Icon size={28} style={{ color: "var(--text-muted)", opacity: 0.5 }} />
       )}
 
-      {/* Selection Checkbox */}
+      {/* Selection toggle — custom styled pill (replaces the native
+          checkbox whose default "unchecked" state rendered as a bare
+          white square on dark thumbnails). Visible when selected, on
+          hover, or whenever any sibling is already selected (so the
+          user can extend the selection easily). */}
       {canSelect && (
-        <div 
-          className={`absolute top-1.5 left-1.5 z-10 transition-opacity ${selected ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"}`}
+        <button
+          type="button"
           onClick={(e) => {
             e.stopPropagation();
             onToggleSelect(item);
           }}
+          aria-label={selected ? `Deselect ${item.name}` : `Select ${item.name}`}
+          aria-pressed={!!selected}
+          className={`absolute top-1.5 left-1.5 z-10 w-6 h-6 inline-flex items-center justify-center rounded-md transition-opacity ${
+            selected || selectionMode
+              ? "opacity-100"
+              : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
+          }`}
+          style={{
+            background: selected
+              ? "var(--accent-primary)"
+              : "rgba(15, 23, 42, 0.55)",
+            border: selected
+              ? "1.5px solid var(--accent-primary)"
+              : "1.5px solid rgba(255, 255, 255, 0.7)",
+            backdropFilter: selected ? "none" : "blur(2px)",
+            boxShadow: "0 1px 4px rgba(0, 0, 0, 0.4)",
+          }}
         >
-          <input 
-            type="checkbox" 
-            checked={!!selected} 
-            onChange={() => {}} // Read-only, handled by onClick
-            className="w-5 h-5 cursor-pointer accent-indigo-500 rounded border-gray-300"
-            style={{ filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.5))" }}
-            aria-label={`Select ${item.name}`}
-          />
-        </div>
+          {selected && <Check size={14} color="#fff" strokeWidth={3} />}
+        </button>
       )}
 
       {/* Top-left badges (stacked) — shifted down if checkbox is present. */}
@@ -151,10 +167,12 @@ function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect,
       )}
 
       {/* Hover gradient + primary action — only when the item is actually
-          usable (uploaded + has remoteUrl). Local-only previews skip this
-          so the user doesn't pick a tile that the AI / publish path can't
-          actually use. */}
-      {canUse && (
+          usable (uploaded + has remoteUrl) AND we're not in selection mode.
+          In selection mode the click target is the tile itself (for
+          toggling), so the floating "Use in new post" button would steal
+          clicks and confuse the multi-select flow — bulk posting lives in
+          the top bar instead. */}
+      {canUse && !selectionMode && (
         <div
           className="absolute inset-0 flex items-end justify-center opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
           style={{
@@ -242,6 +260,20 @@ export default function MediaLibraryView() {
     });
   }, []);
 
+  // Select-all / clear-all on the currently visible tile set. We pull from
+  // both `uploads` + `remoteHits` because the rendered list is a merge of
+  // the two, and we skip items still uploading or in an error state since
+  // those can't be acted on anyway.
+  const selectAllVisible = useCallback(() => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const it of [...uploads, ...remoteHits]) {
+        if (it.status === "uploaded" || it.remoteUrl) next.add(it.id);
+      }
+      return next;
+    });
+  }, [uploads, remoteHits]);
+
   // Map of media filename / remote URL → number of scheduled or published
   // posts that reference it. Built once per scheduledPosts change so the
   // tile lookup below is O(1). Empty when no posts use any asset, which
@@ -305,6 +337,39 @@ export default function MediaLibraryView() {
     },
     [dispatch]
   );
+
+  // Bulk version of onUseInPost — pushes every selected library item into
+  // the editor's currentPost in one dispatch, then navigates. Used by the
+  // selection-mode top bar's "Use in new post" button so the user can
+  // build a carousel out of N library items in one tap. Selection is
+  // cleared so re-entering the library doesn't appear "stuck" selected.
+  const onBulkUseInPost = useCallback(() => {
+    if (!selectedIds.size) return;
+    const all = [...uploads, ...remoteHits].filter((it) =>
+      selectedIds.has(it.id)
+    );
+    const payload = all
+      .filter((it) => it.remoteUrl || it.previewUrl)
+      .map((item) => ({
+        id: `lib_${Date.now()}_${useSeq.current++}`,
+        name: item.name,
+        kind: item.kind || "image",
+        previewUrl: item.remoteUrl || item.previewUrl || null,
+        remoteUrl: item.remoteUrl || null,
+        status: "uploaded",
+        filename: (item.id || item.name || "").split("/").pop(),
+      }));
+    if (!payload.length) return;
+    dispatch(addMedia(payload));
+    dispatch(setActiveView("creation"));
+    dispatch(
+      addNotification({
+        message: `Added ${payload.length} item${payload.length === 1 ? "" : "s"} to the post you're composing.`,
+        type: "success",
+      })
+    );
+    setSelectedIds(new Set());
+  }, [selectedIds, uploads, remoteHits, dispatch]);
 
   // Fetch remote media on mount and whenever the query changes (debounced).
   useEffect(() => {
@@ -506,34 +571,62 @@ export default function MediaLibraryView() {
     >
       {/* Bulk Action Bar */}
       {selectedIds.size > 0 && tab === "uploads" && (
-        <div 
-          className="flex items-center justify-between mb-5 px-4 py-2.5 rounded-lg border shadow-sm sticky top-0 z-20"
-          style={{ 
-            background: "var(--bg-elevated)", 
+        <div
+          className="flex flex-wrap items-center justify-between gap-2 mb-5 px-4 py-2.5 rounded-lg border shadow-sm sticky top-0 z-20"
+          style={{
+            background: "var(--bg-elevated)",
             borderColor: "var(--accent-primary)",
           }}
         >
           <div className="flex items-center gap-3">
-            <span className="text-sm font-semibold" style={{ color: "var(--accent-primary)" }}>
+            <span
+              className="text-sm font-semibold"
+              style={{ color: "var(--accent-primary)" }}
+            >
               {selectedIds.size} selected
             </span>
             <button
+              type="button"
+              onClick={selectAllVisible}
+              className="text-xs hover:underline inline-flex items-center gap-1"
+              style={{ color: "var(--text-secondary)" }}
+              title="Select every uploaded item visible in this list"
+            >
+              <CheckCheck size={12} /> Select all
+            </button>
+            <button
+              type="button"
               onClick={() => setSelectedIds(new Set())}
-              className="text-xs hover:underline flex items-center gap-1"
+              className="text-xs hover:underline inline-flex items-center gap-1"
               style={{ color: "var(--text-muted)" }}
             >
               <X size={12} /> Clear
             </button>
           </div>
-          <button
-            onClick={handleBulkDelete}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
-            style={{ background: "rgba(220, 38, 38, 0.1)", color: "#ef4444" }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(220, 38, 38, 0.2)")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(220, 38, 38, 0.1)")}
-          >
-            <Trash2 size={14} /> Delete
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onBulkUseInPost}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+              style={{
+                background: "var(--accent-primary)",
+                color: "#fff",
+              }}
+              title="Add every selected item to the post you're composing"
+            >
+              <Wand2 size={14} /> Use in new post
+            </button>
+            <button
+              type="button"
+              onClick={handleBulkDelete}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+              style={{ background: "rgba(220, 38, 38, 0.1)", color: "#ef4444" }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(220, 38, 38, 0.2)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(220, 38, 38, 0.1)")}
+            >
+              <Trash2 size={14} /> Delete
+            </button>
+          </div>
         </div>
       )}
 

@@ -194,18 +194,21 @@ body {
   transition: border-color 0.25s ease, box-shadow 0.2s ease;
 }
 
-/* Theme toggle: html gets `data-theme-transitioning` set for ~220 ms when
-   the user flips light/dark. During that window, EVERY element transitions
+/* Theme toggle: html gets `data-theme-transitioning` set for ~140 ms when
+   the user flips light/dark. During that window EVERY element transitions
    its color-related properties together — no cascade, no segment-by-segment
    wipe. Outside that window the variables snap instantly, so live cursor
-   moves / hovers stay snappy. */
+   moves / hovers stay snappy.
+   `background-image` is in the list so gradient surfaces (sidebar header,
+   primary buttons, badges) fade with everything else — without it they
+   snapped while the body slow-faded, which read as "laggy". */
 :root[data-theme-transitioning],
 :root[data-theme-transitioning] *,
 :root[data-theme-transitioning] *::before,
 :root[data-theme-transitioning] *::after {
-  transition: background-color 0.22s ease, color 0.22s ease,
-    border-color 0.22s ease, fill 0.22s ease, stroke 0.22s ease,
-    box-shadow 0.22s ease !important;
+  transition: background-color 0.14s ease, background-image 0.14s ease,
+    color 0.14s ease, border-color 0.14s ease, fill 0.14s ease,
+    stroke 0.14s ease, box-shadow 0.14s ease !important;
 }
 
 /* Tailwind v4 Preflight no longer sets buttons to a pointer cursor, so
