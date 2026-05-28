@@ -78,9 +78,9 @@ const SUGGESTED_HASHTAGS = [
 ];
 
 const MODES = [
-  { id: "free", label: "Free Prompt", icon: PenLine, description: "Write freely with AI assistance" },
-  { id: "template", label: "From Template", icon: FileText, description: "Use a brand template" },
-  { id: "scratch", label: "From Scratch", icon: Type, description: "Start with a blank canvas" },
+  { id: "free", label: "freePrompt", icon: PenLine, description: "freePromptDesc" },
+  { id: "template", label: "fromTemplate", icon: FileText, description: "fromTemplateDesc" },
+  { id: "scratch", label: "fromScratch", icon: Type, description: "fromScratchDesc" },
 ];
 
 /* Compact transforms — the tone selector handles tone separately, so this
@@ -275,7 +275,7 @@ export default function CreationEditor() {
                   }}
                 >
                   <Icon size={16} aria-hidden="true" />
-                  {mode.label}
+                  {t(mode.label)}
                 </button>
               );
             })}
@@ -289,7 +289,7 @@ export default function CreationEditor() {
             style={{ color: "var(--text-tertiary)" }}
             id="platform-label"
           >
-            Target Platforms
+            {t("targetPlatforms")}
           </p>
           <div className="flex gap-2 flex-wrap" role="group" aria-labelledby="platform-label">
             {PLATFORMS.map((platform) => {
@@ -563,7 +563,7 @@ export default function CreationEditor() {
                 ) : (
                   <Sparkles size={13} />
                 )}{" "}
-                AI image
+                {t("aiImageBtn")}
               </button>
               <button
                 id="generate-ai-video-btn"
@@ -577,7 +577,7 @@ export default function CreationEditor() {
                 ) : (
                   <Film size={13} />
                 )}{" "}
-                AI video
+                {t("aiVideoBtn")}
               </button>
             </div>
           </div>
@@ -611,12 +611,12 @@ export default function CreationEditor() {
               ) : (
                 <>
                   <Sparkles size={20} aria-hidden="true" />
-                  Generate{currentPost.tone ? ` (${TONES.find((t) => t.id === currentPost.tone)?.label || "tone"})` : ""}
+                  {t("generate")}{currentPost.tone ? ` (${TONES.find((tn) => tn.id === currentPost.tone)?.label || "tone"})` : ""}
                 </>
               )}
             </button>
             <p className="text-[11px] text-center mt-2" style={{ color: "var(--text-muted)" }}>
-              Unchanged prompt reuses the last result — no tokens spent.
+              {t("unchangedReuses")}
             </p>
             {aiGeneration.variants.length > 0 && (
               <div className="flex items-center justify-center gap-4 mt-2">
@@ -673,7 +673,7 @@ export default function CreationEditor() {
             style={{ color: "var(--text-secondary)" }}
           >
             <Save size={14} aria-hidden="true" />
-            Save draft
+            {t("saveDraft")}
           </button>
           <div className="flex-1" />
           <SplitPublishButton
@@ -773,8 +773,8 @@ export default function CreationEditor() {
               style={{ color: "var(--text-muted)" }}
             >
               <Zap size={40} className="mb-3 opacity-30" aria-hidden="true" />
-              <p className="text-sm">{t("noPlatformsSelected") || "No platforms selected"}</p>
-              <p className="text-xs mt-1">{t("togglePlatformsHint") || "Toggle platforms on the left to preview"}</p>
+              <p className="text-sm">{t("noPlatformsSelected")}</p>
+              <p className="text-xs mt-1">{t("togglePlatformsHint")}</p>
             </div>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col items-center">
@@ -1149,7 +1149,7 @@ function PlatformPreview({
           {platform.label}
         </span>
         <div className="flex-1" />
-        <span className={`platform-tag ${platform.className}`}>Preview</span>
+        <span className={`platform-tag ${platform.className}`}>{t("previewBadge")}</span>
       </div>
 
       {/* Media — real uploads, or an empty-state placeholder */}
@@ -1226,9 +1226,9 @@ function PlatformPreview({
             <Icon size={32} className="mx-auto mb-2 opacity-30" style={{ color: platform.color }} aria-hidden="true" />
             <p className="text-xs">
               {ratio}{" "}
-              {isVertical ? "Vertical" : isSquare ? "Square" : "Landscape"}
+              {isVertical ? t("vertical") : isSquare ? t("square") : t("landscape")}
             </p>
-            <p className="text-xs mt-0.5 opacity-60">{t("uploadHint") || "Upload media on the left to preview"}</p>
+            <p className="text-xs mt-0.5 opacity-60">{t("uploadHint")}</p>
           </div>
         )}
       </div>
@@ -1256,7 +1256,7 @@ function PlatformPreview({
           )}
           <div>
             <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{creatorHandle}</p>
-            <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>Just now</p>
+            <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{t("justNow")}</p>
           </div>
         </div>
         <p
@@ -1271,7 +1271,7 @@ function PlatformPreview({
             WebkitLineClamp: 5,
           }}
         >
-          {content || "Your post content will appear here…"}
+          {content || t("postContentPlaceholder")}
         </p>
       </div>
 

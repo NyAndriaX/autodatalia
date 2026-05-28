@@ -2,6 +2,7 @@
 
 import { useRef, useState, useCallback, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
+import { useTranslations } from "next-intl";
 import { addMedia, updateMedia, removeMedia } from "../../store/editorSlice";
 import { addNotification } from "../../store/uiSlice";
 import {
@@ -15,6 +16,7 @@ import { UploadCloud, X, Film, ImageIcon, Loader2, CheckCircle2, AlertCircle } f
 
 export default function MediaUploader() {
   const dispatch = useDispatch();
+  const t = useTranslations("creation");
   const media = useSelector((s) => s.editor.currentPost.media);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef(null);
@@ -106,10 +108,10 @@ export default function MediaUploader() {
       >
         <UploadCloud size={26} style={{ color: dragOver ? "var(--accent-primary)" : undefined }} aria-hidden="true" />
         <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-          <span style={{ color: "var(--accent-primary)", fontWeight: 600 }}>Click to upload</span>{" "}
-          or drag &amp; drop
+          <span style={{ color: "var(--accent-primary)", fontWeight: 600 }}>{t("clickToUpload")}</span>{" "}
+          {t("orDragDrop")}
         </p>
-        <p className="text-[11px]">PNG · JPG · GIF · WebP · MP4 · MOV — up to 50 MB</p>
+        <p className="text-[11px]">{t("uploadFormats")}</p>
         <input
           ref={inputRef}
           type="file"
