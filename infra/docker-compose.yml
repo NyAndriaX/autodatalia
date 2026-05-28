@@ -76,6 +76,9 @@ services:
       REPLICATE_VIDEO_VERSION: ${REPLICATE_VIDEO_VERSION:-}
       FAL_API_KEY: ${FAL_API_KEY:-}
       FAL_VIDEO_MODEL: ${FAL_VIDEO_MODEL:-fal-ai/ltx-video}
+      LTX_API_KEY: ${LTX_API_KEY:-}
+      LTX_API_BASE_URL: ${LTX_API_BASE_URL:-https://api.ltx.video/v1}
+      LTX_VIDEO_MODEL: ${LTX_VIDEO_MODEL:-ltx-2-3-pro}
       VIDEO_COST_PER_SECOND_USD: ${VIDEO_COST_PER_SECOND_USD:-0.04}
       # Postgres for the users table (auth). Other state stays in JSON
       # files under CONTENT_DIR.

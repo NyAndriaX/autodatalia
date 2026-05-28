@@ -61,6 +61,13 @@ class Settings(BaseModel):
     # the initial allowance).
     fal_api_key: str
     fal_video_model: str
+    # LTX-2 official API from Lightricks (console.ltx.video). 100 free
+    # credits on signup, no card. Wire LTX_API_KEY + LTX_API_BASE_URL
+    # (default points at the public endpoint; override for staging or
+    # if Lightricks moves the host).
+    ltx_api_key: str
+    ltx_api_base_url: str
+    ltx_video_model: str
     # Pre-computed per-second cost in USD for video runs — used to log
     # spend in the cost dashboard. Defaults to LTX-Video's published
     # price (≈$0.04/s). Override per provider if needed.
@@ -142,6 +149,11 @@ def load_settings() -> Settings:
         replicate_video_version=os.getenv("REPLICATE_VIDEO_VERSION", "").strip(),
         fal_api_key=os.getenv("FAL_API_KEY", "").strip(),
         fal_video_model=os.getenv("FAL_VIDEO_MODEL", "fal-ai/ltx-video").strip(),
+        ltx_api_key=os.getenv("LTX_API_KEY", "").strip(),
+        ltx_api_base_url=os.getenv(
+            "LTX_API_BASE_URL", "https://api.ltx.video/v1"
+        ).strip().rstrip("/"),
+        ltx_video_model=os.getenv("LTX_VIDEO_MODEL", "ltx-2-3-pro").strip(),
         video_cost_per_second_usd=float(
             os.getenv("VIDEO_COST_PER_SECOND_USD", "0.04")
         ),

@@ -17,10 +17,11 @@ You need:
 - [ ] A **Linux server** with a public IP. ~$5–10/mo Hetzner CX22, DigitalOcean droplet, Vultr, Fly.io, etc. Ubuntu 22.04+ is the tested baseline. Minimum specs: 2 vCPU, 4 GB RAM, 40 GB disk.
 - [ ] A **domain name** with DNS you can edit. The convention used here is `api.your-domain.com` for the backend and `your-domain.com` for the dashboard. Both can live on the same server unless you split them.
 - [ ] **API keys / app credentials** ready to paste:
-  - **OpenRouter** API key (`sk-or-v1-…`) — for AI generation
+  - **OpenRouter** API key (`sk-or-v1-…`) — for AI text + image (Nano Banana) generation
   - **Meta** app ID + secret — Facebook + Instagram OAuth
   - **TikTok** client key + secret — TikTok OAuth
   - **Telegram bot token** — content validation gate (see Part 3)
+  - **LTX-2** API key (`ltxv_…`) — AI video generation, free at [console.ltx.video](https://console.ltx.video) (100 credits no card). Optional — when unset, video gen falls back to the bundled ffmpeg Ken Burns renderer.
 - [ ] **Local terminal** with SSH access — Terminal on Mac, PowerShell or WSL on Windows.
 
 If you don't have a Telegram bot yet, do that step first (Part 3) — the credentials are needed before the first boot.
@@ -175,6 +176,24 @@ On your Datalia TikTok app:
 
 ### LinkedIn (optional, when you have an app)
 - **Auth tab → Authorized redirect URLs:** add `https://api.your-domain.com/oauth/linkedin/callback`
+
+### LTX-2 video generation (recommended — free signup)
+
+The Automation module can produce real LTX-2 videos when wired up. Free tier:
+
+1. Sign up at [console.ltx.video](https://console.ltx.video) — no credit card needed, you get 100 free credits on creation.
+2. Click **API Keys → Create key**, copy the `ltxv_…` token.
+3. Paste into `.env.production`:
+   ```env
+   LTX_API_KEY=ltxv_<your-key>
+   LTX_API_BASE_URL=https://api.ltx.video/v1
+   LTX_VIDEO_MODEL=ltx-2-3-pro
+   ```
+4. Restart: `docker compose -f docker-compose.prod.yml --env-file .env.production up -d`.
+
+Without `LTX_API_KEY`, video generation falls back to the bundled ffmpeg Ken Burns renderer (animates a generated still). That works forever for €0 but looks dated — use it as the safety net, not the primary.
+
+When LTX runs out of credits or is overloaded, the backend **automatically falls back to ffmpeg** for that single job so the user always gets a video — see `attempts` field on the job record for the chain.
 
 ---
 

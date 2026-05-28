@@ -20,9 +20,14 @@ exactly one tenant (Datalia itself), OAuth connections happen once at setup.
 | Calendar + scheduling + auto-publish | Done |
 | OAuth for Facebook Pages, Instagram Business, TikTok, LinkedIn | Done |
 | Image cropping per platform ratio + spam guards | Done |
+| **AI image generation** — Nano Banana (Gemini 2.5 Flash Image) via OpenRouter | Done |
+| **AI video generation** — LTX-2 (Lightricks official) → fal.ai → ffmpeg Ken Burns fallback, auto-fallback on provider failure | Done |
+| **Cost dashboard** — per-call / per-workflow / per-tier / per-model spend in Postgres-backed log | Done |
+| **3-tier LLM routing** — Fast (hashtags/transforms), Standard (variants), Premium (n≥3 variants) | Done |
 | **Automation module** — auto-generate posts on a recurring schedule | Done (Phase 1–3) |
-| **Telegram validation gate** — every auto-generated post requires explicit user approval before publish | Done |
+| **Telegram validation gate** — every auto-generated post requires explicit user approval before publish, manual approvals publish immediately | Done |
 | **Timeout follow-up** — bot prompts resend/regenerate/cancel if no answer by publish time | Done |
+| **i18n** — English + French, language switcher in Topbar + Settings | Done (Sidebar, Topbar, Dashboard, Credits, Video, Settings) |
 
 For per-platform publish state see [`PROJECT_STATE.md`](PROJECT_STATE.md).
 
@@ -43,26 +48,31 @@ For per-platform publish state see [`PROJECT_STATE.md`](PROJECT_STATE.md).
 ## Architecture (current)
 
 ```
-[Frontend (Next.js)] ──HTTP──▶ [Backend (FastAPI)] ──▶ OpenRouter (AI)
+[Frontend (Next.js)] ──HTTP──▶ [Backend (FastAPI)] ──▶ OpenRouter (text + Nano Banana)
+                                       │              ──▶ LTX-2 / fal.ai (video)
                                        │
                                        ├──▶ Meta Graph API   (Facebook + Instagram)
                                        ├──▶ TikTok API
                                        ├──▶ LinkedIn API
-                                       └──▶ Telegram Bot API (validation gate)
+                                       ├──▶ Telegram Bot API (validation gate)
+                                       └──▶ Postgres (users + auth only)
 ```
 
-Two background loops inside the backend process:
+Three background loops inside the backend process:
 - **scheduler** — fires posts whose `status == "scheduled"` and whose
   `scheduledDate + time` is now in the past.
 - **automation worker** — scans active automation rules, generates
   candidate posts AI-side, submits them to Telegram for approval.
   Approved candidates flip to `status="scheduled"` and the scheduler
   picks them up like any other scheduled post.
+- **video jobs worker** — polls the queued LTX / fal jobs, downloads
+  finished MP4s, auto-falls-back to ffmpeg Ken Burns if the external
+  provider raises so the user always gets *a* video.
 
-Storage is split: posts, automation rules, OAuth tokens, cost logs and
-the activity feed live as JSON in a Docker named volume; **users +
-auth** live in Postgres (a `postgres:16-alpine` container ships in
-the dev compose; prod can swap to managed Postgres via
+Storage is split: posts, automation rules, OAuth tokens, cost logs,
+video jobs and the activity feed live as JSON in a Docker named volume;
+**users + auth** live in Postgres (a `postgres:16-alpine` container
+ships in the dev compose; prod can swap to managed Postgres via
 `DATABASE_URL`). No other external database needed.
 
 ---
@@ -103,9 +113,14 @@ docker compose -f infra/docker-compose.yml exec -T caption-api \
 |------------|-------|---------|
 | Facebook   | Yes   | Text + photo + video + multi-photo carousel — confirmed |
 | Instagram  | Yes   | Image + video — single confirmed; carousel hardened (drops per-child polling, longer parent-create backoff) |
-| TikTok     | Yes   | Photo carousels + video, inbox/direct modes, 24h-token auto-refresh |
+| TikTok     | Yes   | Photo carousels + video, direct mode default with automatic scope-aware downgrade to inbox |
 | LinkedIn   | Yes   | Text + single image — implemented, end-to-end pending a connected token |
 | Google     | Sign-in only | n/a |
+
+When the scheduler fires a post, every requested platform produces a
+result row — no more silent drops. Platforms that aren't connected get
+an explicit `meta_not_connected` / `tiktok_not_connected` /
+`no_instagram_business_linked_to_page` error in the bell feed.
 
 ---
 

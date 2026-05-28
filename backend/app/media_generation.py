@@ -208,6 +208,12 @@ async def _call_gemini_image_api(
         # OpenRouter routes image-output models when modalities is set.
         # Native Google API ignores it harmlessly.
         "modalities": ["image", "text"],
+        # Cap output tokens so OpenRouter's pre-flight credit check
+        # doesn't reserve the model's full context window (~30k for
+        # Gemini 2.5 Flash Image). 2500 is the minimum that reliably
+        # produces a complete image without OpenRouter rejecting the
+        # call on low-balance accounts.
+        "max_tokens": 2500,
         "messages": [{"role": "user", "content": aspect_hint}],
     }
     async with httpx.AsyncClient(timeout=180.0) as client:

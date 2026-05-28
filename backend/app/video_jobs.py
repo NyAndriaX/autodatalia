@@ -138,22 +138,21 @@ def _is_official_replicate_model(model: str) -> bool:
 def _pick_provider(requested: str | None) -> str:
     """Resolve the effective provider for a job.
 
-    Auto preference (when ``requested`` is None / "auto"):
-      1. fal.ai — has a no-card free tier on LTX-Video, the CEO-friendly
-         default for "free but real" video generation.
-      2. Replicate — billed per-second; needs ``REPLICATE_API_TOKEN``.
-      3. fallback — the ffmpeg Ken Burns generator. Always available.
-    User-requested overrides the auto-detection unless the requested
-    provider isn't configured (e.g. ``provider="fal"`` with no FAL key)
-    — in that case we fall through to whatever is configured so the user
-    gets *a* video instead of a 503.
+    Datalia is wired to **fal.ai as the sole real provider** — same LTX
+    model the CEO asked for, $0.02 per video flat. Replicate code paths
+    stay in the codebase for the historical / fallback option but are
+    not auto-selected. Order on auto:
+      1. fal.ai (if FAL_API_KEY is set)
+      2. fallback (ffmpeg Ken Burns — always works, no external bill)
+
+    User-requested overrides honour the explicit choice when configured;
+    Replicate must be requested by id to be reached.
     """
     configured = {
+        "ltx": bool(settings.ltx_api_key),
         "fal": bool(settings.fal_api_key),
-        # Replicate counts as "configured" only when the call will actually
-        # succeed — community models like lightricks/ltx-video 404 unless
-        # REPLICATE_VIDEO_VERSION is pinned. Without that, fall through to
-        # fal.ai or the ffmpeg fallback instead of letting every job fail.
+        # Kept for explicit opt-in: a caller can still pass
+        # provider="replicate" if they want the version-pinned route.
         "replicate": bool(
             settings.replicate_api_token
             and (
@@ -165,15 +164,17 @@ def _pick_provider(requested: str | None) -> str:
     }
     if requested in configured and configured[requested]:
         return requested
-    # Auto / unsupported / unconfigured request — pick the first
-    # configured provider in priority order.
-    for p in ("fal", "replicate", "fallback"):
+    # Auto / unsupported / unconfigured request — try the cheapest real
+    # provider first (LTX official 100 free credits → fal → fallback).
+    for p in ("ltx", "fal", "fallback"):
         if configured[p]:
             return p
     return "fallback"
 
 
 def _model_for_provider(provider: str) -> str:
+    if provider == "ltx":
+        return settings.ltx_video_model
     if provider == "replicate":
         return settings.replicate_video_model
     if provider == "fal":
@@ -370,6 +371,117 @@ async def _run_replicate_job(job: dict[str, Any]) -> dict[str, Any]:
     }) or job
 
 
+# LTX-2 ratio → resolution string. The API expects a literal "WxH"
+# label per docs.ltx.video. Keep the values inside LTX-2's supported
+# resolutions (up to 4K, 20s max).
+_LTX_RESOLUTION = {
+    "1:1": "1024x1024",
+    "4:5": "1080x1350",
+    "9:16": "1080x1920",
+    "16:9": "1920x1080",
+}
+
+
+async def _run_ltx_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Submit a job to Lightricks' official LTX-2 API (docs.ltx.video).
+
+    Uses the **synchronous** endpoint — POST returns the MP4 bytes
+    directly in the response body. Simpler than fal/Replicate's
+    queue-based pattern, no polling needed. The trade-off is a long
+    HTTP connection; LTX-2 typically completes in 30-90s for an 8s
+    clip, well under our 5min ``httpx`` timeout.
+
+    The API picks ``text-to-video`` vs ``image-to-video`` based on
+    whether the job carries an image_filename — we resolve that to a
+    public URL Lightricks can fetch.
+    """
+    key = settings.ltx_api_key
+    if not key:
+        raise RuntimeError("LTX_API_KEY not configured")
+
+    image_url = None
+    if job.get("image_filename"):
+        image_url = _public_url_for_local(job["image_filename"])
+
+    resolution = _LTX_RESOLUTION.get(job["ratio"], "1080x1920")
+    duration = max(3, min(20, int(job["duration_seconds"])))
+
+    body: dict[str, Any] = {
+        "prompt": job["prompt"],
+        "model": settings.ltx_video_model,
+        "duration": duration,
+        "resolution": resolution,
+    }
+    endpoint = "text-to-video"
+    if image_url:
+        body["image_uri"] = image_url
+        endpoint = "image-to-video"
+
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    url = f"{settings.ltx_api_base_url}/{endpoint}"
+
+    _update_job(job["id"], {
+        "started_at": time.time(),
+        "status": "running",
+        "progress": 0.1,
+    })
+
+    # Sync call — LTX-2 sends back the MP4 directly. 6-minute hard
+    # timeout covers worst-case 20s clips at 4K; bump only if you see
+    # legitimate timeouts in production.
+    async with httpx.AsyncClient(timeout=360.0) as client:
+        resp = await client.post(url, headers=headers, json=body)
+    if resp.status_code >= 400:
+        # LTX returns JSON error bodies on failure (sync endpoint
+        # switches Content-Type when it's an error rather than success).
+        raise RuntimeError(
+            f"LTX-2 request failed ({resp.status_code}): {resp.text[:400]}"
+        )
+    if not resp.content:
+        raise RuntimeError("LTX-2 returned empty body")
+
+    # Persist the MP4 bytes. Lightricks sets x-request-id we stash as
+    # the external id so it shows up in the job inspector.
+    external_id = resp.headers.get("x-request-id")
+    out_path = _generated_dir() / f"ltx2-{job['id']}.mp4"
+    out_path.write_bytes(resp.content)
+
+    public_url = _public_url_for_local(out_path.name, subdir="generated")
+    cost_usd = round(duration * settings.video_cost_per_second_usd, 4)
+
+    try:
+        from .cost_tracking import record_media_job
+        record_media_job(
+            workflow="video",
+            provider="ltx",
+            model=settings.ltx_video_model,
+            cost_usd=cost_usd,
+            user_id=job.get("user_id"),
+            metadata={
+                "duration_seconds": duration,
+                "ratio": job["ratio"],
+                "resolution": resolution,
+                "endpoint": endpoint,
+                "external_id": external_id,
+            },
+        )
+    except Exception:
+        pass
+
+    return _update_job(job["id"], {
+        "status": "succeeded",
+        "finished_at": time.time(),
+        "progress": 1.0,
+        "output_url": public_url,
+        "output_filename": out_path.name,
+        "cost_usd": cost_usd,
+        "external_id": external_id,
+    }) or job
+
+
 async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
     """Submit a job to fal.ai's queue API, poll status, download result.
 
@@ -510,17 +622,41 @@ def _aspect_label(ratio: str) -> str:
 
 
 async def _run_fallback_job(job: dict[str, Any]) -> dict[str, Any]:
-    """Legacy ffmpeg Ken Burns generator — generates a still then zooms.
+    """Always-on ffmpeg Ken Burns generator — generates a still then zooms.
 
-    Used when no Replicate token is set, or the user explicitly asked
-    for "fallback". Costs nothing externally.
+    Used when no external provider is configured, when the user
+    explicitly asked for "fallback", and (most importantly) as the
+    rescue path when fal / Replicate / LTX raise at runtime.
+
+    For the rescue path to mean anything, this MUST work without any
+    external API. So when the AI image provider is set but returns an
+    error (e.g. OpenRouter deprecated the model id, the key is bad),
+    we catch and substitute the bundled Pillow placeholder poster.
+    Cost stays zero either way.
     """
-    from .media_generation import _generate_image_file, _render_motion_video, _pick_size
+    from .media_generation import (
+        _generate_image_file,
+        _render_fallback_poster,
+        _render_motion_video,
+        _pick_size,
+        _write_bytes,
+        _generated_dir as _gen_dir,
+    )
     _update_job(job["id"], {"started_at": time.time(), "status": "running", "progress": 0.1})
-    poster, _provider = await _generate_image_file(job["prompt"], job["ratio"])
-    _update_job(job["id"], {"progress": 0.5})
     width, height = _pick_size(job["ratio"], video=True)
-    out_path = _generated_dir() / f"kenburns-{job['id']}.mp4"
+    try:
+        poster, _provider = await _generate_image_file(job["prompt"], job["ratio"])
+    except Exception as exc:
+        # Don't take the whole job down just because the image API
+        # broke — Pillow can always render a placeholder.
+        log.warning(
+            "[video] AI image gen failed in fallback (%s) — substituting placeholder",
+            exc,
+        )
+        payload = _render_fallback_poster(job["prompt"], width, height)
+        poster = _write_bytes(job["prompt"], ".png", payload)
+    _update_job(job["id"], {"progress": 0.5})
+    out_path = _gen_dir() / f"kenburns-{job['id']}.mp4"
     await _render_motion_video(
         poster, out_path, width, height, job["duration_seconds"]
     )
@@ -570,27 +706,95 @@ def _public_url_for_local(filename: str, *, subdir: str = "generated") -> str:
     return f"{base}/content/{rel}"
 
 
+_PROVIDER_RUNNERS = {
+    "fal": "_run_fal_job",
+    "replicate": "_run_replicate_job",
+    "fallback": "_run_fallback_job",
+}
+
+
+async def _dispatch_provider(provider: str, job: dict[str, Any]) -> dict[str, Any]:
+    """Call the right runner. Kept tiny on purpose so the auto-fallback
+    loop in ``run_job`` can iterate over provider candidates cleanly."""
+    if provider == "ltx":
+        return await _run_ltx_job(job)
+    if provider == "fal":
+        return await _run_fal_job(job)
+    if provider == "replicate":
+        return await _run_replicate_job(job)
+    return await _run_fallback_job(job)
+
+
 async def run_job(job_id: str) -> dict[str, Any] | None:
-    """Execute one job — picks the provider per the persisted record.
-    Catches every exception so the worker loop keeps ticking."""
+    """Execute one job, with auto-fallback to ffmpeg when the configured
+    external provider raises.
+
+    Why auto-fallback: if fal.ai is out of credit (HTTP 403 "User is
+    locked") or Replicate hits a quota wall, we'd rather hand the user
+    *a* video — the Ken Burns placeholder — than a hard failure. The
+    job record carries ``attempts`` so the UI can show "fal failed →
+    served by fallback" and the team can decide whether to top up.
+
+    Only the external paths (fal / replicate) auto-fall through. A
+    user who explicitly requested ``provider="fallback"`` gets it
+    directly — no point trying anything else.
+    """
     job = get_job(job_id)
     if not job:
         return None
     if job.get("status") in ("succeeded", "failed", "cancelled"):
         return job
-    try:
-        if job["provider"] == "fal":
-            return await _run_fal_job(job)
-        if job["provider"] == "replicate":
-            return await _run_replicate_job(job)
-        return await _run_fallback_job(job)
-    except Exception as exc:  # noqa: BLE001
-        log.exception("[video] job %s failed", job_id)
-        return _update_job(job_id, {
-            "status": "failed",
-            "finished_at": time.time(),
-            "error": f"{type(exc).__name__}: {exc}"[:500],
-        })
+
+    primary = job["provider"]
+    # Build the candidate chain — primary first, then fallback if the
+    # primary is an external provider that might fail at runtime.
+    candidates = [primary]
+    if primary in ("ltx", "fal", "replicate"):
+        candidates.append("fallback")
+
+    attempts: list[dict[str, Any]] = list(job.get("attempts") or [])
+    last_error: str | None = None
+    for idx, provider in enumerate(candidates):
+        is_last = idx == len(candidates) - 1
+        try:
+            result = await _dispatch_provider(provider, job)
+            attempts.append({"provider": provider, "ok": True})
+            # Stamp the attempts log + (if we fell back) the effective
+            # provider so the UI can show the chain. The runner already
+            # set status=succeeded; we just enrich the record.
+            return _update_job(job_id, {
+                "attempts": attempts,
+                "fallback_used": provider != primary,
+            }) or result
+        except Exception as exc:  # noqa: BLE001
+            log.exception(
+                "[video] job %s attempt %s (provider=%s) failed",
+                job_id,
+                idx + 1,
+                provider,
+            )
+            err_str = f"{type(exc).__name__}: {exc}"[:300]
+            attempts.append({"provider": provider, "ok": False, "error": err_str})
+            last_error = err_str
+            # Re-read job in case the runner persisted partial state
+            # (e.g. started_at) before raising; mark as running for the
+            # next attempt so the UI keeps showing progress.
+            if not is_last:
+                _update_job(job_id, {
+                    "attempts": attempts,
+                    "status": "running",
+                    "progress": 0.0,
+                    "error": None,
+                })
+                continue
+
+    # Every candidate failed — record the last error and mark failed.
+    return _update_job(job_id, {
+        "status": "failed",
+        "finished_at": time.time(),
+        "error": last_error or "all providers failed",
+        "attempts": attempts,
+    })
 
 
 # ── Worker loop ───────────────────────────────────────────────────────
