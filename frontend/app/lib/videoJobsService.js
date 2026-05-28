@@ -7,6 +7,9 @@ export async function createVideoJob({
   durationSeconds = 6,
   imageFilename = null,
   provider = null,
+  falModel = null,
+  quality = null,
+  mode = null,
 } = {}) {
   return apiFetch("/media/generate/video", {
     method: "POST",
@@ -16,9 +19,23 @@ export async function createVideoJob({
       duration_seconds: durationSeconds,
       image_filename: imageFilename,
       provider,
+      fal_model: falModel,
+      quality,
+      mode,
       async_mode: true,
     }),
   });
+}
+
+// List the available fal.ai video models + the active default. The
+// backend returns ``{models: [...], default: "..."}`` so the picker
+// can preselect the active one.
+export async function listVideoModels() {
+  try {
+    return await apiFetch("/video-models");
+  } catch {
+    return { models: [], default: null };
+  }
 }
 
 export async function listVideoJobs() {

@@ -20,7 +20,7 @@ import {
   submitForValidationThunk,
   publishNowThunk,
 } from "../../store/editorThunks";
-import { addNotification } from "../../store/uiSlice";
+import { addNotification, setActiveView } from "../../store/uiSlice";
 import { schedulePostThunk } from "../../store/calendarThunks";
 import {
   Sparkles,
@@ -117,9 +117,12 @@ export default function CreationEditor() {
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
   const [generatingMediaKind, setGeneratingMediaKind] = useState(null);
 
-  // ─── AI media generation (image / video) ──────────────────────────
-  // Same backend endpoints the PostEditorPopup and ScheduleModal use;
-  // previously missing from the main editor surface.
+  // ─── AI media generation ──────────────────────────────────────────
+  // Image gen still runs inline (it's fast, single call). Video gen
+  // now hands off to the AI Video page so the user can pick the
+  // model, mode (text/image/UGC) and reference image — the CEO's spec.
+  // The handoff stashes the prompt + the first uploaded image (if any)
+  // into sessionStorage; VideoJobsView pops it on mount.
   const handleGenerateMedia = async (kind) => {
     const prompt = currentPost.content.trim();
     if (!prompt) {
@@ -131,25 +134,48 @@ export default function CreationEditor() {
       );
       return;
     }
+    const ratio =
+      Object.values(currentPost.ratios || {})[0] || (kind === "video" ? "9:16" : "1:1");
+
+    if (kind === "video") {
+      // Stash prefill — VideoJobsView reads & clears it on mount.
+      const uploadedImage = (currentPost.media || []).find(
+        (m) => m.kind === "image" && m.status === "uploaded" && m.remoteUrl
+      );
+      const prefill = {
+        prompt,
+        ratio,
+        mode: uploadedImage ? "image" : "text",
+        referenceImage: uploadedImage
+          ? { filename: uploadedImage.filename, url: uploadedImage.remoteUrl }
+          : null,
+      };
+      try {
+        sessionStorage.setItem(
+          "datalia.videoJobs.prefill",
+          JSON.stringify(prefill)
+        );
+      } catch {
+        /* private mode — proceed without prefill */
+      }
+      dispatch(setActiveView("videos"));
+      return;
+    }
+
     setGeneratingMediaKind(kind);
     try {
-      const ratio =
-        Object.values(currentPost.ratios || {})[0] || (kind === "video" ? "9:16" : "1:1");
-      const result =
-        kind === "video"
-          ? await generateVideoAsset({ prompt, ratio })
-          : await generateImageAsset({ prompt, ratio });
+      const result = await generateImageAsset({ prompt, ratio });
       dispatch(addMedia([result.mediaItem]));
       dispatch(
         addNotification({
-          message: `${kind === "video" ? "Video" : "Image"} generated via ${result.data?.provider || "backend"}.`,
+          message: `Image generated via ${result.data?.provider || "backend"}.`,
           type: "success",
         })
       );
     } catch (err) {
       dispatch(
         addNotification({
-          message: `${kind === "video" ? "Video" : "Image"} generation failed: ${err.message || "unknown error"}`,
+          message: `Image generation failed: ${err.message || "unknown error"}`,
           type: "error",
         })
       );

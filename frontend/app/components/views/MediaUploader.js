@@ -17,6 +17,7 @@ import { UploadCloud, X, Film, ImageIcon, Loader2, CheckCircle2, AlertCircle } f
 export default function MediaUploader() {
   const dispatch = useDispatch();
   const t = useTranslations("creation");
+  const tCommon = useTranslations("common");
   const media = useSelector((s) => s.editor.currentPost.media);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef(null);
@@ -187,8 +188,8 @@ export default function MediaUploader() {
                 title={
                   item.status === "uploading"
                     ? item.kind === "video"
-                      ? "Uploading + optimizing for TikTok/Meta…"
-                      : "Uploading…"
+                      ? tCommon("uploadingOptimizing")
+                      : tCommon("uploading")
                     : item.status === "uploaded"
                     ? "Uploaded — ready to publish"
                     : item.status === "error" || item.status === "local"

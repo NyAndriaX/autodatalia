@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
+import { useTranslations } from "next-intl";
 import { X, Send, AlertTriangle, Music, UserCheck } from "lucide-react";
 import { fetchConnections } from "../../lib/oauthService";
 import { PLATFORMS } from "../../lib/platforms";
@@ -51,6 +52,7 @@ export default function PublishConfirmModal({
   onConfirm,
 }) {
   const dispatch = useDispatch();
+  const tCommon = useTranslations("common");
   const tiktok = useSelector((s) => s.editor.currentPost.tiktok || {});
   const [providers, setProviders] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -167,7 +169,7 @@ export default function PublishConfirmModal({
               Posting to ({totalTargets})
             </p>
             {loading ? (
-              <p className="text-xs" style={{ color: "var(--text-muted)" }}>Loading connected accounts…</p>
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>{tCommon("loadingConnections")}</p>
             ) : totalTargets === 0 ? (
               <p className="text-xs" style={{ color: "var(--text-muted)" }}>
                 No connected accounts for the selected platforms.

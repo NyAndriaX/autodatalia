@@ -353,6 +353,15 @@ class VideoGenerationRequest(BaseModel):
     # set, image-to-video providers will use it as the first frame.
     image_filename: str | None = None
     provider: str | None = None
+    # Optional model override for the chosen provider (e.g. a fal model
+    # id from /video-models). The runner falls back to FAL_VIDEO_MODEL
+    # when unset.
+    fal_model: str | None = None
+    # ``standard`` / ``master`` / ``pro`` — interpreted by the model spec.
+    quality: str | None = None
+    # ``text`` / ``image`` / ``ugc`` — the UI's intent. Recorded for
+    # analytics; the runner already routes on image presence.
+    mode: str | None = None
     # Async path — when true (default) the request returns immediately
     # with a job id the client polls. False keeps the legacy synchronous
     # behaviour (useful for the automation worker which runs in-process).
@@ -367,6 +376,9 @@ class VideoJob(BaseModel):
     status: str  # queued | running | succeeded | failed | cancelled
     provider: str
     model: str
+    fal_model: str | None = None
+    quality: str | None = None
+    mode: str | None = None
     prompt: str
     ratio: str
     duration_seconds: int
@@ -386,6 +398,32 @@ class VideoJobsResponse(BaseModel):
     """Response for GET /video-jobs."""
 
     jobs: list[VideoJob]
+
+
+class VideoModelFeatures(BaseModel):
+    """Which controls the UI should expose for a given video model."""
+
+    image_to_video: bool = False
+    audio: bool = False
+    max_duration_seconds: int = 10
+    supports_ugc: bool = False
+
+
+class VideoModel(BaseModel):
+    """One entry in the /video-models catalogue."""
+
+    id: str
+    label: str
+    cost_per_second_usd: float
+    features: VideoModelFeatures
+    endpoints: list[str] = []
+
+
+class VideoModelsResponse(BaseModel):
+    """Response for GET /video-models."""
+
+    models: list[VideoModel]
+    default: str
 
 
 # ── Cost dashboard ─────────────────────────────────────────────────────

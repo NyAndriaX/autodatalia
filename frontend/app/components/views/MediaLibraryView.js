@@ -757,7 +757,7 @@ export default function MediaLibraryView() {
               <UploadCloud size={30} className="opacity-40" />
               <p className="text-sm">
                 {searching
-                  ? "Searching…"
+                  ? tCommon("searching")
                   : t("dragHere")}
               </p>
               <p className="text-xs">Max {Math.round(MAX_SIZE_BYTES / 1024 / 1024)} MB per file</p>

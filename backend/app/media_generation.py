@@ -25,6 +25,8 @@ from .models import (
     VideoGenerationRequest,
     VideoJob,
     VideoJobsResponse,
+    VideoModel,
+    VideoModelsResponse,
 )
 
 try:
@@ -464,6 +466,9 @@ async def generate_video(
             image_filename=body.image_filename,
             provider=body.provider,
             user_id=user_id,
+            fal_model=body.fal_model,
+            quality=body.quality,
+            mode=body.mode,
         )
         return VideoJob(**job)
 
@@ -497,6 +502,22 @@ async def generate_video(
 
 
 # ── Video jobs queue ──────────────────────────────────────────────────
+
+
+@router.get("/video-models", response_model=VideoModelsResponse)
+async def video_models_list() -> VideoModelsResponse:
+    """Catalogue of fal.ai video models the backend knows about.
+
+    The frontend uses this to populate the model picker on the AI Video
+    page, hide controls a model can't support (e.g. audio for LTX),
+    and surface per-model pricing.
+    """
+    from .video_jobs import list_fal_models
+    from .config import settings as _settings
+    return VideoModelsResponse(
+        models=[VideoModel(**m) for m in list_fal_models()],
+        default=_settings.fal_video_model,
+    )
 
 
 @router.get("/video-jobs", response_model=VideoJobsResponse)

@@ -180,18 +180,43 @@ def create_job(
     image_filename: str | None = None,
     provider: str | None = None,
     user_id: str | int | None = None,
+    fal_model: str | None = None,
+    quality: str | None = None,
+    mode: str | None = None,
 ) -> dict[str, Any]:
     """Persist a queued job. The worker loop picks it up on the next tick.
+
+    Optional params:
+      * ``fal_model`` — pin a specific fal model id from FAL_MODEL_SPECS
+        (overrides ``settings.fal_video_model``). Only meaningful when the
+        provider resolves to ``fal``.
+      * ``quality`` — hint passed to the model's ``build_inputs`` callable
+        (currently used by Kling/Hailuo to pick standard vs master / pro).
+      * ``mode`` — ``text``/``image``/``ugc``. Recorded for analytics; the
+        runner already decides text-to-video vs image-to-video based on
+        whether ``image_filename`` is set, but ``mode`` lets the UI flag
+        a UGC prompt template for the spec to amend.
 
     Returns the created Job dict — caller responds to the client with this.
     """
     chosen = _pick_provider(provider)
+    # Resolve the effective model label shown on the job record. For
+    # the fal provider this prefers the per-job override; for others it
+    # falls back to the provider's configured default.
+    effective_model = (
+        fal_model or settings.fal_video_model
+        if chosen == "fal"
+        else _model_for_provider(chosen)
+    )
     job = {
         "id": f"vid-{uuid.uuid4().hex[:10]}",
         "user_id": str(user_id) if user_id is not None else None,
         "status": "queued",
         "provider": chosen,
-        "model": _model_for_provider(chosen),
+        "model": effective_model,
+        "fal_model": fal_model if chosen == "fal" else None,
+        "quality": quality,
+        "mode": mode,
         "prompt": prompt,
         "ratio": ratio,
         "duration_seconds": int(duration_seconds),
@@ -469,6 +494,173 @@ async def _run_ltx_job(job: dict[str, Any]) -> dict[str, Any]:
     }) or job
 
 
+# ── fal.ai model registry ──────────────────────────────────────────────
+# Each entry knows three things:
+#   1. The text-to-video + image-to-video endpoint paths on fal.run.
+#   2. A `build_inputs(prompt, ratio, duration_seconds, image_url,
+#      quality)` callable that returns the per-model request body —
+#      Kling expects ``duration="5"`` (string), LTX expects num_frames,
+#      Veo3 has its own knobs, etc.
+#   3. Per-second cost so the cost dashboard is honest.
+#   4. A `features` dict the frontend reads via /video-models so the
+#      UI hides controls a given model doesn't support (e.g. no
+#      audio for LTX).
+#
+# Adding a new fal model is two steps: drop a spec here, optionally
+# add an i18n key in messages/*.json. The UI picks it up automatically
+# via the /video-models endpoint.
+
+
+def _kling_duration(seconds: int) -> str:
+    """Kling models accept duration as the literal string "5" or "10"."""
+    return "10" if seconds >= 8 else "5"
+
+
+def _kling_inputs(*, prompt, ratio, duration_seconds, image_url, quality):
+    inputs = {
+        "prompt": prompt,
+        "duration": _kling_duration(duration_seconds),
+        "aspect_ratio": _aspect_label(ratio),
+        "negative_prompt": "blur, distort, low quality, deformed, ugly, "
+                           "extra limbs, watermark, text overlay",
+    }
+    if image_url:
+        inputs["image_url"] = image_url
+    return inputs
+
+
+def _ltx_inputs(*, prompt, ratio, duration_seconds, image_url, quality):
+    inputs = {
+        "prompt": prompt,
+        "num_frames": min(257, max(25, int(duration_seconds * 24))),
+        "guidance_scale": 4.0,
+        "num_inference_steps": 40,
+        "aspect_ratio": _aspect_label(ratio),
+    }
+    if image_url:
+        inputs["image_url"] = image_url
+    return inputs
+
+
+def _veo3_inputs(*, prompt, ratio, duration_seconds, image_url, quality):
+    # Veo 3 is text-only on fal at the moment; image_url ignored.
+    return {
+        "prompt": prompt,
+        "duration": f"{min(8, max(5, duration_seconds))}s",
+        "aspect_ratio": _aspect_label(ratio),
+    }
+
+
+def _hailuo_inputs(*, prompt, ratio, duration_seconds, image_url, quality):
+    inputs = {
+        "prompt": prompt,
+        "duration": min(10, max(6, duration_seconds)),
+        "prompt_optimizer": True,
+    }
+    if image_url:
+        inputs["first_frame_image"] = image_url
+    return inputs
+
+
+FAL_MODEL_SPECS: dict[str, dict[str, Any]] = {
+    # Kling 2.1 Standard — strong photoreal quality at ~$0.15/s. The
+    # CEO-recommended default for "looks like an ad, not a demo".
+    "fal-ai/kling-video/v2.1/standard/text-to-video": {
+        "label": "Kling 2.1 Standard",
+        "endpoints": {
+            "text_to_video": "fal-ai/kling-video/v2.1/standard/text-to-video",
+            "image_to_video": "fal-ai/kling-video/v2.1/standard/image-to-video",
+        },
+        "build_inputs": _kling_inputs,
+        "cost_per_second_usd": 0.15,
+        "features": {
+            "image_to_video": True,
+            "audio": False,
+            "max_duration_seconds": 10,
+            "supports_ugc": True,
+        },
+    },
+    "fal-ai/kling-video/v2.1/master/text-to-video": {
+        "label": "Kling 2.1 Master (flagship)",
+        "endpoints": {
+            "text_to_video": "fal-ai/kling-video/v2.1/master/text-to-video",
+            "image_to_video": "fal-ai/kling-video/v2.1/master/image-to-video",
+        },
+        "build_inputs": _kling_inputs,
+        "cost_per_second_usd": 0.28,
+        "features": {
+            "image_to_video": True,
+            "audio": False,
+            "max_duration_seconds": 10,
+            "supports_ugc": True,
+        },
+    },
+    # Veo 3 — Google's flagship, very expensive but cinema-grade.
+    "fal-ai/veo3": {
+        "label": "Veo 3",
+        "endpoints": {
+            "text_to_video": "fal-ai/veo3",
+        },
+        "build_inputs": _veo3_inputs,
+        "cost_per_second_usd": 0.50,
+        "features": {
+            "image_to_video": False,
+            "audio": True,
+            "max_duration_seconds": 8,
+            "supports_ugc": False,
+        },
+    },
+    # MiniMax Hailuo 02 — great alternative for image-to-video.
+    "fal-ai/minimax/hailuo-02/standard/text-to-video": {
+        "label": "MiniMax Hailuo 02 Standard",
+        "endpoints": {
+            "text_to_video": "fal-ai/minimax/hailuo-02/standard/text-to-video",
+            "image_to_video": "fal-ai/minimax/hailuo-02/standard/image-to-video",
+        },
+        "build_inputs": _hailuo_inputs,
+        "cost_per_second_usd": 0.10,
+        "features": {
+            "image_to_video": True,
+            "audio": False,
+            "max_duration_seconds": 10,
+            "supports_ugc": True,
+        },
+    },
+    # Original LTX-Video on fal — cheap but the "scary frames" issue we
+    # had earlier. Kept as a fallback choice + for backwards compat.
+    "fal-ai/ltx-video": {
+        "label": "LTX-Video (legacy, low cost)",
+        "endpoints": {
+            "text_to_video": "fal-ai/ltx-video",
+            "image_to_video": "fal-ai/ltx-video",
+        },
+        "build_inputs": _ltx_inputs,
+        "cost_per_second_usd": 0.04,
+        "features": {
+            "image_to_video": True,
+            "audio": False,
+            "max_duration_seconds": 15,
+            "supports_ugc": False,
+        },
+    },
+}
+
+
+def list_fal_models() -> list[dict[str, Any]]:
+    """Public catalogue exposed via /video-models. Strips the callable
+    so the response is JSON-serializable."""
+    return [
+        {
+            "id": model_id,
+            "label": spec["label"],
+            "features": spec["features"],
+            "cost_per_second_usd": spec["cost_per_second_usd"],
+            "endpoints": list(spec["endpoints"].keys()),
+        }
+        for model_id, spec in FAL_MODEL_SPECS.items()
+    ]
+
+
 async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
     """Submit a job to fal.ai's queue API, poll status, download result.
 
@@ -480,28 +672,38 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
     if not key:
         raise RuntimeError("FAL_API_KEY not configured")
 
-    width, height = _RATIO_TO_SIZE.get(job["ratio"], (704, 1216))
     public_image_url = None
     if job.get("image_filename"):
         public_image_url = _public_url_for_local(job["image_filename"])
 
-    # fal.ai's LTX endpoint accepts num_frames (24 fps → duration*24) and
-    # an optional image_url for image-to-video.
-    inputs: dict[str, Any] = {
-        "prompt": job["prompt"],
-        "num_frames": min(257, max(25, int(job["duration_seconds"] * 24))),
-        "guidance_scale": 4.0,
-        "num_inference_steps": 40,
-        "aspect_ratio": _aspect_label(job["ratio"]),
-    }
-    if public_image_url:
-        inputs["image_url"] = public_image_url
+    # The job carries either an explicit model override (job["fal_model"])
+    # or falls back to settings.fal_video_model. Pick the spec from the
+    # registry so the right body shape + endpoint get used per model.
+    requested_model = job.get("fal_model") or settings.fal_video_model
+    spec = FAL_MODEL_SPECS.get(requested_model) or FAL_MODEL_SPECS["fal-ai/ltx-video"]
+    # Image-to-video endpoint when a reference image is supplied AND the
+    # model supports it; otherwise text-to-video.
+    endpoint = spec["endpoints"].get(
+        "image_to_video" if public_image_url and spec["endpoints"].get("image_to_video") else "text_to_video"
+    )
+    if not endpoint:
+        raise RuntimeError(
+            f"fal model '{requested_model}' has no usable endpoint configured"
+        )
+
+    inputs = spec["build_inputs"](
+        prompt=job["prompt"],
+        ratio=job["ratio"],
+        duration_seconds=int(job["duration_seconds"]),
+        image_url=public_image_url,
+        quality=job.get("quality") or "standard",
+    )
 
     headers = {
         "Authorization": f"Key {key}",
         "Content-Type": "application/json",
     }
-    queue_url = f"https://queue.fal.run/{settings.fal_video_model}"
+    queue_url = f"https://queue.fal.run/{endpoint}"
 
     # 1. Submit
     async with httpx.AsyncClient(timeout=60.0) as client:
@@ -566,9 +768,12 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
     out_path.write_bytes(d.content)
 
     public_url = _public_url_for_local(out_path.name, subdir="generated")
-    # fal.ai bills per-second similar to Replicate (~$0.04/s on LTX) so
-    # we can reuse the same per-second knob for cost reporting.
-    cost_usd = round(job["duration_seconds"] * settings.video_cost_per_second_usd, 4)
+    # Use the per-model rate from the spec — Kling, Veo and LTX cost
+    # very different amounts per second of output. Falls back to the
+    # global VIDEO_COST_PER_SECOND_USD when the model isn't in the
+    # registry (e.g. user pasted a custom fal model id via env).
+    per_sec = spec.get("cost_per_second_usd") or settings.video_cost_per_second_usd
+    cost_usd = round(job["duration_seconds"] * per_sec, 4)
 
     try:
         from .cost_tracking import record_media_job
