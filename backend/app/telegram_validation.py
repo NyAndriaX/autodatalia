@@ -17,6 +17,10 @@ from .models import (
 )
 from .services import _post_chat, messages_append, posts_create, posts_list, posts_update
 
+# fire_post lives in scheduler — re-used here so a manual Telegram
+# approval publishes immediately without waiting for the scheduler tick.
+import asyncio  # noqa: E402
+
 router = APIRouter(tags=["telegram-validation"])
 
 
@@ -128,14 +132,110 @@ async def _telegram_call(method: str, payload: dict[str, Any]) -> dict[str, Any]
     return data.get("result") or {}
 
 
+_CAPTION_LIMIT = 1024  # Telegram's hard limit for sendPhoto/sendVideo captions.
+
+
+def _collect_media_for_telegram(post: dict[str, Any]) -> list[dict[str, str]]:
+    """Return the post's uploaded media in a Telegram-friendly shape.
+
+    Only items in ``status="uploaded"`` with a publicly fetchable
+    ``remoteUrl`` are returned — Telegram needs to be able to GET the
+    URL itself (we don't proxy bytes). Local blob: previews and items
+    still uploading are skipped.
+    """
+    items: list[dict[str, str]] = []
+    for m in post.get("media") or []:
+        url = m.get("remoteUrl")
+        if not url:
+            continue
+        # Skip local previews / failed uploads — Telegram can't reach those.
+        if not (url.startswith("http://") or url.startswith("https://")):
+            continue
+        if m.get("status") and m["status"] != "uploaded":
+            continue
+        kind = "video" if (m.get("kind") == "video") else "photo"
+        items.append({"type": kind, "url": url})
+    return items
+
+
 async def _send_validation_card(post: dict[str, Any], chat_id: str) -> int:
+    """Send the validation prompt to Telegram. Picks the best transport
+    based on what the post carries:
+
+      • 0 media       → ``sendMessage`` with text + buttons
+      • 1 photo/video → ``sendPhoto``/``sendVideo`` with caption + buttons
+                        (or media + separate text message if the caption
+                        would overflow Telegram's 1024-char cap)
+      • multi-slide   → ``sendMediaGroup`` (no buttons supported on
+                        groups) + follow-up ``sendMessage`` with buttons
+
+    Returns the message id of whichever message carries the buttons —
+    that's the one the approve/reject/edit callbacks reference.
+    """
+    text = _validation_text(post)
+    keyboard = _validation_keyboard(post["id"])
+    media = _collect_media_for_telegram(post)
+
+    # No media → original text-only card.
+    if not media:
+        result = await _telegram_call(
+            "sendMessage",
+            {"chat_id": chat_id, "text": text, "reply_markup": keyboard},
+        )
+        return int(result.get("message_id") or 0)
+
+    # Multi-slide carousel: sendMediaGroup doesn't accept inline_keyboard
+    # on the group itself, so the buttons ride on a follow-up message.
+    if len(media) > 1:
+        group = [
+            {"type": item["type"], "media": item["url"]}
+            for item in media[:10]  # Telegram caps groups at 10 items
+        ]
+        try:
+            await _telegram_call(
+                "sendMediaGroup",
+                {"chat_id": chat_id, "media": group},
+            )
+        except HTTPException:
+            # If the group send fails (e.g. one URL unreachable), fall
+            # through to text-only so the validation still happens.
+            pass
+        result = await _telegram_call(
+            "sendMessage",
+            {"chat_id": chat_id, "text": text, "reply_markup": keyboard},
+        )
+        return int(result.get("message_id") or 0)
+
+    # Single media item: photo or video, caption + buttons inline when
+    # the text fits, otherwise media first then a captioned button card.
+    item = media[0]
+    method = "sendVideo" if item["type"] == "video" else "sendPhoto"
+    media_field = "video" if item["type"] == "video" else "photo"
+
+    if len(text) <= _CAPTION_LIMIT:
+        result = await _telegram_call(
+            method,
+            {
+                "chat_id": chat_id,
+                media_field: item["url"],
+                "caption": text,
+                "reply_markup": keyboard,
+            },
+        )
+        return int(result.get("message_id") or 0)
+
+    # Caption too long — send the media bare, then the text card with
+    # the buttons. The buttons message is the one we track.
+    try:
+        await _telegram_call(
+            method,
+            {"chat_id": chat_id, media_field: item["url"]},
+        )
+    except HTTPException:
+        pass
     result = await _telegram_call(
         "sendMessage",
-        {
-            "chat_id": chat_id,
-            "text": _validation_text(post),
-            "reply_markup": _validation_keyboard(post["id"]),
-        },
+        {"chat_id": chat_id, "text": text, "reply_markup": keyboard},
     )
     return int(result.get("message_id") or 0)
 
@@ -148,6 +248,51 @@ async def _answer_callback(callback_query_id: str, text: str = "") -> None:
             **({"text": text} if text else {}),
         },
     )
+
+
+async def _publish_manual(post: dict[str, Any], chat_id: str, fire_post) -> None:
+    """Publish an approved manual post and report the result to the
+    same Telegram chat that approved it. Runs as a background task —
+    exceptions are caught and reported so a failed publish becomes a
+    user-visible Telegram message, not a silently swallowed error."""
+    try:
+        result = await fire_post(post)
+        published_status = (result or {}).get("status")
+        if published_status == "published":
+            results = (result or {}).get("publish_results") or []
+            links = [
+                f"{r.get('target_label') or r.get('platform')}: {r.get('permalink_url') or '(no link)'}"
+                for r in results
+                if r.get("ok")
+            ]
+            failures = [
+                f"{r.get('target_label') or r.get('platform')}: {r.get('error') or 'unknown'}"
+                for r in results
+                if not r.get("ok")
+            ]
+            lines = [f"✅ Post {post['id']} published."]
+            if links:
+                lines.append("Links:\n" + "\n".join(links))
+            if failures:
+                lines.append("⚠ Some targets failed:\n" + "\n".join(failures))
+            text = "\n\n".join(lines)
+        else:
+            text = (
+                f"⚠ Post {post['id']} did not publish — "
+                f"status={published_status}, error="
+                f"{(result or {}).get('error') or 'unknown'}"
+            )
+    except Exception as exc:
+        posts_update(
+            post["id"],
+            {"status": "error", "error": f"manual_approve_publish: {exc}"[:300]},
+        )
+        text = f"⚠ Publishing post {post['id']} crashed: {exc}"
+    if chat_id and _telegram_configured():
+        try:
+            await _telegram_call("sendMessage", {"chat_id": chat_id, "text": text})
+        except Exception:
+            pass  # never re-raise from the background task
 
 
 async def _regenerate_from_feedback(original: str, feedback: str) -> str:
@@ -308,32 +453,59 @@ async def telegram_webhook(
                 await _answer_callback(callback_id, "Post no longer exists.")
                 return {"ok": True}
             if action == "a":
-                # Automation-sourced posts carry a source_rule_id and a
-                # scheduled_for epoch — approving them flips them into
-                # `scheduled` so the existing scheduler.tick fires them
-                # at the original target time. Manual-validation posts
-                # (no source_rule_id) go to `approved` as before.
-                next_status = (
-                    "scheduled" if post.get("source_rule_id") else "approved"
-                )
-                posts_update(
-                    post_id,
-                    {
-                        "status": next_status,
-                        "validated_at": time.time(),
-                    },
-                )
-                messages_append(
-                    {
-                        "kind": "validation",
-                        "post_id": post_id,
-                        "message": (
-                            f"Post {post_id} approved in Telegram — "
-                            f"now {next_status}."
-                        ),
-                    }
-                )
-                await _answer_callback(callback_id, "Approved.")
+                # Two paths:
+                #   Automation-sourced (has source_rule_id + scheduled_for
+                #   epoch) → status="scheduled" so the existing scheduler
+                #   tick fires it at the original target time.
+                #   Manual posts → publish IMMEDIATELY. Previously these
+                #   went to status="approved" which the scheduler ignores,
+                #   so manual approvals silently never published.
+                is_automation = bool(post.get("source_rule_id"))
+                if is_automation:
+                    posts_update(
+                        post_id,
+                        {
+                            "status": "scheduled",
+                            "validated_at": time.time(),
+                        },
+                    )
+                    messages_append(
+                        {
+                            "kind": "validation",
+                            "post_id": post_id,
+                            "message": (
+                                f"Auto-generated post {post_id} approved in "
+                                "Telegram — scheduled to fire at its target time."
+                            ),
+                        }
+                    )
+                    await _answer_callback(callback_id, "Approved — scheduled.")
+                else:
+                    posts_update(
+                        post_id,
+                        {
+                            "status": "publishing",
+                            "validated_at": time.time(),
+                        },
+                    )
+                    messages_append(
+                        {
+                            "kind": "validation",
+                            "post_id": post_id,
+                            "message": (
+                                f"Post {post_id} approved in Telegram — "
+                                "publishing now."
+                            ),
+                        }
+                    )
+                    await _answer_callback(callback_id, "Approved — publishing.")
+                    # Fire in the background so the webhook returns fast
+                    # (Telegram expects a webhook response within ~15s,
+                    # and a publish call can take 30s+ for video). The
+                    # scheduler's fire_post handles all the persistence
+                    # bookkeeping + bell notifications on completion.
+                    from .scheduler import fire_post  # lazy: avoid circular import
+                    asyncio.create_task(_publish_manual(post, chat_id, fire_post))
             elif action == "r":
                 # Automation-sourced rejections land as `rejected` (terminal,
                 # the worker won't regenerate for this fire). Manual-flow

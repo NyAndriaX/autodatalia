@@ -128,11 +128,11 @@ domain in the video against the website URL you submit). Deploy:
 ```bash
 cd frontend
 vercel deploy --prod
-# bind a real subdomain (app.datalia.com) in the Vercel dashboard
+# bind a real subdomain (e.g. app.your-domain.com) in the Vercel dashboard
 ```
 
-Or use Datalia's existing company domain if it has one — `app.datalia.<tld>`
-via CNAME is the cleanest look for a TikTok reviewer.
+Or use the company domain if you have one — `app.<your-tld>` via CNAME is
+the cleanest look for a TikTok reviewer.
 
 ### 3.2 Swap to the client's TikTok dev app
 

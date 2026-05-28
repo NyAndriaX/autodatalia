@@ -2,9 +2,11 @@
 
 This is the **one** doc you need to put Datalia in production. Follow it
 top to bottom, copy-paste the commands, and the app will be running on
-your domain by the end. For the architecture rationale behind the
-choices (why Docker, why Caddy, why JSON storage) see
-[`plans/hosting.md`](plans/hosting.md).
+your domain by the end.
+
+> Throughout this guide `your-domain.com` and `api.your-domain.com`
+> are placeholders. Replace them with the real domain you own everywhere
+> they appear (env vars, dev-portal URLs, frontend config).
 
 ---
 
@@ -13,7 +15,7 @@ choices (why Docker, why Caddy, why JSON storage) see
 You need:
 
 - [ ] A **Linux server** with a public IP. ~$5–10/mo Hetzner CX22, DigitalOcean droplet, Vultr, Fly.io, etc. Ubuntu 22.04+ is the tested baseline. Minimum specs: 2 vCPU, 4 GB RAM, 40 GB disk.
-- [ ] A **domain name** with DNS you can edit. Datalia uses `api.datalia.com` for the backend and `datalia.com` for the dashboard. Both will be on this same server unless you split them.
+- [ ] A **domain name** with DNS you can edit. The convention used here is `api.your-domain.com` for the backend and `your-domain.com` for the dashboard. Both can live on the same server unless you split them.
 - [ ] **API keys / app credentials** ready to paste:
   - **OpenRouter** API key (`sk-or-v1-…`) — for AI generation
   - **Meta** app ID + secret — Facebook + Instagram OAuth
@@ -51,7 +53,7 @@ Then SSH back in.
 
 ### 1.4 Clone the repo
 ```bash
-git clone https://github.com/joeyfrontend/DataliaAuto.git ~/datalia
+git clone https://gitlab.com/copyandprompt-automatisations/autodatalia.git ~/datalia
 cd ~/datalia/infra
 ```
 
@@ -109,8 +111,8 @@ Fill in **every line that has an `=` followed by nothing**. The minimum required
 
 | Variable | What to put |
 |---|---|
-| `API_DOMAIN` | Your bare domain — `api.datalia.com` (no `https://`, no path) |
-| `CORS_ALLOW_ORIGINS` | Frontend URL(s), comma-separated: `https://datalia.com,https://www.datalia.com` |
+| `API_DOMAIN` | Your bare domain — `api.your-domain.com` (no `https://`, no path) |
+| `CORS_ALLOW_ORIGINS` | Frontend URL(s), comma-separated: `https://your-domain.com,https://www.your-domain.com` |
 | `BACKEND_AUTH_TOKEN` | The hex from Part 2 |
 | `JWT_SECRET` | The hex from Part 2 |
 | `AI_API_KEY` | Your OpenRouter key |
@@ -140,13 +142,13 @@ Caddy automatically provisions a Let's Encrypt certificate on the first request 
 
 **Verify it's up:**
 ```bash
-curl https://api.datalia.com/health
+curl https://api.your-domain.com/health
 # → {"ok":true}
 ```
 
 If you see a TLS error, wait 30 seconds and retry (Caddy is still
 provisioning the cert). If the error persists, check DNS actually
-points to this server: `dig api.datalia.com`.
+points to this server: `dig api.your-domain.com`.
 
 ---
 
@@ -156,23 +158,23 @@ Each provider needs to know where to send users back after OAuth, and TikTok add
 
 ### Meta (developers.facebook.com)
 On your Datalia Meta app:
-- **App Settings → Basic → App Domains:** add `api.datalia.com`
-- **Use cases → Customize (Auth & account creation):** under **Valid OAuth Redirect URIs** add `https://api.datalia.com/oauth/meta/callback`
-- **Site URL** (Basic settings): `https://api.datalia.com`
+- **App Settings → Basic → App Domains:** add `api.your-domain.com`
+- **Use cases → Customize (Auth & account creation):** under **Valid OAuth Redirect URIs** add `https://api.your-domain.com/oauth/meta/callback`
+- **Site URL** (Basic settings): `https://api.your-domain.com`
 
 ### TikTok (developers.tiktok.com)
 On your Datalia TikTok app:
-- **App details → URL properties → Redirect URI:** add `https://api.datalia.com/oauth/tiktok/callback`
-- **Terms of Service URL:** `https://api.datalia.com/terms`
-- **Privacy Policy URL:** `https://api.datalia.com/privacy`
-- **Domain verification:** click **Add → Verify URL prefix** with `https://api.datalia.com/`. TikTok shows you a token-named `.txt` filename like `tiktok<token>.txt`. **Copy the token portion** (the part after `tiktok` and before `.txt`) and put it in `.env.production` as `TIKTOK_DOMAIN_VERIFY=<token>`. Then restart the backend:
+- **App details → URL properties → Redirect URI:** add `https://api.your-domain.com/oauth/tiktok/callback`
+- **Terms of Service URL:** `https://api.your-domain.com/terms`
+- **Privacy Policy URL:** `https://api.your-domain.com/privacy`
+- **Domain verification:** click **Add → Verify URL prefix** with `https://api.your-domain.com/`. TikTok shows you a token-named `.txt` filename like `tiktok<token>.txt`. **Copy the token portion** (the part after `tiktok` and before `.txt`) and put it in `.env.production` as `TIKTOK_DOMAIN_VERIFY=<token>`. Then restart the backend:
   ```bash
   docker compose -f docker-compose.prod.yml --env-file .env.production up -d
   ```
   Back on the TikTok portal click **Verify** — the backend serves the file automatically.
 
 ### LinkedIn (optional, when you have an app)
-- **Auth tab → Authorized redirect URLs:** add `https://api.datalia.com/oauth/linkedin/callback`
+- **Auth tab → Authorized redirect URLs:** add `https://api.your-domain.com/oauth/linkedin/callback`
 
 ---
 
@@ -188,7 +190,7 @@ npm install
 Create the frontend env file:
 ```bash
 cat > .env.local <<EOF
-NEXT_PUBLIC_API_BASE_URL=https://api.datalia.com
+NEXT_PUBLIC_API_BASE_URL=https://api.your-domain.com
 NEXT_PUBLIC_BACKEND_AUTH_TOKEN=$(grep '^BACKEND_AUTH_TOKEN=' ~/datalia/infra/.env.production | cut -d= -f2-)
 EOF
 ```
@@ -201,10 +203,10 @@ npx pm2 save
 npx pm2 startup     # follow the printed command so pm2 survives reboot
 ```
 
-The dashboard is now on **http://server-ip:3000**. To expose it on a clean URL (e.g. `https://datalia.com`), either:
+The dashboard is now on **http://server-ip:3000**. To expose it on a clean URL (e.g. `https://your-domain.com`), either:
 
-1. **Deploy frontend to Vercel** instead (point the Vercel project at this repo's `frontend/` dir, set `NEXT_PUBLIC_API_BASE_URL=https://api.datalia.com`, deploy). Simpler.
-2. **Or add a second Caddy block** on the same server that reverse-proxies `https://datalia.com` to `localhost:3000`. See [`infra/caddy/Caddyfile`](infra/caddy/Caddyfile) and copy the existing block.
+1. **Deploy frontend to Vercel** instead (point the Vercel project at this repo's `frontend/` dir, set `NEXT_PUBLIC_API_BASE_URL=https://api.your-domain.com`, deploy). Simpler.
+2. **Or add a second Caddy block** on the same server that reverse-proxies `https://your-domain.com` to `localhost:3000`. See [`infra/caddy/Caddyfile`](infra/caddy/Caddyfile) and copy the existing block.
 
 > ⚠️ `NEXT_PUBLIC_BACKEND_AUTH_TOKEN` ships to the browser. Fine for an internal-only tool with a known user list; if the dashboard becomes public-facing, switch to a proxy auth flow.
 
@@ -264,7 +266,7 @@ TikTok requires a screen recording of your app to approve `video.publish`. Your 
 ## Common gotchas
 
 - **TLS error from your domain right after starting Caddy.** First-cert provisioning takes 20-40s. Wait and retry.
-- **`Meta 100: Authorization Error subcode 33` on Instagram carousels.** Should not happen on a real domain — the previous occurrences were caused by ngrok's free-tier interstitial. If you see it on `api.datalia.com`, check the Meta app permissions for `instagram_basic` + `instagram_content_publish`.
+- **`Meta 100: Authorization Error subcode 33` on Instagram carousels.** Should not happen on a real domain. If you see it on `api.your-domain.com`, check the Meta app permissions for `instagram_basic` + `instagram_content_publish`, and confirm the API hostname is reachable from Meta's IPs (no firewall block on `facebookexternalhit/1.1` user agents).
 - **TikTok `access_token_invalid` returned 24h after a successful connect.** The refresh-token flow handles this automatically. If publishing still fails after refresh, reconnect TikTok from Settings.
 - **Telegram approve doesn't publish.** Check the post's status in the calendar — if it says `scheduled` but isn't firing, the scheduler is waiting for the scheduled time. Check the container logs for `[scheduler]` lines.
 - **Automation rule fires but no Telegram card arrives.** Settings → Telegram section → confirm all three status dots are green. If the bot token dot is red, `TELEGRAM_BOT_TOKEN` is missing/wrong in `.env.production`. Also verify the webhook registered successfully (Part 3.3).

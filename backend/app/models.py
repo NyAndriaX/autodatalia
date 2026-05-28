@@ -25,6 +25,12 @@ class GenerateRequest(BaseModel):
     # generator routes through a vision model so captions can describe what's
     # actually in the picture instead of writing blind.
     image_filename: str | None = None
+    # Tier hint to the LLM router. "auto" lets the backend decide based on
+    # complexity heuristics (n_variants, presence of image, etc.).
+    quality: str = Field(default="auto", pattern="^(auto|fast|standard|premium)$")
+    # Free-form tone hint that influences caption voice (forwarded to the
+    # prompt; no impact on tier selection).
+    tone: str | None = None
 
 
 class GenerateVariant(BaseModel):
@@ -47,6 +53,22 @@ class GenerateResponse(BaseModel):
     """Response for POST /generate."""
 
     variants: list[GenerateVariant]
+    usage: TokenUsage = TokenUsage()
+    model: str | None = None
+    tier: str | None = None
+
+
+class HashtagsRequest(BaseModel):
+    """Body for POST /hashtags."""
+
+    content: str = Field(default="", max_length=10_000)
+    max_tags: int = Field(default=8, ge=1, le=20)
+
+
+class HashtagsResponse(BaseModel):
+    """Response for POST /hashtags."""
+
+    hashtags: list[str]
     usage: TokenUsage = TokenUsage()
     model: str | None = None
 
@@ -318,11 +340,112 @@ class ImageGenerationRequest(BaseModel):
 
 
 class VideoGenerationRequest(BaseModel):
-    """Body for POST /media/generate/video."""
+    """Body for POST /media/generate/video.
+
+    `provider` lets the caller force a backend ("ltx", "replicate", "fallback").
+    Omitted ⇒ backend picks the first available based on env config.
+    """
 
     prompt: str = Field(min_length=1, max_length=2000)
     ratio: str = "9:16"
     duration_seconds: int = Field(default=6, ge=3, le=15)
+    # Optional reference image to animate (filename in content/). When
+    # set, image-to-video providers will use it as the first frame.
+    image_filename: str | None = None
+    provider: str | None = None
+    # Async path — when true (default) the request returns immediately
+    # with a job id the client polls. False keeps the legacy synchronous
+    # behaviour (useful for the automation worker which runs in-process).
+    async_mode: bool = True
+
+
+class VideoJob(BaseModel):
+    """One queued / running / finished video generation job."""
+
+    id: str
+    user_id: str | None = None
+    status: str  # queued | running | succeeded | failed | cancelled
+    provider: str
+    model: str
+    prompt: str
+    ratio: str
+    duration_seconds: int
+    image_filename: str | None = None
+    created_at: float
+    started_at: float | None = None
+    finished_at: float | None = None
+    progress: float = 0.0  # 0.0 .. 1.0
+    output_url: str | None = None
+    output_filename: str | None = None
+    error: str | None = None
+    cost_usd: float | None = None
+    external_id: str | None = None  # Replicate prediction id, etc.
+
+
+class VideoJobsResponse(BaseModel):
+    """Response for GET /video-jobs."""
+
+    jobs: list[VideoJob]
+
+
+# ── Cost dashboard ─────────────────────────────────────────────────────
+
+
+class CostBucket(BaseModel):
+    """One row in a /costs/summary breakdown (per workflow/tier/model/user)."""
+
+    key: str
+    calls: int = 0
+    tokens: int = 0
+    cost_usd: float = 0.0
+
+
+class CostTotals(BaseModel):
+    """Roll-up totals for the cost summary's window."""
+
+    calls: int = 0
+    cache_hits: int = 0
+    tokens: int = 0
+    cost_usd: float = 0.0
+    cost_eur: float = 0.0
+    saved_by_cache_usd: float = 0.0
+
+
+class CostSummary(BaseModel):
+    """Response for GET /costs/summary."""
+
+    period_seconds: float | None = None
+    totals: CostTotals = CostTotals()
+    by_workflow: list[CostBucket] = []
+    by_tier: list[CostBucket] = []
+    by_model: list[CostBucket] = []
+    by_user: list[CostBucket] = []
+
+
+class CostLogEntry(BaseModel):
+    """One row in the persistent cost log."""
+
+    id: str
+    ts: float
+    user_id: str | None = None
+    workflow: str
+    tier: str
+    model: str
+    provider: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    cost_usd: float
+    cost_eur: float
+    cached: bool = False
+    price_exact: bool = True
+    kind: str | None = None
+
+
+class CostLogResponse(BaseModel):
+    """Response for GET /costs/log."""
+
+    entries: list[CostLogEntry]
 
 
 # ── Automation rules ──────────────────────────────────────────────────

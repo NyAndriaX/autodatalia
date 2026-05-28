@@ -39,6 +39,27 @@ class Settings(BaseModel):
     ai_video_api_base_url: str
     ai_video_api_key: str
     ai_video_model: str
+    # Replicate-specific config — used by the LTX-Video integration in
+    # video_jobs.py. When REPLICATE_API_TOKEN is set the backend creates
+    # real Replicate predictions; otherwise the legacy ffmpeg fallback
+    # (Ken Burns zoom on a generated still) runs.
+    replicate_api_token: str
+    replicate_video_model: str
+    # Replicate's community-uploaded models (like LTX-Video) don't expose
+    # the /models/{owner}/{name}/predictions shortcut — you have to POST
+    # to /v1/predictions with a specific version hash. Paste it here from
+    # the Replicate model page; the backend falls back to the model URL
+    # path when this is unset (works for "official" models only).
+    replicate_video_version: str
+    # fal.ai — recommended free starting point for LTX-Video. Free credits
+    # on signup at https://fal.ai/dashboard/keys (no card required for
+    # the initial allowance).
+    fal_api_key: str
+    fal_video_model: str
+    # Pre-computed per-second cost in USD for video runs — used to log
+    # spend in the cost dashboard. Defaults to LTX-Video's published
+    # price (≈$0.04/s). Override per provider if needed.
+    video_cost_per_second_usd: float
 
 
 def load_settings() -> Settings:
@@ -108,6 +129,16 @@ def load_settings() -> Settings:
             os.getenv("AI_API_KEY", ""),
         ).strip(),
         ai_video_model=os.getenv("AI_VIDEO_MODEL", "").strip(),
+        replicate_api_token=os.getenv("REPLICATE_API_TOKEN", "").strip(),
+        replicate_video_model=os.getenv(
+            "REPLICATE_VIDEO_MODEL", "lightricks/ltx-video"
+        ).strip(),
+        replicate_video_version=os.getenv("REPLICATE_VIDEO_VERSION", "").strip(),
+        fal_api_key=os.getenv("FAL_API_KEY", "").strip(),
+        fal_video_model=os.getenv("FAL_VIDEO_MODEL", "fal-ai/ltx-video").strip(),
+        video_cost_per_second_usd=float(
+            os.getenv("VIDEO_COST_PER_SECOND_USD", "0.04")
+        ),
     )
 
 settings = load_settings()

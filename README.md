@@ -25,8 +25,6 @@ exactly one tenant (Datalia itself), OAuth connections happen once at setup.
 | **Timeout follow-up** — bot prompts resend/regenerate/cancel if no answer by publish time | Done |
 
 For per-platform publish state see [`PROJECT_STATE.md`](PROJECT_STATE.md).
-For engineering reference (file layout, conventions, gotchas) see
-[`CLAUDE.md`](CLAUDE.md).
 
 ---
 
@@ -38,7 +36,6 @@ For engineering reference (file layout, conventions, gotchas) see
 | [`backend/`](backend/) | API + AI + OAuth + publishing + automation worker | Python, FastAPI, Pydantic, Docker |
 | [`infra/`](infra/) | Docker Compose orchestration + Caddy reverse-proxy config | YAML |
 | [`docs/`](docs/) | Per-platform setup notes (TikTok, etc.) | Markdown |
-| [`plans/`](plans/) | Architecture decisions + roadmap | Markdown |
 | [`DEPLOY.md`](DEPLOY.md) | **Production deploy checklist** | Markdown |
 
 ---
@@ -77,10 +74,10 @@ docker compose -f infra/docker-compose.yml up -d --build caption-api
 ```
 
 Meta and TikTok require HTTPS OAuth callbacks, so for OAuth testing point
-a public HTTPS host (Tailscale Funnel works without a custom domain) at
-the backend and set `OAUTH_REDIRECT_BASE` + `PUBLIC_BASE_URL` in
-`infra/.env` to that URL. See [`plans/hosting.md`](plans/hosting.md) for
-options.
+a public HTTPS host at the backend and set `OAUTH_REDIRECT_BASE` +
+`PUBLIC_BASE_URL` in `infra/.env` to that URL. Any tunneling service
+that gives a stable HTTPS hostname works (Cloudflare Tunnel, Tailscale
+Funnel, etc.). For production deployment see [`DEPLOY.md`](DEPLOY.md).
 
 ### Frontend
 ```bash
@@ -114,8 +111,5 @@ docker compose -f infra/docker-compose.yml exec -T caption-api \
 
 - [`DEPLOY.md`](DEPLOY.md) — **production deploy checklist**
 - [`PROJECT_STATE.md`](PROJECT_STATE.md) — current source-verified state
-- [`CLAUDE.md`](CLAUDE.md) — engineering reference (architecture, conventions, file layout)
 - [`backend/README.md`](backend/README.md) — API surface
 - [`docs/tiktok.md`](docs/tiktok.md) — TikTok-specific setup notes
-- [`plans/hosting.md`](plans/hosting.md) — hosting decisions and migration plan
-- [`plans/next-steps.md`](plans/next-steps.md) — priority backlog

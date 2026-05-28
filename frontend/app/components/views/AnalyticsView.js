@@ -9,18 +9,17 @@ import {
   Coins,
   RotateCcw,
 } from "lucide-react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { resetTokenUsage } from "../../store/uiSlice";
+import { fetchCostSummary } from "../../lib/costService";
 
-/* KPIs that are still mocked while their data sources are unwired:
-   AN-T01 (publish/engagement/reach) hydrates from Airtable, AN-T02
-   (LLM cost) from the Token_Logs table. The session-side cards below
-   are derived from the live `aiUsage` ring buffer. */
+/* Engagement / reach numbers still come from Airtable (not wired yet) —
+   clearly labeled in the UI as sample data so they're not mistaken for
+   live metrics. */
 const MOCK_KPIS = [
   { label: "Posts published (30d)", value: "128", delta: "+12%", icon: Send },
   { label: "Avg. engagement", value: "4.7%", delta: "+0.6pt", icon: Heart },
   { label: "Reach", value: "82.4k", delta: "+9%", icon: TrendingUp },
-  { label: "LLM cost (30d)", value: "$37.10", delta: "-4%", icon: DollarSign },
 ];
 
 /* Derive 7 hourly buckets from the most recent calls so the chart shows
@@ -90,6 +89,28 @@ export default function AnalyticsView() {
     [buckets]
   );
   const byModel = useMemo(() => rollupByModel(calls), [calls]);
+
+  // Server-side cost summary (30-day rolling) — replaces the four
+  // MOCK_KPIs the dashboard used to show. The Coins / 30d count / spend
+  // numbers below are the real per-workspace figures.
+  const [serverSummary, setServerSummary] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const data = await fetchCostSummary("30d");
+        if (!cancelled) setServerSummary(data);
+      } catch {
+        /* leave summary null; the cards fall back gracefully */
+      }
+    }
+    load();
+    const t = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
 
   const hasRealData = calls.length > 0 || (aiUsage.cacheHits || 0) > 0;
   const sessionTokens = aiUsage.totalTokens || 0;
@@ -164,10 +185,74 @@ export default function AnalyticsView() {
         />
       </div>
 
-      {/* Still-mocked engagement / publishing KPIs — clearly labeled below
-          so we don't pass mock numbers off as live. */}
+      {/* Server-tracked 30-day rolling spend — replaces the old mock KPIs.
+          Engagement metrics still come from Airtable (not wired yet) so
+          we render placeholders below with a clear "Sample data" label. */}
       <p className="text-[11px] uppercase tracking-wider mb-2" style={{ color: "var(--text-muted)" }}>
-        Sample data — no engagement records yet
+        Server-tracked · last 30 days
+      </p>
+      <div
+        className="grid gap-3 mb-3"
+        style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}
+      >
+        <LiveKpi
+          icon={DollarSign}
+          label="LLM + media spend (30d)"
+          value={
+            serverSummary?.totals
+              ? `€${(serverSummary.totals.cost_eur || 0).toFixed(2)}`
+              : "—"
+          }
+          sub={
+            serverSummary?.totals
+              ? `$${(serverSummary.totals.cost_usd || 0).toFixed(2)} USD`
+              : "loading…"
+          }
+        />
+        <LiveKpi
+          icon={Send}
+          label="Real AI calls (30d)"
+          value={
+            serverSummary?.totals
+              ? (serverSummary.totals.calls || 0).toLocaleString()
+              : "—"
+          }
+          sub={
+            serverSummary?.totals
+              ? `${serverSummary.totals.cache_hits || 0} cache hits`
+              : "—"
+          }
+        />
+        <LiveKpi
+          icon={Coins}
+          label="Tokens (30d)"
+          value={
+            serverSummary?.totals
+              ? formatTokens(serverSummary.totals.tokens || 0)
+              : "—"
+          }
+          sub={
+            serverSummary?.totals?.saved_by_cache_usd
+              ? `${formatTokens(
+                  Math.round((serverSummary.totals.saved_by_cache_usd / 0.001) * 1000)
+                )} tokens saved by cache`
+              : "—"
+          }
+        />
+        <LiveKpi
+          icon={TrendingUp}
+          label="Top workflow"
+          value={serverSummary?.by_workflow?.[0]?.key || "—"}
+          sub={
+            serverSummary?.by_workflow?.[0]
+              ? `$${serverSummary.by_workflow[0].cost_usd.toFixed(3)}`
+              : "no spend yet"
+          }
+        />
+      </div>
+
+      <p className="text-[11px] uppercase tracking-wider mb-2" style={{ color: "var(--text-muted)" }}>
+        Sample data — engagement metrics not yet wired
       </p>
       <div
         className="grid gap-3 mb-5"

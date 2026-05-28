@@ -1358,18 +1358,18 @@ async def build_targets_from_post(
     link: str | None = None,
     ratios: dict[str, str] | None = None,
     tiktok_options: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Build a publish-ready target list from a Post's `platforms` toggle map.
+
+    Returns ``(resolved, skipped)`` where ``skipped`` carries one entry per
+    requested platform that ended up with zero usable destinations — used
+    by the scheduler to surface "IG silently dropped because Meta page
+    has no IG account linked" instead of pretending the publish succeeded.
 
     The HTTP /publish route receives explicit {platform, id} pairs the
     frontend picked. The scheduler doesn't have a frontend — it just has
     `platforms: {facebook: true, ...}` on the stored post, so it needs to
-    re-discover the connected destinations itself. Mirrors the resolution
-    /publish does inline, but starts one step earlier (toggles → targets)
-    and returns fully token-resolved rows ready for publish_to_targets.
-
-    Platforms that aren't connected are skipped silently — the caller
-    surfaces "no targets" on the post when the list ends up empty.
+    re-discover the connected destinations itself.
     """
     # Local imports keep publish.py free of an oauth.py module-level dep.
     from .oauth import _load_tokens, _fetch_meta_pages
@@ -1380,14 +1380,33 @@ async def build_targets_from_post(
     user_meta_token = meta_record.get("access_token")
     enabled = [k for k, v in (platforms or {}).items() if v]
     if not enabled:
-        return []
+        return [], []
 
     pages = await _fetch_meta_pages(user_meta_token) if user_meta_token else []
     resolved: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     effective_urls = media_urls or ([media_url] if media_url else [])
+
+    def _skip(platform: str, reason: str) -> None:
+        skipped.append({
+            "target_id": platform,
+            "target_label": platform.capitalize(),
+            "platform": platform,
+            "ok": False,
+            "platform_post_id": None,
+            "permalink_url": None,
+            "error": reason,
+            "raw": None,
+        })
 
     for platform in enabled:
         if platform == "facebook":
+            if not user_meta_token:
+                _skip(platform, "meta_not_connected")
+                continue
+            if not pages:
+                _skip(platform, "no_facebook_pages_found")
+                continue
             for page in pages:
                 resolved.append({
                     "platform": "facebook",
@@ -1400,6 +1419,10 @@ async def build_targets_from_post(
                     "link": link,
                 })
         elif platform == "instagram":
+            if not user_meta_token:
+                _skip(platform, "meta_not_connected")
+                continue
+            ig_targets_before = len(resolved)
             for page in pages:
                 ig = page.get("instagram") or {}
                 if not ig.get("ig_id"):
@@ -1413,16 +1436,24 @@ async def build_targets_from_post(
                     "media_urls": effective_urls,
                     "media_kind": media_kind,
                 })
+            if len(resolved) == ig_targets_before:
+                _skip(
+                    platform,
+                    "no_instagram_business_linked_to_page — link an IG "
+                    "Business account to the Page in Meta Business Suite.",
+                )
         elif platform == "tiktok":
-            # Scheduler path: refresh TikTok token if it's expired (24h
-            # short-lived). Mirrors what /publish does inline. Without this,
-            # any scheduled post >24h after the last manual reconnect would
-            # 401 silently.
+            # Refresh TikTok token if it's expired (24h short-lived).
+            # Mirrors what /publish does inline.
             from .oauth import resolve_tiktok_access_token
             token = await resolve_tiktok_access_token()
             tokens = _load_tokens()
             record = tokens.get("tiktok") or {}
             if not token:
+                _skip(
+                    platform,
+                    "tiktok_not_connected — reconnect TikTok in Settings.",
+                )
                 continue
             raw = record.get("raw") or {}
             open_id = record.get("open_id") or raw.get("open_id")
@@ -1435,6 +1466,19 @@ async def build_targets_from_post(
                 } else "video"
 
             tk_opts = tiktok_options or {}
+            # Default to "direct" so the auto path matches the manual
+            # path (TikTokOptions model default = "direct"). Previously
+            # the scheduler defaulted to "inbox" so auto-fired TikTok
+            # posts silently became drafts the user never tapped.
+            requested_audit = tk_opts.get("audit_mode", "direct")
+            granted_scope = (record.get("scope") or "").lower()
+            effective_audit = requested_audit
+            if requested_audit == "direct" and "video.publish" not in granted_scope:
+                # Scope downgrade — mirrors routes.py logic. Without
+                # video.publish granted the direct endpoint 401s; inbox
+                # still works so the post lands in TikTok drafts.
+                effective_audit = "inbox"
+
             resolved.append({
                 "platform": "tiktok",
                 "id": open_id or "tiktok",
@@ -1446,12 +1490,17 @@ async def build_targets_from_post(
                 "privacy_level": tk_opts.get("privacy_level", "SELF_ONLY"),
                 "disclose_video_branded": tk_opts.get("disclose_video_branded", False),
                 "disclose_video_your_brand": tk_opts.get("disclose_video_your_brand", False),
-                "audit_mode": tk_opts.get("audit_mode", "inbox"),
+                "audit_mode": effective_audit,
+                "audit_downgraded": requested_audit != effective_audit,
             })
         elif platform == "linkedin":
             record = tokens.get(platform) or {}
             token = record.get("access_token")
             if not token:
+                _skip(
+                    platform,
+                    "linkedin_not_connected — reconnect LinkedIn in Settings.",
+                )
                 continue
             raw = record.get("raw") or {}
             resolved.append({
@@ -1479,7 +1528,7 @@ async def build_targets_from_post(
                 )
                 for url in r["media_urls"]
             ]
-    return resolved
+    return resolved, skipped
 
 
 async def publish_to_targets(

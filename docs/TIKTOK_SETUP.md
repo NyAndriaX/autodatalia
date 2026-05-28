@@ -16,10 +16,10 @@ Datalia. Two stages:
 - A TikTok account intended to act as the **test publisher** during dev
   (can be anyone's — yours, the CEO's, a throwaway pro account).
 - A **stable HTTPS URL** pointing at our backend on port 8000. TikTok
-  rejects `localhost` and any HTTP redirect URI. Pick one:
-  - `ngrok` with a free static domain (recommended for dev)
-  - Cloudflare named tunnel + a domain on Cloudflare
-  - A real domain pointed at a VPS (when prod is ready)
+  rejects `localhost` and any HTTP redirect URI. Any tunneling option
+  with a fixed hostname works for dev (Cloudflare Tunnel, Tailscale
+  Funnel, ngrok with a reserved domain, etc.). For prod, use the real
+  domain Caddy will serve — see `DEPLOY.md`.
 
 ---
 
@@ -56,28 +56,21 @@ Inside the app dashboard:
 ### 1.3 Configure the OAuth redirect URI
 
 Set up the stable HTTPS tunnel **before** this step so you have the URL
-ready. ngrok recipe:
-
-```powershell
-# Sign up at ngrok.com → Domains → claim your auto-assigned static domain
-winget install Ngrok.Ngrok
-ngrok config add-authtoken YOUR_TOKEN_FROM_DASHBOARD
-ngrok http --url=<your-static-domain>.ngrok-free.app 8000
-# Leave the terminal running.
-```
+ready (any tunneling service with a fixed hostname works for dev, or a
+real domain for production).
 
 Then in the TikTok dashboard:
 
 1. **App info → URL properties** (or similar — naming varies)
 2. **Redirect URI**: add
-   `https://<your-static-domain>.ngrok-free.app/oauth/tiktok/callback`
+   `https://<your-public-host>/oauth/tiktok/callback`
 3. **Web/Desktop**: paste the same URL (some app types ask twice)
 4. Save
 
 In `infra/.env`:
 
 ```env
-OAUTH_REDIRECT_BASE=https://<your-static-domain>.ngrok-free.app
+OAUTH_REDIRECT_BASE=https://<your-public-host>
 ```
 
 Then restart the backend:
@@ -202,7 +195,7 @@ need URL verification.
 | Client Key + Secret in `.env` | ✅ |
 | Login Kit product | ❓ to verify |
 | Content Posting API product | ❓ to verify |
-| Stable HTTPS redirect URI | ❌ blocking — needs ngrok or domain |
+| Stable HTTPS redirect URI | ❌ blocking — needs a public HTTPS host |
 | Sandbox test user added + accepted | 🟡 added, awaiting acceptance |
 | OAUTH_REDIRECT_BASE set to HTTPS URL | ❌ still localhost |
 | Backend OAuth code | ✅ wired (`oauth.py`, `meta_accounts` route) |

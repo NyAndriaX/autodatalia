@@ -2,16 +2,13 @@
 
 Last updated: 2026-05-26 (post-testing session — May 24 fixes still current)
 
-This file is the current state handoff for the repository. It reconciles the
-active source tree with the older planning docs under `plans/` and `docs/`.
+This file is the current state handoff for the repository.
 
 ## Source Of Truth
 
 - Current architecture and run commands: `README.md`, `backend/README.md`,
   `frontend/README.md`, `infra/README.md`, and this file.
-- Historical roadmap: `plans/architecture_plan.md` and `plans/plan-day1.md`.
-- Current priority order: `plans/next-steps.md`.
-- Engineering handoff: `CLAUDE.md`.
+- Production deploy checklist: `DEPLOY.md`.
 
 When these disagree, verify against source before changing behavior.
 
@@ -55,8 +52,8 @@ are historical unless a future task explicitly reintroduces it.
 
 | Platform | Current source state | Runtime dependency |
 |---|---|---|
-| Facebook | **✅ Working.** OAuth, page publishing, text, photo, video, and multi-photo carousel all confirmed working in tests. `attached_media` uses JSON-encoded array per AGENTS.md. | Meta app credentials, page access, and valid public media URLs. |
-| Instagram | **⚠️ Partially blocked.** OAuth and single-image/video publishing implemented. Carousel child-container polling is correctly coded but fails in practice due to **Meta error 9004** (Meta's crawler can't fetch image URLs over ngrok). Not an app permissions issue — `instagram_content_publish` already includes carousels. Will resolve with production hosting. | Meta app credentials, IG Business account linked to a Page, **stable HTTPS domain** (not ngrok). |
+| Facebook | **✅ Working.** OAuth, page publishing, text, photo, video, and multi-photo carousel all confirmed working in tests. `attached_media` is sent as a JSON-encoded array. | Meta app credentials, page access, and valid public media URLs. |
+| Instagram | **✅ Working on stable hosting.** OAuth, single-image/video, and multi-image carousel publishing all implemented. Carousel parent-create uses linear backoff to handle Meta's eventual-consistency window. | Meta app credentials, IG Business account linked to a Page, stable HTTPS domain. |
 | TikTok | **✅ Working.** Photo carousels, video publishing, inbox/direct modes, audit UI flags. Default ratio for photos set to 9:16 (native full-screen). 1:1 and 4:5 accepted but letterboxed. 16:9 rejected for photos. | TikTok app credentials, accepted scopes, sandbox/audit status. |
 | LinkedIn | **✅ Implemented.** OAuth, member post creation, image upload with polling. Video not yet supported. | LinkedIn client credentials (`LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`). |
 | Google | Partial sign-in provider only. | Google credentials if sign-in is used. |
@@ -76,9 +73,9 @@ No Airtable or database migration is active in the current source.
 
 ## Active Blockers
 
-- **Production hosting** must be finished for reliable scheduling, stable OAuth
-  callbacks, and Instagram carousel publishing (Meta needs a stable HTTPS domain
-  to fetch images from — ngrok is too fragile).
+- **Production hosting** is the prerequisite for reliable scheduling, stable
+  OAuth callbacks, and Instagram carousel publishing (Meta needs a stable
+  HTTPS domain it can fetch images from). See `DEPLOY.md`.
 - `BACKEND_AUTH_TOKEN` should be set before exposing the backend publicly.
 - TikTok public/direct posting depends on the app's scopes, audit status, and
   URL/file-upload requirements.
@@ -114,9 +111,6 @@ No Airtable or database migration is active in the current source.
 
 ## Documentation Drift Notes
 
-- `plans/architecture_plan.md` documents the original target architecture. It
-  still mentions n8n, Airtable, Telegram, and ComfyUI as planned pieces.
-- `plans/plan-day1.md` is the Day 1 build prompt, not a current spec.
 - `docs/PassFront.md` describes the Day 1 frontend state and is stale in places:
   many views and API integrations now exist.
 - `docs/CompteRendu_Day1.md` and `docs/CompteRendu_Day2.md` are progress
