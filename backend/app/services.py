@@ -23,6 +23,41 @@ try:
 except Exception:  # pragma: no cover — environmental
     _get_ffmpeg_exe = None  # type: ignore[assignment]
 
+# ── Atomic file write helper ───────────────────────────────────────────
+# Every JSON store in the codebase (posts.json, automation_rules.json,
+# messages.json, cost_logs.json, video_jobs.json, .ai_cache.json) is the
+# source of truth for some flow — a crash during write would corrupt
+# the calendar, scheduler or cost dashboard. Going through this helper
+# guarantees a half-written file never reaches the persisted path: we
+# write to a sibling .tmp, fsync, then os.replace() which is atomic on
+# POSIX and on NTFS via MoveFileEx().
+
+
+def atomic_write_text(path, content: str, *, encoding: str = "utf-8") -> None:
+    """Write ``content`` to ``path`` atomically.
+
+    Same signature as ``Path.write_text`` so the callsites can swap
+    ``path.write_text(x)`` for ``atomic_write_text(path, x)`` with no
+    other change. Creates the parent dir if missing.
+    """
+    import os as _os
+    from pathlib import Path as _Path
+    path = _Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding=encoding) as f:
+        f.write(content)
+        f.flush()
+        try:
+            _os.fsync(f.fileno())
+        except OSError:
+            # Some filesystems (e.g. tmpfs on certain dev setups) don't
+            # support fsync; the rename is still atomic enough for our
+            # crash window since the kernel page cache holds the bytes.
+            pass
+    _os.replace(tmp, path)
+
+
 # ── Constants ──────────────────────────────────────────────────────────
 
 # .jfif is what Microsoft Edge / older Windows tools name a regular JPEG.
@@ -222,9 +257,7 @@ _AI_CACHE: dict[str, list[Any]] = _load_cache()
 
 def _save_cache() -> None:
     try:
-        _AI_CACHE_FILE.write_text(
-            json.dumps(_AI_CACHE), encoding="utf-8"
-        )
+        atomic_write_text(_AI_CACHE_FILE, json.dumps(_AI_CACHE))
     except Exception:
         pass  # cache is best-effort; never break a request over it
 
@@ -1090,7 +1123,7 @@ def _posts_read_raw() -> list[dict[str, Any]]:
 
 def _posts_write_raw(posts: list[dict[str, Any]]) -> None:
     _POSTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _POSTS_FILE.write_text(json.dumps(posts, indent=2), encoding="utf-8")
+    atomic_write_text(_POSTS_FILE, json.dumps(posts, indent=2))
 
 
 def posts_list() -> list[dict[str, Any]]:
@@ -1161,7 +1194,7 @@ def _automation_read_raw() -> list[dict[str, Any]]:
 
 def _automation_write_raw(rules: list[dict[str, Any]]) -> None:
     _AUTOMATION_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _AUTOMATION_FILE.write_text(json.dumps(rules, indent=2), encoding="utf-8")
+    atomic_write_text(_AUTOMATION_FILE, json.dumps(rules, indent=2))
 
 
 def automation_list() -> list[dict[str, Any]]:
@@ -1239,7 +1272,7 @@ def _messages_read_raw() -> list[dict[str, Any]]:
 
 def _messages_write_raw(items: list[dict[str, Any]]) -> None:
     _MESSAGES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _MESSAGES_FILE.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    atomic_write_text(_MESSAGES_FILE, json.dumps(items, indent=2))
 
 
 def messages_list() -> list[dict[str, Any]]:

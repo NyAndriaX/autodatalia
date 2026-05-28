@@ -91,7 +91,8 @@ def _read_raw() -> list[dict[str, Any]]:
 
 def _write_raw(items: list[dict[str, Any]]) -> None:
     _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _LOG_FILE.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    from .services import atomic_write_text
+    atomic_write_text(_LOG_FILE, json.dumps(items, indent=2))
 
 
 def record_call(

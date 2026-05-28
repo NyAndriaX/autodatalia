@@ -78,8 +78,33 @@ auth_required = Depends(require_token)
 # ── Utility endpoints ──────────────────────────────────────────────────
 
 @router.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, Any]:
+    """Liveness + dependency check.
+
+    Returns 200 only when both the API process AND Postgres are reachable.
+    Caddy / Docker healthchecks fail when this is non-200, so a Postgres
+    outage now actually surfaces as an unhealthy container instead of a
+    "200 OK" lie that masks the real problem until the first /auth call.
+    """
+    from fastapi import HTTPException
+    deps: dict[str, str] = {}
+    try:
+        from .db import _connect
+        conn = _connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        finally:
+            conn.close()
+        deps["postgres"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        deps["postgres"] = f"down: {type(exc).__name__}"
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "degraded", "dependencies": deps},
+        )
+    return {"status": "ok", "dependencies": deps}
 
 
 @router.get("/tunnel-status")

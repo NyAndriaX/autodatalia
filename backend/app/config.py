@@ -74,6 +74,40 @@ class Settings(BaseModel):
     video_cost_per_second_usd: float
 
 
+# Known-bad JWT secret. Anyone who has read this file can forge a
+# session token with it, so we refuse to use it when ENV=production.
+_JWT_DEFAULT_INSECURE = "super-secret-default-key-change-in-prod"
+
+
+def _resolve_jwt_secret() -> str:
+    """Return the JWT secret, refusing to silently fall back to the
+    hardcoded default in production.
+
+    Behaviour:
+      * ``JWT_SECRET`` set to a non-empty value → use it.
+      * Unset or empty in development (``ENV != production``) → return
+        the placeholder with a warning print, so local dev keeps working.
+      * Unset or empty in production → raise so the container fails to
+        boot. Better a loud crash at deploy time than a silent prod with
+        a forgeable session secret everyone knows.
+    """
+    secret = os.getenv("JWT_SECRET", "").strip()
+    env = os.getenv("ENV", "development").strip().lower()
+    if secret and secret != _JWT_DEFAULT_INSECURE:
+        return secret
+    if env in {"prod", "production"}:
+        raise RuntimeError(
+            "JWT_SECRET is unset or still the placeholder. "
+            "Set ENV=production *and* JWT_SECRET to a fresh 32-byte hex "
+            "(openssl rand -hex 32) before deploying — see DEPLOY.md."
+        )
+    print(
+        "[config] WARNING: JWT_SECRET unset — using the public placeholder. "
+        "Safe for local dev only; set ENV=production to require a real secret."
+    )
+    return _JWT_DEFAULT_INSECURE
+
+
 def load_settings() -> Settings:
     """Read environment variables and return a validated Settings instance."""
     content_dir = Path(os.getenv("CONTENT_DIR", "/app/content")).resolve()
@@ -118,7 +152,7 @@ def load_settings() -> Settings:
         # publicly with no auth. Opt in via env when IG publishing needs it.
         tunnel_enabled=os.getenv("TUNNEL_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"},
-        jwt_secret=os.getenv("JWT_SECRET", "super-secret-default-key-change-in-prod"),
+        jwt_secret=_resolve_jwt_secret(),
         database_url=os.getenv("DATABASE_URL", "").strip(),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_default_chat_id=os.getenv("TELEGRAM_DEFAULT_CHAT_ID", "").strip(),

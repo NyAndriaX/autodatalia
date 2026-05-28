@@ -65,7 +65,8 @@ def _read_raw() -> list[dict[str, Any]]:
 
 def _write_raw(items: list[dict[str, Any]]) -> None:
     _JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _JOBS_FILE.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    from .services import atomic_write_text
+    atomic_write_text(_JOBS_FILE, json.dumps(items, indent=2))
 
 
 def list_jobs() -> list[dict[str, Any]]:
@@ -119,22 +120,6 @@ def delete_job(job_id: str) -> bool:
 # ── Provider selection ────────────────────────────────────────────────
 
 
-# Replicate "official model" endpoint ( /v1/models/{owner}/{name}/predictions )
-# only works for models flagged as official by Replicate. Community uploads
-# (which LTX-Video is) need the /v1/predictions endpoint with a version hash.
-# Keep this list short and conservative — false positives here just cause
-# 404s that the user already sees, but false negatives waste a configured
-# token. Add models as you confirm they work via the bare-model URL.
-_OFFICIAL_REPLICATE_MODELS: set[str] = {
-    # Add officially-supported model ids here as you confirm them, e.g.
-    # "stability-ai/stable-video-diffusion".
-}
-
-
-def _is_official_replicate_model(model: str) -> bool:
-    return (model or "").lower() in _OFFICIAL_REPLICATE_MODELS
-
-
 def _pick_provider(requested: str | None) -> str:
     """Resolve the effective provider for a job.
 
@@ -155,10 +140,11 @@ def _pick_provider(requested: str | None) -> str:
         # provider="replicate" if they want the version-pinned route.
         "replicate": bool(
             settings.replicate_api_token
-            and (
-                settings.replicate_video_version
-                or _is_official_replicate_model(settings.replicate_video_model)
-            )
+            # Replicate community models (which LTX-Video is) 404 on the
+            # bare /v1/models/{owner}/{name}/predictions URL — you must
+            # pin a version hash for /v1/predictions to work. Only treat
+            # replicate as "configured" once that hash is set.
+            and bool(settings.replicate_video_version)
         ),
         "fallback": True,
     }

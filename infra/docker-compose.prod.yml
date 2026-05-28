@@ -31,6 +31,11 @@ services:
     # NO host port — only caption-api reaches Postgres on the docker
     # network. Open 5432 only if you need an external pgAdmin / psql,
     # and put it behind firewall rules.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-datalia} -d ${POSTGRES_DB:-datalia}"]
       interval: 10s
@@ -56,6 +61,11 @@ services:
     environment:
       # Caddyfile reads {$API_DOMAIN} — set in .env.production
       API_DOMAIN: ${API_DOMAIN}
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     depends_on:
       - caption-api
     healthcheck:
@@ -75,6 +85,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Cap log volume — backend logs every publish + every video job poll.
+    # 5×20MB = 100MB ceiling per service, plenty for a multi-week debug
+    # window without filling the host disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 30s
@@ -128,6 +146,10 @@ services:
       # JWT secret for user auth tokens — MUST be overridden in prod.
       # Generate with: openssl rand -hex 32
       JWT_SECRET: ${JWT_SECRET:-}
+      # Marks this as a prod boot — config.py refuses to start when
+      # JWT_SECRET is unset or still the public placeholder, so a
+      # mis-deploy with a forgeable secret fails loud instead of silent.
+      ENV: production
       # Postgres backing the users table (auth.py / db.py). Prefer
       # DATABASE_URL when set (managed Postgres / external host);
       # otherwise the POSTGRES_* split is used against the in-compose
