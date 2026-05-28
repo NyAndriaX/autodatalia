@@ -1,6 +1,7 @@
 "use client";
 
 import { useSelector, useDispatch } from "react-redux";
+import { useTranslations } from "next-intl";
 import TikTokOptionsPanel from "./TikTokOptionsPanel";
 import {
   setContent,
@@ -85,8 +86,8 @@ const MODES = [
 /* Compact transforms — the tone selector handles tone separately, so this
    list is now just the two length actions. */
 const QUICK_ACTIONS = [
-  { id: "shorten", label: "Shorten", icon: ArrowDownToLine },
-  { id: "expand", label: "Expand", icon: ArrowUpFromLine },
+  { id: "shorten", label: "shorten", icon: ArrowDownToLine },
+  { id: "expand", label: "expand", icon: ArrowUpFromLine },
 ];
 
 const TEMPLATES = [
@@ -105,6 +106,8 @@ function effectiveRatio(platformId, ratios) {
 
 export default function CreationEditor() {
   const dispatch = useDispatch();
+  const t = useTranslations("creation");
+  const tCommon = useTranslations("common");
   const { currentPost, aiGeneration } = useSelector((state) => state.editor);
   const recentPublishes = useSelector((s) => s.ui.recentPublishes);
   const [currentPreviewIdx, setCurrentPreviewIdx] = useState(0);
@@ -349,7 +352,7 @@ export default function CreationEditor() {
 
           {/* Text editor */}
           <div className="relative">
-            <label htmlFor="content-editor" className="sr-only">Post content</label>
+            <label htmlFor="content-editor" className="sr-only">{tCommon("loading") && ""}{/* hidden */}Post content</label>
             <textarea
               id="content-editor"
               value={currentPost.content}
@@ -494,7 +497,7 @@ export default function CreationEditor() {
                     ) : (
                       <Icon size={14} aria-hidden="true" />
                     )}
-                    {action.label}
+                    {t(action.label)}
                   </button>
                 );
               })}
@@ -553,7 +556,7 @@ export default function CreationEditor() {
                 onClick={() => handleGenerateMedia("image")}
                 disabled={!!generatingMediaKind}
                 className="btn-secondary text-xs inline-flex items-center gap-1.5"
-                title="Generate an image from the current prompt"
+                title={t("aiImage")}
               >
                 {generatingMediaKind === "image" ? (
                   <Loader2 size={13} className="animate-spin" />
@@ -567,7 +570,7 @@ export default function CreationEditor() {
                 onClick={() => handleGenerateMedia("video")}
                 disabled={!!generatingMediaKind}
                 className="btn-secondary text-xs inline-flex items-center gap-1.5"
-                title="Generate a motion video from the current prompt"
+                title={t("aiVideo")}
               >
                 {generatingMediaKind === "video" ? (
                   <Loader2 size={13} className="animate-spin" />
@@ -770,8 +773,8 @@ export default function CreationEditor() {
               style={{ color: "var(--text-muted)" }}
             >
               <Zap size={40} className="mb-3 opacity-30" aria-hidden="true" />
-              <p className="text-sm">No platforms selected</p>
-              <p className="text-xs mt-1">Toggle platforms on the left to preview</p>
+              <p className="text-sm">{t("noPlatformsSelected") || "No platforms selected"}</p>
+              <p className="text-xs mt-1">{t("togglePlatformsHint") || "Toggle platforms on the left to preview"}</p>
             </div>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col items-center">
@@ -1005,7 +1008,7 @@ function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
         style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
       >
         <Send size={16} aria-hidden="true" />
-        Publish now
+        {t("publishNow")}
       </button>
       <button
         type="button"
@@ -1036,7 +1039,7 @@ function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
         >
           <MenuItem
             icon={CalendarClock}
-            label="Schedule for later…"
+            label={t("scheduleFor")}
             onClick={() => {
               setOpen(false);
               onSchedule();
@@ -1044,7 +1047,7 @@ function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
           />
           <MenuItem
             icon={MessageSquare}
-            label="Submit for validation"
+            label={t("submitForValidation")}
             sub="Telegram approval flow"
             onClick={() => {
               setOpen(false);
@@ -1223,7 +1226,7 @@ function PlatformPreview({
               {ratio}{" "}
               {isVertical ? "Vertical" : isSquare ? "Square" : "Landscape"}
             </p>
-            <p className="text-xs mt-0.5 opacity-60">Upload media on the left to preview</p>
+            <p className="text-xs mt-0.5 opacity-60">{t("uploadHint") || "Upload media on the left to preview"}</p>
           </div>
         )}
       </div>

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
+import { useTranslations } from "next-intl";
 import {
   UploadCloud,
   Sparkles,
@@ -28,9 +29,9 @@ import { addMedia } from "../../store/editorSlice";
 import { addNotification, setActiveView } from "../../store/uiSlice";
 
 const TABS = [
-  { id: "uploads", label: "Uploads", icon: ImageIcon },
-  { id: "ai", label: "AI-Generated", icon: Sparkles },
-  { id: "brand", label: "Brand Kit", icon: Palette },
+  { id: "uploads", label: "tabUploads", icon: ImageIcon },
+  { id: "ai", label: "tabAi", icon: Sparkles },
+  { id: "brand", label: "tabBrand", icon: Palette },
 ];
 
 /* Tile design follows the canonical Google-Photos / Dropbox gallery
@@ -39,6 +40,8 @@ const TABS = [
    badge top-left tells the team which assets are doing work so cleanup
    decisions don't accidentally delete an in-use image. */
 function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect, selectionMode }) {
+  const t = useTranslations("library");
+  const tCommon = useTranslations("common");
   const Icon = item.kind === "video" ? Film : ImageIcon;
   // Prefer the persisted server URL — the local blob: previewUrl can be
   // revoked or invalidated by a dev HMR reload or after sitting unused.
@@ -122,8 +125,8 @@ function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect,
           <span
             className="inline-flex items-center justify-center w-5 h-5 rounded-full"
             style={{ background: "rgba(0,0,0,0.55)" }}
-            aria-label="Video"
-            title="Video"
+            aria-label={t("videoBadge")}
+            title={t("videoBadge")}
           >
             <Film size={11} className="text-white" />
           </span>
@@ -160,7 +163,7 @@ function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect,
             border: "1px solid rgba(255,255,255,0.15)",
           }}
           aria-label={`Delete ${item.name}`}
-          title="Delete"
+          title={tCommon("delete")}
         >
           <Trash2 size={13} />
         </button>
@@ -192,7 +195,7 @@ function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect,
               color: "#fff",
               boxShadow: "0 4px 12px rgba(15, 23, 42, 0.35)",
             }}
-            title="Add this asset to a new post"
+            title={t("useInNewPost")}
             onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.97)")}
             onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
             onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
@@ -224,7 +227,7 @@ function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect,
           className="absolute inset-0 flex items-center justify-center text-xs px-2 text-center"
           style={{ background: "rgba(220,38,38,0.65)", color: "#fff" }}
         >
-          {item.error || "Upload failed"}
+          {item.error || t("uploadFailed")}
         </div>
       )}
       <span
@@ -239,6 +242,8 @@ function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect,
 
 export default function MediaLibraryView() {
   const dispatch = useDispatch();
+  const t = useTranslations("library");
+  const tCommon = useTranslations("common");
   const scheduledPosts = useSelector((s) => s.calendar.scheduledPosts);
   const [tab, setTab] = useState("uploads");
   // Locally-known uploads (this session) — backend-persisted hits come from /search.
@@ -619,7 +624,7 @@ export default function MediaLibraryView() {
               onClick={selectAllVisible}
               className="text-xs hover:underline inline-flex items-center gap-1"
               style={{ color: "var(--text-secondary)" }}
-              title="Select every uploaded item visible in this list"
+              title={tCommon("selectAll")}
             >
               <CheckCheck size={12} /> Select all
             </button>
@@ -641,7 +646,7 @@ export default function MediaLibraryView() {
                 background: "var(--accent-primary)",
                 color: "#fff",
               }}
-              title="Add every selected item to the post you're composing"
+              title={t("useInNewPost")}
             >
               <Wand2 size={14} /> Use in new post
             </button>
@@ -661,13 +666,13 @@ export default function MediaLibraryView() {
 
       <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
         <div className="flex gap-2 flex-wrap">
-          {TABS.map((t) => {
-            const Icon = t.icon;
-            const on = tab === t.id;
+          {TABS.map((tabDef) => {
+            const Icon = tabDef.icon;
+            const on = tab === tabDef.id;
             return (
               <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
+                key={tabDef.id}
+                onClick={() => setTab(tabDef.id)}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
                 style={{
                   background: on ? "rgba(99,102,241,0.12)" : "var(--bg-tertiary)",
@@ -676,7 +681,7 @@ export default function MediaLibraryView() {
                 }}
               >
                 <Icon size={15} />
-                {t.label}
+                {t(tabDef.label)}
               </button>
             );
           })}
@@ -695,7 +700,7 @@ export default function MediaLibraryView() {
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search media"
+                placeholder={t("searchMedia")}
                 className="bg-transparent outline-none text-sm"
                 style={{ color: "var(--text-primary)", width: 160 }}
               />
@@ -753,7 +758,7 @@ export default function MediaLibraryView() {
               <p className="text-sm">
                 {searching
                   ? "Searching…"
-                  : "Drag files here or click Upload to add media."}
+                  : t("dragHere")}
               </p>
               <p className="text-xs">Max {Math.round(MAX_SIZE_BYTES / 1024 / 1024)} MB per file</p>
             </div>

@@ -150,9 +150,10 @@ def _pick_provider(requested: str | None) -> str:
     }
     if requested in configured and configured[requested]:
         return requested
-    # Auto / unsupported / unconfigured request — try the cheapest real
-    # provider first (LTX official 100 free credits → fal → fallback).
-    for p in ("ltx", "fal", "fallback"):
+    # Auto / unsupported / unconfigured request — fal.ai first (team has
+    # a topped-up balance there), then LTX official (100 free credits),
+    # then the ffmpeg Ken Burns fallback.
+    for p in ("fal", "ltx", "fallback"):
         if configured[p]:
             return p
     return "fallback"

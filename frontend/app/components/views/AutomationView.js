@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDispatch } from "react-redux";
+import { useTranslations } from "next-intl";
 import {
   Bot,
   Plus,
@@ -25,29 +26,12 @@ import { addNotification } from "../../store/uiSlice";
 import { PLATFORMS, TONES } from "../../lib/platforms";
 import TimePicker from "./TimePicker";
 
-// Form view-models mirror the backend AutomationRule pydantic model.
-const CONTENT_TYPES = [
-  { id: "photo", label: "Photo" },
-  { id: "video", label: "Video" },
-  { id: "carousel", label: "Carousel" },
-  { id: "template", label: "Template" },
-  { id: "text", label: "Text" },
-];
-
-const OBJECTIVES = [
-  { id: "informative", label: "Informative" },
-  { id: "promotional", label: "Promotional" },
-  { id: "engagement", label: "Engagement" },
-  { id: "acquisition", label: "Acquisition" },
-];
-
-const FREQUENCIES = [
-  { id: "daily", label: "Daily" },
-  { id: "weekdays", label: "Specific days" },
-  { id: "weekly", label: "Weekly" },
-  { id: "monthly", label: "Monthly" },
-  { id: "custom", label: "Custom" },
-];
+// Form option ids mirror the backend AutomationRule pydantic model.
+// Labels are resolved at render time via useTranslations() so locale
+// changes flip the segmented-control labels instantly.
+const CONTENT_TYPE_IDS = ["photo", "video", "carousel", "template", "text"];
+const OBJECTIVE_IDS = ["informative", "promotional", "engagement", "acquisition"];
+const FREQUENCY_IDS = ["daily", "weekdays", "weekly", "monthly", "custom"];
 
 const LEAD_PRESETS = [5, 30, 60];
 
@@ -140,6 +124,30 @@ function Field({ label, hint, children }) {
 
 export default function AutomationView() {
   const dispatch = useDispatch();
+  const t = useTranslations("automation");
+  const tCommon = useTranslations("common");
+  // Translated segmented-control options. Built inside the component so
+  // a locale flip re-renders the labels without remounting.
+  const CONTENT_TYPES = useMemo(
+    () =>
+      CONTENT_TYPE_IDS.map((id) => ({
+        id,
+        label: t(id === "text" ? "textOnly" : id),
+      })),
+    [t]
+  );
+  const OBJECTIVES = useMemo(
+    () => OBJECTIVE_IDS.map((id) => ({ id, label: t(id) })),
+    [t]
+  );
+  const FREQUENCIES = useMemo(
+    () =>
+      FREQUENCY_IDS.map((id) => ({
+        id,
+        label: t(id === "weekdays" ? "specificDays" : id === "custom" ? "custom" : id),
+      })),
+    [t]
+  );
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState(null); // null = no edit; "new" = create form
@@ -177,7 +185,7 @@ export default function AutomationView() {
 
   useEffect(() => {
     if (selectedId === "new") {
-      setDraft({ ...DEFAULT_AUTOMATION_RULE, name: "New rule" });
+      setDraft({ ...DEFAULT_AUTOMATION_RULE, name: t("newRuleDraftName") });
     } else if (selected) {
       // Merge with defaults so older saved rules with missing fields don't crash the form.
       setDraft({ ...DEFAULT_AUTOMATION_RULE, ...selected });
@@ -223,7 +231,7 @@ export default function AutomationView() {
   const handleSave = async () => {
     if (!draft.name?.trim()) {
       dispatch(
-        addNotification({ message: "Rule name is required.", type: "error" })
+        addNotification({ message: t("ruleNameRequired"), type: "error" })
       );
       return;
     }
@@ -242,7 +250,7 @@ export default function AutomationView() {
         await updateAutomationRule(selected.id, draft);
         await refresh();
         dispatch(
-          addNotification({ message: "Rule updated.", type: "success" })
+          addNotification({ message: t("ruleUpdated"), type: "success" })
         );
       }
       // Close the editor on successful save — the list now reflects the
@@ -272,7 +280,7 @@ export default function AutomationView() {
       await deleteAutomationRule(rule.id);
       if (selectedId === rule.id) setSelectedId(null);
       refresh();
-      dispatch(addNotification({ message: "Rule deleted.", type: "success" }));
+      dispatch(addNotification({ message: t("ruleDeleted"), type: "success" }));
     } catch (err) {
       dispatch(addNotification({ message: `Failed: ${err.message}`, type: "error" }));
     }
@@ -294,10 +302,10 @@ export default function AutomationView() {
                 className="text-xl font-bold leading-tight"
                 style={{ color: "var(--text-primary)" }}
               >
-                Automation
+                {t("title")}
               </h1>
               <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-                Generation, Telegram validation, scheduled publish
+                {t("subtitle")}
               </p>
             </div>
           </div>
@@ -306,7 +314,7 @@ export default function AutomationView() {
             onClick={() => setSelectedId("new")}
             className="btn-primary inline-flex items-center gap-2"
           >
-            <Plus size={16} /> New rule
+            <Plus size={16} /> {t("newRule")}
           </button>
         </div>
 
@@ -326,7 +334,7 @@ export default function AutomationView() {
                 className="text-xs px-2 py-6 text-center"
                 style={{ color: "var(--text-muted)" }}
               >
-                No rules yet. Click "New rule" to create one.
+                {t("noRules")}
               </div>
             )}
             <ul className="flex flex-col gap-1">
@@ -363,7 +371,7 @@ export default function AutomationView() {
                               ? "var(--status-published)"
                               : "var(--text-muted)",
                           }}
-                          title={r.active ? "Active" : "Inactive"}
+                          title={r.active ? t("active") : t("inactive")}
                         />
                       </div>
                       <div
@@ -417,7 +425,7 @@ export default function AutomationView() {
                     className="text-base font-bold"
                     style={{ color: "var(--text-primary)" }}
                   >
-                    {selectedId === "new" ? "New rule" : draft.name}
+                    {selectedId === "new" ? t("newRule") : draft.name}
                   </h2>
                   <div className="flex items-center gap-2">
                     {selected && (
@@ -426,7 +434,7 @@ export default function AutomationView() {
                           type="button"
                           onClick={() => handleToggleActive(selected)}
                           className="btn-secondary text-xs inline-flex items-center gap-1"
-                          title={selected.active ? "Deactivate" : "Activate"}
+                          title={selected.active ? t("deactivate") : t("activate")}
                         >
                           {selected.active ? (
                             <>
@@ -452,7 +460,7 @@ export default function AutomationView() {
                       type="button"
                       onClick={() => setSelectedId(null)}
                       className="btn-secondary text-xs inline-flex items-center gap-1"
-                      title="Close"
+                      title={tCommon("close")}
                     >
                       <X size={13} />
                     </button>
@@ -461,27 +469,27 @@ export default function AutomationView() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
                   <div>
-                    <Field label="Rule name">
+                    <Field label={t("ruleName")}>
                       <input
                         type="text"
                         className="input-field"
                         value={draft.name}
                         onChange={(e) => updateDraft({ name: e.target.value })}
-                        placeholder="e.g. Morning business carousel"
+                        placeholder={t("namePlaceholder")}
                       />
                     </Field>
 
-                    <Field label="Content type">
+                    <Field label={t("contentType")}>
                       <SegmentedControl
                         options={CONTENT_TYPES}
                         value={draft.content_type}
                         onChange={(v) => updateDraft({ content_type: v })}
-                        ariaLabel="Content type"
+                        ariaLabel={t("contentType")}
                       />
                     </Field>
 
                     <Field
-                      label="Number of media"
+                      label={t("numMedia")}
                       hint="Fixed = always N. Range = AI picks within [min, max]."
                     >
                       <div className="mb-2">
@@ -492,7 +500,7 @@ export default function AutomationView() {
                           ]}
                           value={draft.num_media?.mode || "fixed"}
                           onChange={(v) => updateNumMedia({ mode: v })}
-                          ariaLabel="Media count mode"
+                          ariaLabel={t("numMedia")}
                         />
                       </div>
                       {draft.num_media?.mode === "fixed" ? (
@@ -547,11 +555,11 @@ export default function AutomationView() {
                         className="input-field"
                         value={draft.domain}
                         onChange={(e) => updateDraft({ domain: e.target.value })}
-                        placeholder="business, real estate, marketing, health…"
+                        placeholder={t("domainPlaceholder")}
                       />
                     </Field>
 
-                    <Field label="Target audience">
+                    <Field label={t("audience")}>
                       <input
                         type="text"
                         className="input-field"
@@ -559,7 +567,7 @@ export default function AutomationView() {
                         onChange={(e) =>
                           updateDraft({ target_audience: e.target.value })
                         }
-                        placeholder="CEOs, startups, investors…"
+                        placeholder={t("audiencePlaceholder")}
                       />
                     </Field>
 
@@ -605,16 +613,16 @@ export default function AutomationView() {
                       </div>
                     </Field>
 
-                    <Field label="Objective">
+                    <Field label={t("objective")}>
                       <SegmentedControl
                         options={OBJECTIVES}
                         value={draft.objective}
                         onChange={(v) => updateDraft({ objective: v })}
-                        ariaLabel="Objective"
+                        ariaLabel={t("objective")}
                       />
                     </Field>
 
-                    <Field label="Description style">
+                    <Field label={t("descriptionStyle")}>
                       <input
                         type="text"
                         className="input-field"
@@ -622,7 +630,7 @@ export default function AutomationView() {
                         onChange={(e) =>
                           updateDraft({ description_style: e.target.value })
                         }
-                        placeholder="e.g. concise, factual, no emojis"
+                        placeholder={t("tonePlaceholder")}
                       />
                     </Field>
 
@@ -634,18 +642,18 @@ export default function AutomationView() {
                         onChange={(e) =>
                           updateDraft({ extra_brief: e.target.value })
                         }
-                        placeholder="Any free-form instruction to prepend to the AI prompt."
+                        placeholder={t("extraBriefPlaceholder")}
                       />
                     </Field>
                   </div>
 
                   <div>
-                    <Field label="Frequency">
+                    <Field label={t("frequency")}>
                       <SegmentedControl
                         options={FREQUENCIES}
                         value={draft.schedule?.frequency || "daily"}
                         onChange={(v) => updateSchedule({ frequency: v })}
-                        ariaLabel="Frequency"
+                        ariaLabel={t("frequency")}
                       />
                     </Field>
 
@@ -680,7 +688,7 @@ export default function AutomationView() {
 
                     {draft.schedule?.frequency === "monthly" && (
                       <Field
-                        label="Days of month"
+                        label={t("daysOfMonth")}
                         hint="Comma-separated numbers (e.g. 1, 15, 28)"
                       >
                         <input
@@ -696,12 +704,12 @@ export default function AutomationView() {
                               );
                             updateSchedule({ month_days: nums });
                           }}
-                          placeholder="1, 15, 28"
+                          placeholder={t("rulePromptDaysPlaceholder")}
                         />
                       </Field>
                     )}
 
-                    <Field label="Publish times">
+                    <Field label={t("publishTimes")}>
                       <div className="flex flex-col gap-2">
                         {(draft.schedule?.times || []).map((t, idx) => (
                           <div key={idx} className="flex items-center gap-2">
@@ -714,7 +722,7 @@ export default function AutomationView() {
                                 type="button"
                                 onClick={() => removeTime(idx)}
                                 className="p-1.5 rounded-md transition-colors"
-                                title="Remove this time"
+                                title={t("removeThisTime")}
                                 style={{ color: "var(--status-error)" }}
                               >
                                 <X size={14} />
@@ -733,7 +741,7 @@ export default function AutomationView() {
                       </div>
                     </Field>
 
-                    <Field label="Timezone">
+                    <Field label={tCommon("language") === "Langue" ? "Fuseau horaire" : "Timezone"}>
                       <input
                         type="text"
                         className="input-field"
@@ -741,13 +749,13 @@ export default function AutomationView() {
                         onChange={(e) =>
                           updateSchedule({ timezone: e.target.value })
                         }
-                        placeholder="e.g. Europe/Paris"
+                        placeholder={t("tzPlaceholder")}
                       />
                     </Field>
 
                     <Field
-                      label="Telegram validation lead"
-                      hint="How long before publish the bot asks for approval."
+                      label={t("telegramValidationLead")}
+                      hint={t("leadHint")}
                     >
                       <div className="flex flex-wrap items-center gap-2">
                         <div
@@ -814,11 +822,11 @@ export default function AutomationView() {
                             validation_chat_id: e.target.value || null,
                           })
                         }
-                        placeholder="Numeric chat ID"
+                        placeholder={t("telegramChatPlaceholder")}
                       />
                     </Field>
 
-                    <Field label="Platforms">
+                    <Field label={t("publishTo")}>
                       <div className="flex flex-wrap gap-1.5">
                         {PLATFORMS.map((p) => {
                           const Icon = p.icon;

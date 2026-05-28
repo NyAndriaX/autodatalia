@@ -252,14 +252,6 @@ export default function Topbar() {
             <X size={14} aria-hidden="true" />
           </button>
         )}
-        <div
-          className="flex items-center gap-1 mr-3 px-2 py-1 rounded text-xs"
-          style={{ background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border-default)" }}
-          aria-hidden="true"
-        >
-          <Command size={11} />
-          <span>K</span>
-        </div>
       </div>
 
       {/* Results dropdown */}

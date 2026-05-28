@@ -251,10 +251,10 @@ export default function DashboardView() {
             className="text-xl md:text-2xl font-bold mb-1"
             style={{ color: "var(--text-primary)" }}
           >
-            Welcome back
+            {t("welcomeBack")}
           </h1>
           <p className="text-xs md:text-sm" style={{ color: "var(--text-muted)" }}>
-            Today at a glance{dateLabel ? ` — ${dateLabel}` : ""}
+            {t("todayAtAGlance", {date: dateLabel || ""})}
           </p>
         </div>
 
@@ -282,10 +282,8 @@ export default function DashboardView() {
             value={fmt(totalAudience)}
             sub={
               connectedCount > 0
-                ? `Across ${connectedCount} connected platform${
-                    connectedCount === 1 ? "" : "s"
-                  }`
-                : "Connect a platform to see real numbers"
+                ? t("acrossConnectedPlatforms", { n: connectedCount })
+                : t("connectPlatform")
             }
             accent="var(--status-approved)"
             onClick={() => dispatch(setActiveView("settings"))}
@@ -293,18 +291,18 @@ export default function DashboardView() {
           />
           <BigKpi
             icon={CalendarDays}
-            label="Scheduled · 7d"
+            label={t("scheduled7d")}
             value={stats.thisWeek}
-            sub={`${stats.total} total in calendar`}
+            sub={t("totalInCalendar", {n: stats.total})}
             accent="var(--accent-secondary, #6366f1)"
             onClick={() => dispatch(setActiveView("calendar"))}
             live
           />
           <BigKpi
             icon={CheckCircle2}
-            label="Published · 7d"
+            label={t("published7d")}
             value={stats.publishedThisWeek}
-            sub={`${stats.byStatus.published} all-time`}
+            sub={t("allTime", {n: stats.byStatus.published})}
             accent="var(--status-approved)"
             onClick={() => dispatch(setActiveView("calendar"))}
             live
@@ -325,21 +323,21 @@ export default function DashboardView() {
             icon={Clock}
             label={t("pendingApproval")}
             value={stats.byStatus.pending}
-            sub={`${stats.byStatus.draft} drafts`}
+            sub={t("draftsCount", {n: stats.byStatus.draft})}
             tone={stats.byStatus.pending > 0 ? "warn" : undefined}
           />
           <SmallKpi
             icon={Sparkles}
             label={t("aiCacheHits")}
             value={aiUsage.cacheHits}
-            sub={`${aiUsage.calls} calls`}
+            sub={t("callsCount", {n: aiUsage.calls})}
             onClick={() => dispatch(setActiveView("analytics"))}
           />
           <SmallKpi
             icon={Send}
             label={t("drafts")}
             value={stats.byStatus.draft}
-            sub="awaiting schedule"
+            sub={t("awaitingSchedule")}
           />
           <SmallKpi
             icon={AlertCircle}
@@ -357,14 +355,14 @@ export default function DashboardView() {
         {/* 7-day calendar preview — scrolls horizontally on phones so the
             day cells stay readable instead of pinched. */}
         <Section
-          title="Next 7 days"
+          title={t("next7Days")}
           action={
             <button
               className="text-xs inline-flex items-center gap-1"
               style={{ color: "var(--accent-primary)" }}
               onClick={() => dispatch(setActiveView("calendar"))}
             >
-              Open calendar <ArrowRight size={12} />
+              {t("openCalendar")} <ArrowRight size={12} />
             </button>
           }
         >
@@ -483,7 +481,7 @@ export default function DashboardView() {
                 icon={Users}
                 title={t("noPlatformsConnected")}
                 body="Connect Facebook or Instagram in Settings to see real follower counts here."
-                cta="Open Settings"
+                cta={t("openSettings")}
                 onCta={() => dispatch(setActiveView("settings"))}
               />
             ) : (
@@ -571,7 +569,7 @@ export default function DashboardView() {
                 icon={Send}
                 title={t("nothingPublishedYet")}
                 body="Posts you publish manually or via the scheduler show up here with click-through links."
-                cta="Create a post"
+                cta={t("createPost")}
                 onCta={() => dispatch(setActiveView("creation"))}
               />
             ) : (
@@ -698,7 +696,7 @@ export default function DashboardView() {
                           : "var(--text-muted)",
                       }}
                     >
-                      {connected ? "Connected" : "Not connected"}
+                      {connected ? t("connected") : t("notConnected")}
                     </span>
                   </div>
                 );
