@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSelector, useDispatch } from "react-redux";
+import { useTranslations } from "next-intl";
 import { fetchConnections } from "../../lib/oauthService";
 import {
   Sparkles,
@@ -82,6 +83,7 @@ const MONTH_LONG = [
  */
 export default function DashboardView() {
   const dispatch = useDispatch();
+  const t = useTranslations("dashboard");
   const scheduledPosts = useSelector((s) => s.calendar.scheduledPosts);
   const aiUsage = useSelector((s) => s.ui.aiUsage);
   const isMobile = useIsMobile();
@@ -267,7 +269,7 @@ export default function DashboardView() {
         >
           <BigKpi
             icon={Coins}
-            label="Credits spent"
+            label={t("creditsSpent")}
             value={fmt(creditsSpent)}
             sub={`≈ €${eurSpent.toFixed(2)}`}
             accent="var(--accent-primary)"
@@ -276,7 +278,7 @@ export default function DashboardView() {
           />
           <BigKpi
             icon={Users}
-            label="Total audience"
+            label={t("totalAudience")}
             value={fmt(totalAudience)}
             sub={
               connectedCount > 0
@@ -321,27 +323,27 @@ export default function DashboardView() {
         >
           <SmallKpi
             icon={Clock}
-            label="Pending approval"
+            label={t("pendingApproval")}
             value={stats.byStatus.pending}
             sub={`${stats.byStatus.draft} drafts`}
             tone={stats.byStatus.pending > 0 ? "warn" : undefined}
           />
           <SmallKpi
             icon={Sparkles}
-            label="AI cache hits"
+            label={t("aiCacheHits")}
             value={aiUsage.cacheHits}
             sub={`${aiUsage.calls} calls`}
             onClick={() => dispatch(setActiveView("analytics"))}
           />
           <SmallKpi
             icon={Send}
-            label="Drafts"
+            label={t("drafts")}
             value={stats.byStatus.draft}
             sub="awaiting schedule"
           />
           <SmallKpi
             icon={AlertCircle}
-            label="Errors"
+            label={t("errors")}
             value={stats.byStatus.error}
             tone={stats.byStatus.error > 0 ? "error" : undefined}
             onClick={
@@ -465,7 +467,7 @@ export default function DashboardView() {
           style={{ gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}
         >
           <Section
-            title="Audience by platform"
+            title={t("audienceByPlatform")}
             action={
               <button
                 className="text-xs inline-flex items-center gap-1"
@@ -479,7 +481,7 @@ export default function DashboardView() {
             {totalAudience === 0 && connectedCount === 0 ? (
               <EmptyHint
                 icon={Users}
-                title="No platforms connected yet"
+                title={t("noPlatformsConnected")}
                 body="Connect Facebook or Instagram in Settings to see real follower counts here."
                 cta="Open Settings"
                 onCta={() => dispatch(setActiveView("settings"))}
@@ -553,7 +555,7 @@ export default function DashboardView() {
           </Section>
 
           <Section
-            title="Recent published posts"
+            title={t("recentPublishedPosts")}
             action={
               <button
                 className="text-xs inline-flex items-center gap-1"
@@ -567,7 +569,7 @@ export default function DashboardView() {
             {recentPublished.length === 0 ? (
               <EmptyHint
                 icon={Send}
-                title="Nothing published yet"
+                title={t("nothingPublishedYet")}
                 body="Posts you publish manually or via the scheduler show up here with click-through links."
                 cta="Create a post"
                 onCta={() => dispatch(setActiveView("creation"))}
@@ -635,7 +637,7 @@ export default function DashboardView() {
                       rel="noopener noreferrer"
                       className="block"
                       style={{ textDecoration: "none" }}
-                      title="Open the live post"
+                      title={t("openLivePost")}
                     >
                       {card}
                     </a>
@@ -654,7 +656,7 @@ export default function DashboardView() {
           style={{ gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}
         >
           <Section
-            title="Connected platforms"
+            title={t("connectedPlatforms")}
             action={
               <button
                 className="text-xs inline-flex items-center gap-1"
@@ -705,7 +707,7 @@ export default function DashboardView() {
           </Section>
 
           <Section
-            title="AI usage this session"
+            title={t("aiUsageSession")}
             action={
               <button
                 className="text-xs inline-flex items-center gap-1"
@@ -724,17 +726,17 @@ export default function DashboardView() {
             >
               <MiniStat
                 icon={Sparkles}
-                label="AI calls"
+                label={t("aiCalls")}
                 value={aiUsage.calls}
               />
               <MiniStat
                 icon={Coins}
-                label="Tokens"
+                label={t("tokens")}
                 value={fmt(aiUsage.totalTokens)}
               />
               <MiniStat
                 icon={Send}
-                label="Cache hits"
+                label={t("cacheHits")}
                 value={aiUsage.cacheHits}
               />
             </div>

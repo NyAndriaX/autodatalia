@@ -13,6 +13,31 @@
 #   docker compose -f docker-compose.prod.yml --env-file .env.production restart caption-api
 
 services:
+  postgres:
+    # Users table backing /auth — bcrypt password hashes + JWT-issued
+    # sessions. The rest of the app's state still lives in JSON files
+    # on the named caption-content volume.
+    image: postgres:16-alpine
+    container_name: datalia-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-datalia}
+      POSTGRES_USER: ${POSTGRES_USER:-datalia}
+      # MUST be overridden in .env.production with a strong password
+      # (openssl rand -hex 24). Default is for first-boot only.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-datalia}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    # NO host port — only caption-api reaches Postgres on the docker
+    # network. Open 5432 only if you need an external pgAdmin / psql,
+    # and put it behind firewall rules.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-datalia} -d ${POSTGRES_DB:-datalia}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   caddy:
     # Caddy auto-provisions Let's Encrypt certs on first request to the
     # domain configured in caddy/Caddyfile. No manual certbot setup,
@@ -47,6 +72,9 @@ services:
     # NO host port binding — only Caddy reaches it, on the docker network.
     expose:
       - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 30s
@@ -100,6 +128,16 @@ services:
       # JWT secret for user auth tokens — MUST be overridden in prod.
       # Generate with: openssl rand -hex 32
       JWT_SECRET: ${JWT_SECRET:-}
+      # Postgres backing the users table (auth.py / db.py). Prefer
+      # DATABASE_URL when set (managed Postgres / external host);
+      # otherwise the POSTGRES_* split is used against the in-compose
+      # postgres service.
+      DATABASE_URL: ${DATABASE_URL:-}
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-datalia}
+      POSTGRES_USER: ${POSTGRES_USER:-datalia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-datalia}
       # Telegram validation (optional — leave empty to disable)
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_DEFAULT_CHAT_ID: ${TELEGRAM_DEFAULT_CHAT_ID:-}
@@ -132,3 +170,4 @@ volumes:
   caption-content:
   caddy-data:
   caddy-config:
+  postgres-data:

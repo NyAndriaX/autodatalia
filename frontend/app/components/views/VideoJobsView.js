@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   Film,
   Plus,
@@ -20,7 +21,7 @@ import {
 } from "../../lib/videoJobsService";
 
 /**
- * Management interface for AI video generation jobs.
+ * Management interface for {t("title")} jobs.
  *
  * Each job is a queued call against the configured video provider —
  * LTX-Video via Replicate when REPLICATE_API_TOKEN is set, ffmpeg
@@ -32,15 +33,19 @@ import {
  */
 const RATIOS = ["1:1", "4:5", "9:16", "16:9"];
 
+// Status keys map onto videos.statusXxx in the message bundles, resolved
+// inside JobRow via useTranslations so a locale flip updates pills live.
 const STATUS_META = {
-  queued: { label: "Queued", icon: Clock, color: "var(--text-muted)" },
-  running: { label: "Running", icon: Loader2, color: "var(--status-pending)", spin: true },
-  succeeded: { label: "Ready", icon: CheckCircle2, color: "var(--status-approved)" },
-  failed: { label: "Failed", icon: XCircle, color: "var(--status-error)" },
-  cancelled: { label: "Cancelled", icon: XCircle, color: "var(--text-muted)" },
+  queued: { key: "statusQueued", icon: Clock, color: "var(--text-muted)" },
+  running: { key: "statusRunning", icon: Loader2, color: "var(--status-pending)", spin: true },
+  succeeded: { key: "statusReady", icon: CheckCircle2, color: "var(--status-approved)" },
+  failed: { key: "statusFailed", icon: XCircle, color: "var(--status-error)" },
+  cancelled: { key: "statusCancelled", icon: XCircle, color: "var(--text-muted)" },
 };
 
 export default function VideoJobsView() {
+  const t = useTranslations("videos");
+  const tCommon = useTranslations("common");
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -102,11 +107,10 @@ export default function VideoJobsView() {
         <div className="flex items-end justify-between mb-6 gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold mb-1 inline-flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
-              <Film size={22} /> AI video generation
+              <Film size={22} /> {t("title")}
             </h1>
             <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-              Queue an LTX-Video job. Real generations take 30–120s depending on
-              duration; cancel from the list while running.
+              {t("subtitle")}
             </p>
           </div>
           <button
@@ -117,7 +121,7 @@ export default function VideoJobsView() {
               color: "var(--text-muted)",
               border: "1px solid var(--border-default)",
             }}
-            title="Refresh"
+            title={tCommon("refresh")}
           >
             <RefreshCcw size={14} />
           </button>
@@ -139,16 +143,16 @@ export default function VideoJobsView() {
           {/* Create form */}
           <form onSubmit={handleCreate} className="card" style={{ padding: 18 }}>
             <h2 className="text-sm font-semibold mb-3 inline-flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
-              <Plus size={14} /> New video
+              <Plus size={14} /> {t("newVideo")}
             </h2>
 
             <label className="text-[11px] uppercase tracking-wider block mb-1" style={{ color: "var(--text-muted)" }}>
-              Prompt
+              {t("prompt")}
             </label>
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="A cinematic dolly shot of a coffee being poured into a glass, warm lighting…"
+              placeholder={t("promptPlaceholder")}
               rows={5}
               className="w-full p-2 rounded-lg text-sm mb-3"
               style={{
@@ -160,7 +164,7 @@ export default function VideoJobsView() {
             />
 
             <label className="text-[11px] uppercase tracking-wider block mb-1" style={{ color: "var(--text-muted)" }}>
-              Aspect ratio
+              {t("aspectRatio")}
             </label>
             <div className="grid grid-cols-4 gap-1.5 mb-3">
               {RATIOS.map((r) => (
@@ -181,7 +185,7 @@ export default function VideoJobsView() {
             </div>
 
             <label className="text-[11px] uppercase tracking-wider block mb-1" style={{ color: "var(--text-muted)" }}>
-              Duration: {duration}s
+              {t("duration", { n: duration })}
             </label>
             <input
               type="range"
@@ -198,26 +202,25 @@ export default function VideoJobsView() {
               className="btn-primary w-full inline-flex items-center justify-center gap-2"
             >
               {submitting ? <Loader2 size={14} className="animate-spin" /> : <Film size={14} />}
-              {submitting ? "Queueing…" : "Generate video"}
+              {submitting ? t("queueing") : t("generate")}
             </button>
             <p className="text-[11px] mt-3" style={{ color: "var(--text-tertiary)" }}>
-              Uses LTX-Video on Replicate when configured. Costs are tracked in
-              the Credits view (~€{(duration * 0.04 * 0.92).toFixed(2)} for this run).
+              {t("costNote", { eur: (duration * 0.04 * 0.92).toFixed(2) })}
             </p>
           </form>
 
           {/* Jobs list */}
           <div className="card" style={{ padding: 18 }}>
             <h2 className="text-sm font-semibold mb-3 inline-flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
-              <Film size={14} /> Jobs ({jobs.length})
+              <Film size={14} /> {t("jobsCount", {n: jobs.length})}
             </h2>
             {loading && jobs.length === 0 ? (
               <p className="py-8 text-center text-xs" style={{ color: "var(--text-muted)" }}>
-                Loading…
+                {tCommon("loading")}
               </p>
             ) : jobs.length === 0 ? (
               <p className="py-8 text-center text-xs" style={{ color: "var(--text-muted)" }}>
-                No jobs yet. Queue one on the left.
+                {t("noJobs")}
               </p>
             ) : (
               <div className="flex flex-col gap-2">
@@ -234,8 +237,10 @@ export default function VideoJobsView() {
 }
 
 function JobRow({ job, onDelete }) {
+  const t = useTranslations("videos");
   const meta = STATUS_META[job.status] || STATUS_META.queued;
   const Icon = meta.icon;
+  const statusLabel = t(meta.key);
   return (
     <div
       className="p-3 rounded-lg"
@@ -283,7 +288,7 @@ function JobRow({ job, onDelete }) {
               onClick={onDelete}
               className="p-1 rounded transition-all"
               style={{ color: "var(--text-muted)" }}
-              title="Delete job"
+              title={t("deleteJob")}
             >
               <Trash2 size={13} />
             </button>
@@ -298,7 +303,7 @@ function JobRow({ job, onDelete }) {
               style={{ background: "var(--bg-tertiary)", color: meta.color }}
             >
               <Icon size={10} className={meta.spin ? "animate-spin" : ""} />
-              {meta.label}
+              {statusLabel}
             </span>
             <span>{job.provider}</span>
             <span>·</span>
@@ -343,7 +348,7 @@ function JobRow({ job, onDelete }) {
                 className="text-[11px] inline-flex items-center gap-1"
                 style={{ color: "var(--accent-primary)" }}
               >
-                <Play size={11} /> Open <ExternalLink size={10} />
+                <Play size={11} /> {t("openOutput")} <ExternalLink size={10} />
               </a>
               <a
                 href={job.output_url}
@@ -351,7 +356,7 @@ function JobRow({ job, onDelete }) {
                 className="text-[11px]"
                 style={{ color: "var(--text-muted)" }}
               >
-                Download
+                {t("download")}
               </a>
             </div>
           )}

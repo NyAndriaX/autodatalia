@@ -1,6 +1,7 @@
 "use client";
 
 import { useSelector, useDispatch } from "react-redux";
+import { useTranslations } from "next-intl";
 import { toggleSidebar, setActiveView } from "../../store/uiSlice";
 import { useIsMobile } from "../../lib/useIsMobile";
 import {
@@ -18,69 +19,33 @@ import {
   Film,
 } from "lucide-react";
 
-const navItems = [
-  {
-    id: "dashboard",
-    label: "Dashboard",
-    icon: LayoutDashboard,
-    description: "Today at a glance",
-  },
-  {
-    id: "creation",
-    label: "Creation & Editor",
-    icon: Sparkles,
-    description: "Create & generate content",
-  },
-  {
-    id: "automation",
-    label: "Automation",
-    icon: Bot,
-    description: "Auto-generate & validate",
-  },
-  {
-    id: "calendar",
-    label: "Calendar",
-    icon: CalendarDays,
-    description: "Schedule & plan",
-  },
-  {
-    id: "library",
-    label: "Media Library",
-    icon: ImageIcon,
-    description: "Assets & templates",
-  },
-  {
-    id: "videos",
-    label: "AI Video",
-    icon: Film,
-    description: "LTX generations & jobs",
-  },
-  {
-    id: "analytics",
-    label: "Analytics",
-    icon: BarChart3,
-    description: "KPIs & API costs",
-  },
-  {
-    id: "credits",
-    label: "Credits",
-    icon: Coins,
-    description: "Balance & rates",
-  },
-  {
-    id: "settings",
-    label: "Settings",
-    icon: Settings,
-    description: "Integrations & config",
-  },
+// Stable nav order — labels are resolved through useTranslations() at
+// render time so locale switches update the sidebar instantly.
+const NAV_ITEMS = [
+  { id: "dashboard", icon: LayoutDashboard },
+  { id: "creation", icon: Sparkles },
+  { id: "automation", icon: Bot },
+  { id: "calendar", icon: CalendarDays },
+  { id: "library", icon: ImageIcon },
+  { id: "videos", icon: Film },
+  { id: "analytics", icon: BarChart3 },
+  { id: "credits", icon: Coins },
+  { id: "settings", icon: Settings },
 ];
 
 export default function Sidebar() {
   const dispatch = useDispatch();
+  const t = useTranslations("sidebar");
+  const tCommon = useTranslations("common");
   const { sidebarCollapsed, activeView, mobileNavOpen } = useSelector(
     (state) => state.ui
   );
   const isMobile = useIsMobile();
+  // Map nav ids to translation keys so we can render both label and
+  // sub-description from the messages bundle.
+  const labelFor = (id) => (id === "settings" ? tCommon("settings") : t(id));
+  const descFor = (id) =>
+    id === "settings" ? t("settingsDesc") : t(`${id}Desc`);
   // On mobile the sidebar is a full off-canvas drawer (never the icon-only
   // collapsed state); on desktop it keeps the collapse behaviour.
   const collapsed = isMobile ? false : sidebarCollapsed;
@@ -123,13 +88,13 @@ export default function Sidebar() {
               className="font-bold text-base leading-tight"
               style={{ color: "var(--text-primary)" }}
             >
-              DATALIA
+              {tCommon("appName")}
             </h1>
             <p
               className="text-xs leading-tight"
               style={{ color: "var(--text-tertiary)" }}
             >
-              Marketing Auto
+              {tCommon("appTagline")}
             </p>
           </div>
         )}
@@ -137,9 +102,11 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 py-4 px-3 flex flex-col gap-1 overflow-y-auto">
-        {navItems.map((item) => {
+        {NAV_ITEMS.map((item) => {
           const isActive = activeView === item.id;
           const Icon = item.icon;
+          const label = labelFor(item.id);
+          const description = descFor(item.id);
 
           return (
             <button
@@ -155,7 +122,7 @@ export default function Sidebar() {
                   ? "var(--accent-primary-hover)"
                   : "var(--text-secondary)",
               }}
-              title={collapsed ? item.label : undefined}
+              title={collapsed ? label : undefined}
             >
               {/* Active indicator */}
               {isActive && (
@@ -182,13 +149,13 @@ export default function Sidebar() {
               {!collapsed && (
                 <div className="overflow-hidden animate-fade-in">
                   <span className="text-sm font-medium block leading-tight">
-                    {item.label}
+                    {label}
                   </span>
                   <span
                     className="text-xs block leading-tight"
                     style={{ color: "var(--text-muted)" }}
                   >
-                    {item.description}
+                    {description}
                   </span>
                 </div>
               )}
@@ -205,7 +172,7 @@ export default function Sidebar() {
                     fontWeight: 500,
                   }}
                 >
-                  {item.label}
+                  {label}
                 </div>
               )}
             </button>
@@ -235,7 +202,7 @@ export default function Sidebar() {
               <ChevronLeft size={18} />
             )}
             {!collapsed && (
-              <span className="ml-2 text-xs font-medium">Collapse</span>
+              <span className="ml-2 text-xs font-medium">{t("collapse")}</span>
             )}
           </button>
         )}
@@ -257,13 +224,13 @@ export default function Sidebar() {
                 className="text-sm font-medium leading-tight truncate"
                 style={{ color: "var(--text-primary)" }}
               >
-                DATALIA Team
+                {t("team")}
               </p>
               <p
                 className="text-xs leading-tight truncate"
                 style={{ color: "var(--text-muted)" }}
               >
-                Admin
+                {t("admin")}
               </p>
             </div>
           </div>

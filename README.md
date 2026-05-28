@@ -59,9 +59,11 @@ Two background loops inside the backend process:
   Approved candidates flip to `status="scheduled"` and the scheduler
   picks them up like any other scheduled post.
 
-Storage is file-based: posts, automation rules, OAuth tokens, and the
-activity feed live as JSON in a Docker named volume on prod. Users live
-in a tiny SQLite file. No external database needed.
+Storage is split: posts, automation rules, OAuth tokens, cost logs and
+the activity feed live as JSON in a Docker named volume; **users +
+auth** live in Postgres (a `postgres:16-alpine` container ships in
+the dev compose; prod can swap to managed Postgres via
+`DATABASE_URL`). No other external database needed.
 
 ---
 

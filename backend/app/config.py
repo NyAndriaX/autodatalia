@@ -29,6 +29,11 @@ class Settings(BaseModel):
     backend_auth_token: str
     tunnel_enabled: bool
     jwt_secret: str
+    # Postgres connection string for the users table. Empty falls back to
+    # the individual POSTGRES_* env vars in db._connect() so docker-compose
+    # works without an explicit URL. Set this in prod to a managed Postgres
+    # DSN (e.g. ``postgres://user:pw@host:5432/datalia``).
+    database_url: str
     telegram_bot_token: str
     telegram_default_chat_id: str
     telegram_webhook_secret: str
@@ -107,6 +112,7 @@ def load_settings() -> Settings:
         tunnel_enabled=os.getenv("TUNNEL_ENABLED", "false").lower()
         in {"1", "true", "yes", "on"},
         jwt_secret=os.getenv("JWT_SECRET", "super-secret-default-key-change-in-prod"),
+        database_url=os.getenv("DATABASE_URL", "").strip(),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_default_chat_id=os.getenv("TELEGRAM_DEFAULT_CHAT_ID", "").strip(),
         telegram_webhook_secret=os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip(),

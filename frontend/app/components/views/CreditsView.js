@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   Coins,
   RefreshCcw,
@@ -30,27 +31,26 @@ import { fetchCostSummary } from "../../lib/costService";
  */
 const CREDIT_TO_EUR = 0.01;
 const EUR_TO_CREDITS = 1 / CREDIT_TO_EUR; // 100 credits per €1
+// Periods carry a translation key + the id sent to the API.
 const PERIODS = [
-  { id: "24h", label: "Last 24h" },
-  { id: "7d", label: "Last 7 days" },
-  { id: "30d", label: "Last 30 days" },
-  { id: "all", label: "All time" },
+  { id: "24h", key: "period24h" },
+  { id: "7d", key: "period7d" },
+  { id: "30d", key: "period30d" },
+  { id: "all", key: "periodAll" },
 ];
 
-const WORKFLOW_LABELS = {
-  post_variants: { label: "Post generation", icon: Sparkles },
-  captions: { label: "Caption generation", icon: Sparkles },
-  hashtags: { label: "Hashtag suggestion", icon: Tag },
-  summary: { label: "Post summarisation", icon: Sparkles },
-  transform: { label: "Quick AI actions", icon: Sparkles },
-  image_description: { label: "Image analysis (vision)", icon: Sparkles },
-  image: { label: "AI image generation", icon: Sparkles },
-  video: { label: "AI video (LTX)", icon: Film },
+// Workflow id → (translation key, icon). The translation key is resolved
+// inside the component so locale changes flip the legend immediately.
+const WORKFLOW_META = {
+  post_variants: { key: "workflowPostVariants", icon: Sparkles },
+  captions: { key: "workflowCaptions", icon: Sparkles },
+  hashtags: { key: "workflowHashtags", icon: Tag },
+  summary: { key: "workflowSummary", icon: Sparkles },
+  transform: { key: "workflowTransform", icon: Sparkles },
+  image_description: { key: "workflowImageDescription", icon: Sparkles },
+  image: { key: "workflowImage", icon: Sparkles },
+  video: { key: "workflowVideo", icon: Film },
 };
-
-function workflowLabel(id) {
-  return WORKFLOW_LABELS[id] || { label: id || "Other", icon: Coins };
-}
 
 function formatTokens(n) {
   if (!n) return "0";
@@ -64,10 +64,32 @@ function eur(n) {
 }
 
 export default function CreditsView() {
+  const t = useTranslations("credits");
+  const tCommon = useTranslations("common");
   const [period, setPeriod] = useState("30d");
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const workflowLabel = (id) => {
+    const meta = WORKFLOW_META[id] || { key: null, icon: Coins };
+    return {
+      label: meta.key ? t(meta.key) : id || "—",
+      icon: meta.icon,
+    };
+  };
+  const tierLabel = (id) => {
+    const key =
+      id === "fast"
+        ? "tierFast"
+        : id === "standard"
+        ? "tierStandard"
+        : id === "premium"
+        ? "tierPremium"
+        : id === "media"
+        ? "tierMedia"
+        : null;
+    return { label: key ? t(key) : id || "—", icon: Coins };
+  };
 
   async function reload(currentPeriod = period) {
     setLoading(true);
@@ -107,13 +129,13 @@ export default function CreditsView() {
         <div className="flex items-end justify-between mb-6 gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold mb-1" style={{ color: "var(--text-primary)" }}>
-              Credits &amp; spend
+              {t("title")}
             </h1>
             <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-              Live aggregate of every AI / media call this workspace has made.
+              {t("subtitle")}
               {savedUsd > 0 && (
                 <span style={{ color: "var(--status-approved)" }}>
-                  {" "}· {eur(savedUsd * 0.92)} saved by the cache.
+                  {" "}· {t("savedByCache", {eur: eur(savedUsd * 0.92)})}
                 </span>
               )}
             </p>
@@ -131,7 +153,7 @@ export default function CreditsView() {
                   border: "1px solid var(--border-default)",
                 }}
               >
-                {p.label}
+                {t(p.key)}
               </button>
             ))}
             <button
@@ -142,7 +164,7 @@ export default function CreditsView() {
                 color: "var(--text-muted)",
                 border: "1px solid var(--border-default)",
               }}
-              title="Refresh"
+              title={tCommon("refresh")}
             >
               <RefreshCcw size={14} />
             </button>
@@ -165,32 +187,34 @@ export default function CreditsView() {
         >
           <KpiCard
             icon={DollarSign}
-            label="Spent"
+            label={t("spent")}
             primary={eur(totalCostEur)}
             secondary={`$${totalCostUsd.toFixed(2)} USD`}
             loading={loading}
           />
           <KpiCard
             icon={Coins}
-            label="Credits used"
+            label={t("creditsUsed")}
             primary={usedCredits.toLocaleString()}
-            secondary={`1 credit = €${CREDIT_TO_EUR.toFixed(2)}`}
+            secondary={t("creditDefinition", { eur: CREDIT_TO_EUR.toFixed(2) })}
             loading={loading}
           />
           <KpiCard
             icon={Send}
-            label="AI calls"
+            label={t("aiCalls")}
             primary={(totals.calls || 0).toLocaleString()}
-            secondary={`${totals.cache_hits || 0} cache hits (free)`}
+            secondary={`${t("cacheHitsFree", {n: totals.cache_hits || 0})}`}
             loading={loading}
           />
           <KpiCard
             icon={TrendingUp}
-            label="Tokens"
+            label={t("tokens")}
             primary={formatTokens(totals.tokens || 0)}
             secondary={
               totals.calls > 0
-                ? `~${formatTokens(Math.round(totals.tokens / totals.calls))}/call`
+                ? t("perCall", {
+                    n: formatTokens(Math.round(totals.tokens / totals.calls)),
+                  })
                 : "—"
             }
             loading={loading}
@@ -204,31 +228,19 @@ export default function CreditsView() {
         >
           <BreakdownCard
             icon={Wallet}
-            title="Where credits went (by workflow)"
+            title={t("byWorkflow")}
             rows={byWorkflow}
             totalCost={totalCostUsd}
             labelFor={workflowLabel}
-            empty="No spend in this window."
+            empty={t("noWindowSpend")}
           />
           <BreakdownCard
             icon={DollarSign}
-            title="By LLM tier"
+            title={t("byTier")}
             rows={byTier}
             totalCost={totalCostUsd}
-            labelFor={(id) => ({
-              label:
-                id === "fast"
-                  ? "Fast tier (cheap)"
-                  : id === "standard"
-                  ? "Standard tier"
-                  : id === "premium"
-                  ? "Premium tier"
-                  : id === "media"
-                  ? "Media generation"
-                  : id || "Unknown",
-              icon: Coins,
-            })}
-            empty="No tiered spend yet."
+            labelFor={tierLabel}
+            empty={t("noTieredSpend")}
           />
         </div>
 
@@ -238,20 +250,20 @@ export default function CreditsView() {
             className="text-sm font-semibold mb-3 inline-flex items-center gap-2"
             style={{ color: "var(--text-primary)" }}
           >
-            <TrendingUp size={14} /> Top models by spend
+            <TrendingUp size={14} /> {t("topModels")}
           </h2>
           {byModel.length === 0 ? (
             <p className="py-6 text-center text-xs" style={{ color: "var(--text-muted)" }}>
-              No model usage in this window.
+              {t("noModels")}
             </p>
           ) : (
             <table className="w-full text-sm" style={{ color: "var(--text-secondary)" }}>
               <thead>
                 <tr style={{ color: "var(--text-muted)" }} className="text-left text-xs uppercase tracking-wider">
-                  <th className="pb-2 font-semibold">Model</th>
-                  <th className="pb-2 font-semibold text-right">Calls</th>
-                  <th className="pb-2 font-semibold text-right">Tokens</th>
-                  <th className="pb-2 font-semibold text-right">Cost</th>
+                  <th className="pb-2 font-semibold">{t("tableModel")}</th>
+                  <th className="pb-2 font-semibold text-right">{t("tableCalls")}</th>
+                  <th className="pb-2 font-semibold text-right">{t("tableTokens")}</th>
+                  <th className="pb-2 font-semibold text-right">{t("tableCost")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -303,6 +315,7 @@ function KpiCard({ icon: Icon, label, primary, secondary, loading }) {
 }
 
 function BreakdownCard({ icon: Icon, title, rows, totalCost, labelFor, empty }) {
+  const t = useTranslations("credits");
   return (
     <div className="card" style={{ padding: 18 }}>
       <h2
@@ -355,8 +368,9 @@ function BreakdownCard({ icon: Icon, title, rows, totalCost, labelFor, empty }) 
                   />
                 </div>
                 <p className="text-[11px] mt-1" style={{ color: "var(--text-tertiary)" }}>
-                  {row.calls} call{row.calls === 1 ? "" : "s"} ·{" "}
-                  {formatTokens(row.tokens)} tokens · {pct.toFixed(1)}%
+                  {t("callPlural", { n: row.calls })} ·{" "}
+                  {formatTokens(row.tokens)} {t("tokens").toLowerCase()} ·{" "}
+                  {pct.toFixed(1)}%
                 </p>
               </div>
             );

@@ -275,17 +275,33 @@ TikTok requires a screen recording of your app to approve `video.publish`. Your 
 
 ## What gets persisted
 
-The `caption-content` Docker named volume holds:
+State is split across **two** named volumes — back both up:
+
+### `caption-content` (app state)
 - `posts.json` — every post (draft, scheduled, published, automation candidates)
 - `automation_rules.json` — automation rules
 - `messages.json` — bell-menu activity feed
 - `.oauth_tokens*.json` — provider access tokens
-- `users.db` — SQLite of registered users
+- `cost_logs.json` — per-call AI / media cost rows
+- `video_jobs.json` — LTX video generation queue
 - Uploaded + AI-generated media
 
-The volume survives `docker compose down`. It's only removed with `docker volume rm`. Back it up periodically:
+### `postgres-data` (auth)
+- `users` table — bcrypt password hashes for everyone who can log in
+
+Both volumes survive `docker compose down`. They're only removed with `docker volume rm`. Back them up periodically:
 
 ```bash
+# App state (JSON + media)
 docker run --rm -v datalia_caption-content:/data -v "$PWD":/backup alpine \
   tar czf /backup/datalia-content-$(date +%F).tgz -C /data .
+
+# Postgres (users table + future schema)
+docker compose -f docker-compose.prod.yml --env-file .env.production exec -T postgres \
+  pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > "datalia-users-$(date +%F).sql"
 ```
+
+> **Using managed Postgres instead?** Set `DATABASE_URL=postgres://...` in
+> `.env.production` and skip the embedded postgres container — the API
+> auto-detects the URL and uses it. The dev docker-compose keeps the
+> embedded container for local convenience.

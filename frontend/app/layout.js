@@ -1,6 +1,7 @@
 import Script from "next/script";
 import "./globals.css";
 import ReduxProvider from "./components/providers/ReduxProvider";
+import I18nProvider from "./components/providers/I18nProvider";
 
 export const metadata = {
   title: "DATALIA — Marketing Automation Dashboard",
@@ -29,7 +30,9 @@ export default function RootLayout({ children }) {
             injects a real <script src=...> tag into the HTML stream so the
             browser fetches + runs it before React even mounts. */}
         <Script src="/no-flash-theme.js" strategy="beforeInteractive" />
-        <ReduxProvider>{children}</ReduxProvider>
+        <ReduxProvider>
+          <I18nProvider>{children}</I18nProvider>
+        </ReduxProvider>
       </body>
     </html>
   );

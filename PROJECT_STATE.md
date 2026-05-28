@@ -60,16 +60,20 @@ are historical unless a future task explicitly reintroduces it.
 
 ### Persistence
 
-The app is still file-backed:
+Mixed file + Postgres model:
 
 - Uploaded and processed media live under `backend/content/`.
 - OAuth tokens live server-side in `backend/content/.oauth_tokens.json` or the
   configured content directory equivalent.
-- Posts, messages, AI caches, and generated/cropped media are local JSON/files.
-- User auth state is stored in `backend/content/users.db` when auth routes are
-  used.
+- Posts, messages, AI caches, cost logs, video jobs and generated/cropped
+  media are local JSON / files under the content volume.
+- **User auth state lives in Postgres** (`db.py` → `users` table), reached
+  via `DATABASE_URL` or the individual `POSTGRES_*` env vars. The dev
+  docker-compose boots a `postgres:16-alpine` next to `caption-api`; prod
+  can point at a managed Postgres (Hetzner / Neon / Railway / RDS) by
+  setting `DATABASE_URL`.
 
-No Airtable or database migration is active in the current source.
+No Airtable migration is active in the current source.
 
 ## Active Blockers
 

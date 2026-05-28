@@ -119,6 +119,22 @@ def delete_job(job_id: str) -> bool:
 # ── Provider selection ────────────────────────────────────────────────
 
 
+# Replicate "official model" endpoint ( /v1/models/{owner}/{name}/predictions )
+# only works for models flagged as official by Replicate. Community uploads
+# (which LTX-Video is) need the /v1/predictions endpoint with a version hash.
+# Keep this list short and conservative — false positives here just cause
+# 404s that the user already sees, but false negatives waste a configured
+# token. Add models as you confirm they work via the bare-model URL.
+_OFFICIAL_REPLICATE_MODELS: set[str] = {
+    # Add officially-supported model ids here as you confirm them, e.g.
+    # "stability-ai/stable-video-diffusion".
+}
+
+
+def _is_official_replicate_model(model: str) -> bool:
+    return (model or "").lower() in _OFFICIAL_REPLICATE_MODELS
+
+
 def _pick_provider(requested: str | None) -> str:
     """Resolve the effective provider for a job.
 
@@ -134,7 +150,17 @@ def _pick_provider(requested: str | None) -> str:
     """
     configured = {
         "fal": bool(settings.fal_api_key),
-        "replicate": bool(settings.replicate_api_token),
+        # Replicate counts as "configured" only when the call will actually
+        # succeed — community models like lightricks/ltx-video 404 unless
+        # REPLICATE_VIDEO_VERSION is pinned. Without that, fall through to
+        # fal.ai or the ffmpeg fallback instead of letting every job fail.
+        "replicate": bool(
+            settings.replicate_api_token
+            and (
+                settings.replicate_video_version
+                or _is_official_replicate_model(settings.replicate_video_model)
+            )
+        ),
         "fallback": True,
     }
     if requested in configured and configured[requested]:

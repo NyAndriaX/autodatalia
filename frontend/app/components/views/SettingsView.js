@@ -1,10 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
+import { useTranslations } from "next-intl";
 import { PLATFORMS } from "../../lib/platforms";
 import { loadSettings, saveSettings } from "../../lib/settingsStorage";
-import { addNotification } from "../../store/uiSlice";
+import { addNotification, setLocale } from "../../store/uiSlice";
 import {
   fetchConnections,
   invalidateConnectionsCache,
@@ -153,6 +154,10 @@ function Field({ label, name, value, onChange, placeholder, type = "text" }) {
 
 export default function SettingsView() {
   const dispatch = useDispatch();
+  const t = useTranslations("settings");
+  const tCommon = useTranslations("common");
+  const tLang = useTranslations("languages");
+  const currentLocale = useSelector((st) => st.ui.locale);
   const [s, setS] = useState(null);
   const [connections, setConnections] = useState(null); // backend-driven OAuth state
   const [pendingProvider, setPendingProvider] = useState(null); // provider being connected
@@ -332,9 +337,41 @@ export default function SettingsView() {
   return (
     <div className="h-full overflow-y-auto" style={{ padding: 20 }}>
       <div style={{ maxWidth: 720, margin: "0 auto" }}>
+        {/* Language switcher — same Redux action the Topbar uses, so
+            either spot updates the UI for the whole dashboard. */}
         <Section
           icon={Plug}
-          title="Connected Platforms"
+          title={t("language")}
+          desc={t("languageHint")}
+        >
+          <div className="flex gap-2">
+            {["en", "fr"].map((code) => (
+              <button
+                key={code}
+                type="button"
+                onClick={() => dispatch(setLocale(code))}
+                className="px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+                style={{
+                  background:
+                    currentLocale === code
+                      ? "var(--accent-primary)"
+                      : "var(--bg-secondary)",
+                  color:
+                    currentLocale === code
+                      ? "#fff"
+                      : "var(--text-secondary)",
+                  border: "1px solid var(--border-default)",
+                }}
+              >
+                {tLang(code)} ({code.toUpperCase()})
+              </button>
+            ))}
+          </div>
+        </Section>
+
+        <Section
+          icon={Plug}
+          title={t("providers")}
           desc="OAuth-connected accounts that can publish through Datalia."
         >
           <div

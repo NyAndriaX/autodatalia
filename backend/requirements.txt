@@ -16,3 +16,7 @@ uvicorn[standard]==0.34.2
 PyJWT==2.8.0
 passlib==1.7.4
 bcrypt==4.1.2
+# psycopg2-binary: synchronous Postgres driver for the users table
+# (auth.py / db.py). The -binary variant ships pre-compiled wheels so
+# the Docker build doesn't need libpq + a C toolchain.
+psycopg2-binary==2.9.10

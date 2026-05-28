@@ -2,12 +2,14 @@
 
 import { useState, useMemo, useEffect, useRef, useSyncExternalStore } from "react";
 import { useSelector, useDispatch } from "react-redux";
+import { useTranslations } from "next-intl";
 import {
   markNotificationRead,
   markAllNotificationsRead,
   clearNotifications,
   setConnectivity,
   setTheme,
+  setLocale,
   setActiveView,
   clearSearch,
   toggleMobileNav,
@@ -38,16 +40,21 @@ import {
   Menu,
   Coins,
   ExternalLink,
+  Globe,
 } from "lucide-react";
 
-const VIEW_TITLES = {
-  dashboard: "Dashboard",
-  creation: "Creation & Editor",
-  calendar: "Calendar & Scheduling",
-  library: "Media & Templates",
-  analytics: "Analytics & API Costs",
-  credits: "Credits & Billing",
-  settings: "Settings & Integrations",
+// View titles are looked up through the sidebar namespace so the
+// header label tracks whatever the sidebar nav says.
+const VIEW_TITLE_KEY = {
+  dashboard: "dashboard",
+  creation: "creation",
+  automation: "automation",
+  calendar: "calendar",
+  library: "library",
+  videos: "videos",
+  analytics: "analytics",
+  credits: "credits",
+  settings: "settings",
 };
 
 const CONNECTIVITY_DOT = {
@@ -73,7 +80,11 @@ const getSystemDark = () =>
 
 export default function Topbar() {
   const dispatch = useDispatch();
-  const { activeView, notifications, searchQuery, sidebarCollapsed, connectivity, theme, search, messages, aiUsage } =
+  const t = useTranslations("topbar");
+  const tCommon = useTranslations("common");
+  const tSidebar = useTranslations("sidebar");
+  const tLang = useTranslations("languages");
+  const { activeView, notifications, searchQuery, sidebarCollapsed, connectivity, theme, locale, search, messages, aiUsage } =
     useSelector((state) => state.ui);
   const authUser = useSelector((state) => state.auth.user);
   const isMobile = useIsMobile();
@@ -81,6 +92,7 @@ export default function Topbar() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [showLangMenu, setShowLangMenu] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
   const [searchView, setSearchView] = useState(activeView);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
@@ -88,6 +100,7 @@ export default function Topbar() {
   const notifRef = useRef(null);
   const userMenuRef = useRef(null);
   const searchRef = useRef(null);
+  const langMenuRef = useRef(null);
 
   // Resolve the active theme: explicit pref wins; "system" follows the OS via
   // a useSyncExternalStore subscription (SSR snapshot = light, no mismatch).
@@ -131,6 +144,7 @@ export default function Topbar() {
       if (notifRef.current && !notifRef.current.contains(e.target)) setShowNotifications(false);
       if (userMenuRef.current && !userMenuRef.current.contains(e.target)) setShowUserMenu(false);
       if (searchRef.current && !searchRef.current.contains(e.target)) setShowResults(false);
+      if (langMenuRef.current && !langMenuRef.current.contains(e.target)) setShowLangMenu(false);
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
@@ -194,10 +208,11 @@ export default function Topbar() {
         }}
       >
         <Search size={16} className="ml-3" style={{ color: "var(--text-muted)" }} aria-hidden="true" />
-        <input
+        {/* placeholder + label use the topbar.searchPlaceholder string */}
+<input
           id="global-search"
           type="text"
-          placeholder="Search posts, templates, media..."
+          placeholder={t("searchPlaceholder")}
           value={searchQuery}
           onChange={(e) => {
             setSearchView(activeView);
@@ -219,7 +234,7 @@ export default function Topbar() {
           onBlur={() => setSearchFocused(false)}
           className="flex-1 bg-transparent border-none outline-none px-3 py-2.5 pr-2 text-sm"
           style={{ color: "var(--text-primary)", outline: "none" }}
-          aria-label="Global search"
+          aria-label={tCommon("search")}
           autoComplete="off"
           spellCheck={false}
         />
@@ -232,7 +247,7 @@ export default function Topbar() {
               dispatch(clearSearch());
               setShowResults(false);
             }}
-            aria-label="Clear search"
+            aria-label={tCommon("clear")}
           >
             <X size={14} aria-hidden="true" />
           </button>
@@ -265,15 +280,15 @@ export default function Topbar() {
               background: "var(--bg-elevated)",
             }}
           >
-            Search results
+            {tCommon("search")}
           </div>
           {search.status === "loading" ? (
             <div className="flex items-center gap-2 px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
-              <Loader2 size={14} className="animate-spin" /> Searching…
+              <Loader2 size={14} className="animate-spin" /> {tCommon("loading")}
             </div>
           ) : search.results.length === 0 ? (
             <div className="px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
-              No results for “{searchQuery}”
+              {tCommon("noResults")} — “{searchQuery}”
             </div>
           ) : (
             <ul className="max-h-72 overflow-y-auto py-1">
@@ -325,7 +340,7 @@ export default function Topbar() {
             className="btn-ghost shrink-0"
             style={{ padding: 6 }}
             onClick={() => dispatch(toggleMobileNav())}
-            aria-label="Open navigation menu"
+            aria-label={tCommon("openMenu")}
           >
             <Menu size={20} aria-hidden="true" />
           </button>
@@ -334,7 +349,11 @@ export default function Topbar() {
           className="text-lg font-semibold truncate"
           style={{ color: "var(--text-primary)" }}
         >
-          {VIEW_TITLES[activeView] || "Dashboard"}
+          {VIEW_TITLE_KEY[activeView]
+            ? activeView === "settings"
+              ? tCommon("settings")
+              : tSidebar(VIEW_TITLE_KEY[activeView])
+            : tSidebar("dashboard")}
         </h2>
       </div>
 
@@ -377,7 +396,7 @@ export default function Topbar() {
             id="mobile-search-toggle"
             className="btn-ghost"
             onClick={() => setMobileSearchOpen(true)}
-            aria-label="Open search"
+            aria-label={tCommon("search")}
           >
             <Search size={18} aria-hidden="true" />
           </button>
@@ -404,8 +423,8 @@ export default function Topbar() {
           id="theme-toggle"
           className="btn-ghost"
           onClick={toggleTheme}
-          title={`Switch to ${resolved === "dark" ? "light" : "dark"} mode`}
-          aria-label={`Switch to ${resolved === "dark" ? "light" : "dark"} mode`}
+          title={t("themeToggle")}
+          aria-label={t("themeToggle")}
         >
           {resolved === "dark" ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
         </button>
@@ -433,7 +452,7 @@ export default function Topbar() {
             onClick={() => setShowNotifications((v) => !v)}
             aria-haspopup="true"
             aria-expanded={showNotifications}
-            aria-label={unreadCount > 0 ? `${unreadCount} unread messages` : "Messages"}
+            aria-label={t("notifications")}
           >
             <Bell size={18} aria-hidden="true" />
             {unreadCount > 0 && (
@@ -454,7 +473,7 @@ export default function Topbar() {
               style={{ background: "var(--bg-card)", border: "1px solid var(--border-default)", boxShadow: "var(--shadow-dropdown)" }}
             >
               <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid var(--border-default)" }}>
-                <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Messages</span>
+                <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{t("notifications")}</span>
                 <div className="flex items-center gap-2">
                   {feed.length > 0 && (
                     <button
@@ -467,12 +486,12 @@ export default function Topbar() {
                         dispatch(clearNotifications());
                         dispatch(markAllMessagesReadThunk());
                       }}
-                      title="Mark everything as read"
+                      title={t("markAllRead")}
                     >
-                      Clear all
+                      {t("markAllRead")}
                     </button>
                   )}
-                  <button onClick={() => setShowNotifications(false)} className="btn-ghost p-1" aria-label="Close messages">
+                  <button onClick={() => setShowNotifications(false)} className="btn-ghost p-1" aria-label={tCommon("close")}>
                     <X size={14} aria-hidden="true" />
                   </button>
                 </div>
@@ -480,10 +499,7 @@ export default function Topbar() {
 
               {feed.length === 0 ? (
                 <div className="py-5 px-4 text-center">
-                  <p className="text-sm" style={{ color: "var(--text-muted)" }}>No messages yet</p>
-                  <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>
-                    Notifications will appear here
-                  </p>
+                  <p className="text-sm" style={{ color: "var(--text-muted)" }}>{t("noNotifications")}</p>
                 </div>
               ) : (
                 <ul className="max-h-72 overflow-y-auto">
@@ -535,6 +551,60 @@ export default function Topbar() {
 
         <div className="w-px h-6 mx-1" style={{ background: "var(--border-default)" }} aria-hidden="true" />
 
+        {/* Language switcher */}
+        <div className="relative" ref={langMenuRef}>
+          <button
+            id="language-toggle"
+            className="btn-ghost inline-flex items-center gap-1"
+            onClick={() => setShowLangMenu((v) => !v)}
+            aria-haspopup="true"
+            aria-expanded={showLangMenu}
+            aria-label={t("language")}
+            title={t("language")}
+          >
+            <Globe size={18} aria-hidden="true" />
+            <span className="text-[11px] font-semibold uppercase">
+              {locale}
+            </span>
+          </button>
+
+          {showLangMenu && (
+            <div
+              className="absolute right-0 top-full mt-2 w-40 rounded-xl animate-fade-in overflow-hidden"
+              role="menu"
+              style={{
+                background: "var(--bg-card)",
+                border: "1px solid var(--border-default)",
+                boxShadow: "var(--shadow-dropdown)",
+              }}
+            >
+              {["en", "fr"].map((code) => (
+                <button
+                  key={code}
+                  role="menuitem"
+                  onClick={() => {
+                    dispatch(setLocale(code));
+                    setShowLangMenu(false);
+                  }}
+                  className="w-full flex items-center justify-between px-4 py-2 text-sm text-left btn-ghost"
+                  style={{
+                    color:
+                      locale === code
+                        ? "var(--accent-primary)"
+                        : "var(--text-secondary)",
+                    fontWeight: locale === code ? 600 : 400,
+                  }}
+                >
+                  <span>{tLang(code)}</span>
+                  <span className="text-[10px] uppercase opacity-70">{code}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="w-px h-6 mx-1" style={{ background: "var(--border-default)" }} aria-hidden="true" />
+
         {/* User menu */}
         <div className="relative" ref={userMenuRef}>
           <button
@@ -544,7 +614,7 @@ export default function Topbar() {
             onClick={() => setShowUserMenu((v) => !v)}
             aria-haspopup="true"
             aria-expanded={showUserMenu}
-            aria-label="User menu"
+            aria-label={t("userMenu")}
           >
             <div
               className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold"
@@ -572,8 +642,7 @@ export default function Topbar() {
               </div>
               <ul className="py-1">
                 {[
-                  { icon: User, label: "Profile", action: () => dispatch(setActiveView("settings")) },
-                  { icon: Settings, label: "Settings", action: () => dispatch(setActiveView("settings")) },
+                  { icon: Settings, label: tCommon("settings"), action: () => dispatch(setActiveView("settings")) },
                 ].map(({ icon: Icon, label, action }) => (
                   <li key={label}>
                     <button
@@ -601,7 +670,7 @@ export default function Topbar() {
                     }}
                   >
                     <LogOut size={14} aria-hidden="true" />
-                    Sign Out
+                    {tCommon("signOut")}
                   </button>
                 </li>
               </ul>

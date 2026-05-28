@@ -1,4 +1,21 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: datalia-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-datalia}
+      POSTGRES_USER: ${POSTGRES_USER:-datalia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-datalia}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-datalia} -d ${POSTGRES_DB:-datalia}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
   caption-api:
     build:
       context: ../backend
@@ -6,6 +23,9 @@ services:
     restart: always
     ports:
       - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 30s
@@ -57,6 +77,18 @@ services:
       FAL_API_KEY: ${FAL_API_KEY:-}
       FAL_VIDEO_MODEL: ${FAL_VIDEO_MODEL:-fal-ai/ltx-video}
       VIDEO_COST_PER_SECOND_USD: ${VIDEO_COST_PER_SECOND_USD:-0.04}
+      # Postgres for the users table (auth). Other state stays in JSON
+      # files under CONTENT_DIR.
+      DATABASE_URL: ${DATABASE_URL:-}
+      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-datalia}
+      POSTGRES_USER: ${POSTGRES_USER:-datalia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-datalia}
+      JWT_SECRET: ${JWT_SECRET:-}
       CONTENT_DIR: /app/content
     volumes:
       - ../backend/content:/app/content
+
+volumes:
+  postgres_data:

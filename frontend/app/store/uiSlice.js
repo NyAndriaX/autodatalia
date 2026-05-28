@@ -13,6 +13,10 @@ const initialState = {
   commandPaletteOpen: false,
   // "light" | "dark" | "system" — the *preference*; resolved value lives on <html>
   theme: "system",
+  // UI language. "en" is the fallback; "fr" is the second shipped bundle.
+  // The I18nProvider hydrates this from localStorage / navigator.language
+  // on first client render.
+  locale: "en",
   // "unknown" | "online" | "offline"
   connectivity: { backend: "unknown" },
   // Service-fed search (searchThunks)
@@ -139,6 +143,9 @@ const uiSlice = createSlice({
     setTheme: (state, action) => {
       state.theme = action.payload; // "light" | "dark" | "system"
     },
+    setLocale: (state, action) => {
+      state.locale = action.payload || "en"; // "en" | "fr"
+    },
     addTokenUsage: (state, action) => {
       state.aiUsage.totalTokens += action.payload || 0;
       state.aiUsage.calls += 1;
@@ -200,6 +207,7 @@ export const {
   toggleCommandPalette,
   setConnectivity,
   setTheme,
+  setLocale,
   addTokenUsage,
   recordCacheHit,
   recordAiCall,

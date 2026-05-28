@@ -71,6 +71,11 @@ async def tiktok_root_verify(token: str) -> str:
 # ── Lifecycle ──────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def on_startup() -> None:
+    # Schema bootstrap — runs the CREATE TABLE IF NOT EXISTS up front
+    # with retry/backoff so a Postgres still booting in the next
+    # container doesn't crash the API.
+    from .db import init_db
+    init_db()
     # The free ngrok tunnel exposes the API publicly with no auth, so it
     # only starts when explicitly enabled (e.g. for Instagram publishing).
     if settings.tunnel_enabled:

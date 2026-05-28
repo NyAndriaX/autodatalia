@@ -17,7 +17,7 @@ backend/
     ├── main.py               # FastAPI entrypoint, CORS, /content mount, TikTok verify
     ├── config.py             # Env-loaded settings
     ├── auth.py               # /auth/* routes + bearer-token dependency
-    ├── db.py                 # SQLite user store (users.db)
+    ├── db.py                 # Postgres user store (psycopg2, see DATABASE_URL)
     ├── models.py             # Pydantic request/response schemas
     ├── routes.py             # Core REST endpoints
     ├── services.py           # AI generation + image-desc cache + posts CRUD
