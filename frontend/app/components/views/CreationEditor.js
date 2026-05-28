@@ -983,6 +983,7 @@ function RatioPicker({ platform, value, onChange, media }) {
    and one ghost (Save draft) — every other path lives in the dropdown.
    Closes on outside click / Escape, mirrors RatioPicker. */
 function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
+  const t = useTranslations("creation");
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -1095,6 +1096,7 @@ function PlatformPreview({
   media = [],
   creator = null,
 }) {
+  const t = useTranslations("creation");
   const [mediaIdx, setMediaIdx] = useState(0);
   const Icon = platform.icon;
   const charPercent = Math.min((content.length / platform.maxChars) * 100, 100);
