@@ -12,8 +12,12 @@ from .models import (
     AutomationRulesResponse,
     CaptionRequest,
     ContentItem,
+    CostLogResponse,
+    CostSummary,
     GenerateRequest,
     GenerateResponse,
+    HashtagsRequest,
+    HashtagsResponse,
     Post,
     PostCreate,
     PostUpdate,
@@ -34,6 +38,7 @@ from .publish import publish_to_targets
 from .services import (
     build_image_data_uri,
     generate_captions,
+    generate_hashtags,
     automation_create,
     automation_delete,
     automation_get,
@@ -102,37 +107,113 @@ async def messages() -> dict[str, list[Any]]:
 @router.post(
     "/generate",
     response_model=GenerateResponse,
-    dependencies=[auth_required],
 )
-async def generate(request: Request, body: GenerateRequest) -> GenerateResponse:
+async def generate(
+    request: Request,
+    body: GenerateRequest,
+    user_id: int = Depends(require_token),
+) -> GenerateResponse:
     """Prompt-driven generation for the editor's "Generate via AI" button."""
     client = _client_id(request)
     rate_guard(client)
-    variants, usage = await generate_post_variants(
+    variants, usage, model = await generate_post_variants(
         prompt=body.prompt,
         platforms=body.platforms,
         template=body.template,
         n=body.variants,
         image_filename=body.image_filename,
+        quality=body.quality,
+        user_id=user_id,
     )
     if usage["total_tokens"] > 0:  # don't count free cache hits
         rate_tick(client)
-    return GenerateResponse(variants=variants, usage=usage)
+    return GenerateResponse(
+        variants=variants,
+        usage=usage,
+        model=model,
+        tier=_tier_from_quality(body.quality, body.variants),
+    )
+
+
+def _tier_from_quality(quality: str, n: int) -> str:
+    if quality == "fast":
+        return "fast"
+    if quality == "premium":
+        return "premium"
+    if quality == "standard":
+        return "standard"
+    return "premium" if n >= 3 else "standard"
 
 
 @router.post(
     "/transform",
     response_model=TransformResponse,
-    dependencies=[auth_required],
 )
-async def transform(request: Request, body: TransformRequest) -> TransformResponse:
+async def transform(
+    request: Request,
+    body: TransformRequest,
+    user_id: int = Depends(require_token),
+) -> TransformResponse:
     """Quick AI actions (shorten / expand / tone) on existing content."""
     client = _client_id(request)
     rate_guard(client)
-    text, usage = await transform_content(body.content, body.action)
+    text, usage, _model = await transform_content(
+        body.content, body.action, user_id=user_id
+    )
     if usage["total_tokens"] > 0:
         rate_tick(client)
     return TransformResponse(text=text, usage=usage)
+
+
+@router.post(
+    "/hashtags",
+    response_model=HashtagsResponse,
+)
+async def hashtags(
+    request: Request,
+    body: HashtagsRequest,
+    user_id: int = Depends(require_token),
+) -> HashtagsResponse:
+    """Suggest hashtags for a post — fast-tier (cheap) by design."""
+    client = _client_id(request)
+    rate_guard(client)
+    tags, usage = await generate_hashtags(
+        body.content, max_tags=body.max_tags, user_id=user_id
+    )
+    if usage["total_tokens"] > 0:
+        rate_tick(client)
+    from .config import settings as _settings
+    return HashtagsResponse(
+        hashtags=tags, usage=usage, model=_settings.ai_model_fast
+    )
+
+
+# ── Cost dashboard ────────────────────────────────────────────────────
+
+
+@router.get("/costs/summary", response_model=CostSummary)
+async def costs_summary(period: str = "30d") -> CostSummary:
+    """Aggregate AI/media spend over the chosen window.
+
+    Periods: ``session`` (all-time, treated equivalently for now),
+    ``24h``, ``7d``, ``30d``, ``all``.
+    """
+    from .cost_tracking import summarize
+    seconds_by_label = {
+        "24h": 24 * 3600.0,
+        "7d": 7 * 24 * 3600.0,
+        "30d": 30 * 24 * 3600.0,
+        "all": None,
+        "session": None,
+    }
+    secs = seconds_by_label.get(period, 30 * 24 * 3600.0)
+    return CostSummary(**summarize(secs))
+
+
+@router.get("/costs/log", response_model=CostLogResponse)
+async def costs_log(limit: int = 200) -> CostLogResponse:
+    from .cost_tracking import list_logs
+    return CostLogResponse(entries=list_logs(limit=limit))
 
 
 # ── Publishing — fan post out to real social networks ────────────────
@@ -589,9 +670,11 @@ async def list_content(request: Request) -> dict[str, Any]:
     return {"count": len(items), "items": items}
 
 
-@router.post("/captions/generate", dependencies=[auth_required])
+@router.post("/captions/generate")
 async def generate_content_captions(
-    request: Request, body: CaptionRequest
+    request: Request,
+    body: CaptionRequest,
+    user_id: int = Depends(require_token),
 ) -> dict[str, Any]:
     url = await tunnel.wait_for_tunnel(timeout=30.0)
     base = url or str(request.base_url).rstrip("/")
@@ -612,7 +695,9 @@ async def generate_content_captions(
 
     results: list[ContentItem] = []
     for item in items:
-        captions = await generate_captions(item, include_image=include_image)
+        captions = await generate_captions(
+            item, include_image=include_image, user_id=user_id
+        )
 
         if body.save_results:
             save_caption_file(item, captions)

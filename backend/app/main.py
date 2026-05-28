@@ -88,9 +88,16 @@ async def on_startup() -> None:
     # scheduler above picks them up like any other scheduled post.
     from .automation_worker import start_automation_worker
     start_automation_worker()
+    # Video jobs worker — picks up queued LTX / fallback video jobs and
+    # polls Replicate until done. Cheap to keep running (5s tick, no-op
+    # when the queue is empty).
+    from .video_jobs import start_video_worker
+    start_video_worker()
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
     stop_scheduler()
     from .automation_worker import stop_automation_worker
     stop_automation_worker()
+    from .video_jobs import stop_video_worker
+    stop_video_worker()

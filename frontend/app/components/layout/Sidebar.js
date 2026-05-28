@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   Coins,
   Bot,
+  Film,
 } from "lucide-react";
 
 const navItems = [
@@ -47,6 +48,12 @@ const navItems = [
     label: "Media Library",
     icon: ImageIcon,
     description: "Assets & templates",
+  },
+  {
+    id: "videos",
+    label: "AI Video",
+    icon: Film,
+    description: "LTX generations & jobs",
   },
   {
     id: "analytics",

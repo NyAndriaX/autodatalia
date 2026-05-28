@@ -251,6 +251,32 @@ export default function MediaLibraryView() {
   const seq = useRef(0);
   const useSeq = useRef(0);
 
+  // Normalized item list — same shape the Tile expects. Built ONCE
+  // here so the render path and the bulk handlers (use-in-post,
+  // select-all, delete) all read the same thing. The earlier bug was
+  // that bulk handlers iterated `remoteHits` directly (shape
+  // `{id, title, kind, url}`) and filtered on `remoteUrl`/`previewUrl`
+  // which only exist on the normalized shape — every bulk action
+  // silently no-op'd for backend-listed assets.
+  const normalizedItems = useMemo(() => {
+    const sessionNames = new Set(uploads.map((u) => u.name));
+    return [
+      ...uploads,
+      ...remoteHits
+        .filter((h) => !sessionNames.has(h.title))
+        .map((h) => ({
+          id: h.id,
+          kind:
+            h.kind ||
+            (h.subtitle?.toLowerCase().includes("video") ? "video" : "image"),
+          name: h.title,
+          status: "uploaded",
+          remoteUrl: h.url || null,
+          previewUrl: null,
+        })),
+    ];
+  }, [uploads, remoteHits]);
+
   const handleToggleSelect = useCallback((item) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -260,19 +286,18 @@ export default function MediaLibraryView() {
     });
   }, []);
 
-  // Select-all / clear-all on the currently visible tile set. We pull from
-  // both `uploads` + `remoteHits` because the rendered list is a merge of
-  // the two, and we skip items still uploading or in an error state since
-  // those can't be acted on anyway.
+  // Select-all / clear-all on the currently visible tile set. Reads
+  // `normalizedItems` (not the raw arrays) so backend-listed assets get
+  // picked up too.
   const selectAllVisible = useCallback(() => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      for (const it of [...uploads, ...remoteHits]) {
+      for (const it of normalizedItems) {
         if (it.status === "uploaded" || it.remoteUrl) next.add(it.id);
       }
       return next;
     });
-  }, [uploads, remoteHits]);
+  }, [normalizedItems]);
 
   // Map of media filename / remote URL → number of scheduled or published
   // posts that reference it. Built once per scheduledPosts change so the
@@ -345,9 +370,7 @@ export default function MediaLibraryView() {
   // cleared so re-entering the library doesn't appear "stuck" selected.
   const onBulkUseInPost = useCallback(() => {
     if (!selectedIds.size) return;
-    const all = [...uploads, ...remoteHits].filter((it) =>
-      selectedIds.has(it.id)
-    );
+    const all = normalizedItems.filter((it) => selectedIds.has(it.id));
     const payload = all
       .filter((it) => it.remoteUrl || it.previewUrl)
       .map((item) => ({
@@ -359,7 +382,15 @@ export default function MediaLibraryView() {
         status: "uploaded",
         filename: (item.id || item.name || "").split("/").pop(),
       }));
-    if (!payload.length) return;
+    if (!payload.length) {
+      dispatch(
+        addNotification({
+          message: "Selected items have no usable URL — try re-uploading.",
+          type: "error",
+        })
+      );
+      return;
+    }
     dispatch(addMedia(payload));
     dispatch(setActiveView("creation"));
     dispatch(
@@ -369,7 +400,7 @@ export default function MediaLibraryView() {
       })
     );
     setSelectedIds(new Set());
-  }, [selectedIds, uploads, remoteHits, dispatch]);
+  }, [selectedIds, normalizedItems, dispatch]);
 
   // Fetch remote media on mount and whenever the query changes (debounced).
   useEffect(() => {
@@ -502,7 +533,16 @@ export default function MediaLibraryView() {
       next.delete(item.id);
       return next;
     });
-  }, []);
+    // Re-fetch so anything beyond the search page limit becomes visible
+    // (without this, deleting all currently-shown items can make the
+    // grid look empty even when more exist on disk).
+    try {
+      const hits = await listMedia(query.trim());
+      setRemoteHits(hits);
+    } catch {
+      /* listing is best-effort — the optimistic drop already happened */
+    }
+  }, [query]);
 
   const handleBulkDelete = useCallback(async () => {
     if (!selectedIds.size) return;
@@ -512,8 +552,10 @@ export default function MediaLibraryView() {
     setUploads((prev) => prev.map((u) => (selectedIds.has(u.id) ? { ...u, status: "deleting" } : u)));
     setRemoteHits((prev) => prev.map((h) => (selectedIds.has(h.id) ? { ...h, status: "deleting" } : h)));
 
-    // Gather all items that are selected from both arrays (we need their names/ids to send to backend)
-    const itemsToDelete = [...uploads, ...remoteHits].filter((it) => selectedIds.has(it.id));
+    // Gather all selected items from the normalized list (which carries
+    // the consistent `id`/`name`/`remoteUrl` shape both the optimistic
+    // marker and the backend deletion need).
+    const itemsToDelete = normalizedItems.filter((it) => selectedIds.has(it.id));
 
     // Process in parallel
     await Promise.all(
@@ -533,32 +575,19 @@ export default function MediaLibraryView() {
     setUploads((prev) => prev.filter((u) => !selectedIds.has(u.id)));
     setRemoteHits((prev) => prev.filter((h) => !selectedIds.has(h.id)));
     setSelectedIds(new Set());
-  }, [selectedIds, uploads, remoteHits]);
+    // Same reason as the single-delete path: the next batch of media on
+    // disk (beyond the search-result page) only surfaces if we re-list.
+    try {
+      const hits = await listMedia(query.trim());
+      setRemoteHits(hits);
+    } catch {
+      /* swallow — the optimistic UI already reflects the deletes */
+    }
+  }, [selectedIds, normalizedItems, query]);
 
-  // Build the displayed grid: this-session uploads first, then de-duplicated
-  // backend hits (avoid showing the same filename twice). The remote hits
-  // now carry `kind` and `url`, so the Tile can render real thumbs without
-  // a second roundtrip — fixes the "everything is an icon after refresh"
-  // regression.
-  const sessionNames = new Set(uploads.map((u) => u.name));
-  const items =
-    tab === "uploads"
-      ? [
-          ...uploads,
-          ...remoteHits
-            .filter((h) => !sessionNames.has(h.title))
-            .map((h) => ({
-              id: h.id,
-              kind:
-                h.kind ||
-                (h.subtitle?.toLowerCase().includes("video") ? "video" : "image"),
-              name: h.title,
-              status: "uploaded",
-              remoteUrl: h.url || null,
-              previewUrl: null,
-            })),
-        ]
-      : [];
+  // Displayed grid mirrors the normalizedItems memo above so bulk
+  // handlers and the tile rendering can never disagree on shape.
+  const items = tab === "uploads" ? normalizedItems : [];
 
   const isBrand = tab === "brand";
   const isAI = tab === "ai";

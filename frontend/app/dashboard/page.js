@@ -15,6 +15,7 @@ import AnalyticsView from "../components/views/AnalyticsView";
 import SettingsView from "../components/views/SettingsView";
 import DashboardView from "../components/views/DashboardView";
 import CreditsView from "../components/views/CreditsView";
+import VideoJobsView from "../components/views/VideoJobsView";
 
 export default function Home() {
   const dispatch = useDispatch();
@@ -51,6 +52,8 @@ export default function Home() {
         return <CalendarView />;
       case "library":
         return <MediaLibraryView />;
+      case "videos":
+        return <VideoJobsView />;
       case "analytics":
         return <AnalyticsView />;
       case "credits":
