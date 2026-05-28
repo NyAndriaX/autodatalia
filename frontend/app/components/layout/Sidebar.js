@@ -1,77 +1,78 @@
 "use client";
 
 import { useSelector, useDispatch } from "react-redux";
-import { toggleSidebar, setActiveView } from "../../store/uiSlice";
+import { toggleSidebar, setActiveView, setMobileNav } from "../../store/uiSlice";
 import { useIsMobile } from "../../lib/useIsMobile";
+import { Menu, Tooltip, Avatar, Badge } from "antd";
 import {
-  Sparkles,
-  CalendarDays,
-  Image as ImageIcon,
-  BarChart3,
-  Settings,
-  ChevronLeft,
-  ChevronRight,
-  Zap,
-  LayoutDashboard,
-  Coins,
-  Bot,
-  Film,
-} from "lucide-react";
+  DashboardOutlined,
+  EditOutlined,
+  RobotOutlined,
+  CalendarOutlined,
+  PictureOutlined,
+  BarChartOutlined,
+  CreditCardOutlined,
+  SettingOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+  ThunderboltOutlined,
+  VideoCameraOutlined,
+} from "@ant-design/icons";
 
-const navItems = [
+const NAV_ITEMS = [
   {
-    id: "dashboard",
+    key: "dashboard",
+    icon: <DashboardOutlined />,
     label: "Dashboard",
-    icon: LayoutDashboard,
-    description: "Today at a glance",
+    badge: null,
   },
   {
-    id: "creation",
+    key: "creation",
+    icon: <EditOutlined />,
     label: "Creation & Editor",
-    icon: Sparkles,
-    description: "Create & generate content",
+    badge: null,
   },
   {
-    id: "automation",
+    key: "automation",
+    icon: <RobotOutlined />,
     label: "Automation",
-    icon: Bot,
-    description: "Auto-generate & validate",
+    badge: "NEW",
   },
   {
-    id: "calendar",
+    key: "calendar",
+    icon: <CalendarOutlined />,
     label: "Calendar",
-    icon: CalendarDays,
-    description: "Schedule & plan",
+    badge: null,
   },
   {
-    id: "library",
+    key: "library",
+    icon: <PictureOutlined />,
     label: "Media Library",
-    icon: ImageIcon,
-    description: "Assets & templates",
+    badge: null,
   },
   {
-    id: "videos",
+    key: "videos",
+    icon: <VideoCameraOutlined />,
     label: "AI Video",
-    icon: Film,
-    description: "LTX generations & jobs",
+    badge: "NEW",
   },
   {
-    id: "analytics",
+    key: "analytics",
+    icon: <BarChartOutlined />,
     label: "Analytics",
-    icon: BarChart3,
-    description: "KPIs & API costs",
+    badge: null,
   },
   {
-    id: "credits",
+    key: "credits",
+    icon: <CreditCardOutlined />,
     label: "Credits",
-    icon: Coins,
-    description: "Balance & rates",
+    badge: null,
   },
   {
-    id: "settings",
+    key: "settings",
+    icon: <SettingOutlined />,
     label: "Settings",
-    icon: Settings,
-    description: "Integrations & config",
+    badge: null,
   },
 ];
 
@@ -80,192 +81,292 @@ export default function Sidebar() {
   const { sidebarCollapsed, activeView, mobileNavOpen } = useSelector(
     (state) => state.ui
   );
+  const user = useSelector((state) => state.auth.user);
   const isMobile = useIsMobile();
-  // On mobile the sidebar is a full off-canvas drawer (never the icon-only
-  // collapsed state); on desktop it keeps the collapse behaviour.
   const collapsed = isMobile ? false : sidebarCollapsed;
+
+  const userInitials = user?.name
+    ? user.name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2)
+    : "DT";
+
+  const menuItems = NAV_ITEMS.map((item) => ({
+    key: item.key,
+    icon: item.badge ? (
+      <Badge
+        count={item.badge}
+        size="small"
+        style={{ fontSize: 9, lineHeight: "14px", height: 14, minWidth: 28, padding: "0 4px" }}
+      >
+        {item.icon}
+      </Badge>
+    ) : (
+      item.icon
+    ),
+    label: collapsed ? null : item.label,
+  }));
 
   return (
     <aside
       id="sidebar-nav"
-      className="fixed left-0 top-0 h-full z-50 flex flex-col transition-all duration-300 ease-in-out"
       style={{
-        width: collapsed ? "72px" : "260px",
+        position: "fixed",
+        left: 0,
+        top: 0,
+        height: "100vh",
+        zIndex: 50,
+        width: collapsed ? 72 : 240,
+        display: "flex",
+        flexDirection: "column",
+        transition: "width 0.25s cubic-bezier(0.4,0,0.2,1)",
         background: "var(--bg-secondary)",
         borderRight: "1px solid var(--border-default)",
         transform:
           isMobile && !mobileNavOpen ? "translateX(-100%)" : "translateX(0)",
-        boxShadow: isMobile && mobileNavOpen ? "var(--shadow-dropdown)" : "none",
+        boxShadow:
+          isMobile && mobileNavOpen
+            ? "4px 0 24px rgba(0,0,0,0.15)"
+            : "none",
       }}
     >
-      {/* Logo Section */}
+      {/* Logo */}
       <div
-        className="flex items-center gap-3 px-4 shrink-0"
         style={{
-          height: "var(--topbar-height)",
+          height: 64,
+          display: "flex",
+          alignItems: "center",
+          padding: collapsed ? "0 16px" : "0 20px",
           borderBottom: "1px solid var(--border-default)",
+          gap: 12,
+          overflow: "hidden",
+          flexShrink: 0,
         }}
       >
         <div
-          className="flex items-center justify-center shrink-0"
           style={{
             width: 36,
             height: 36,
-            borderRadius: "var(--radius-sm)",
-            background: "var(--accent-gradient)",
+            borderRadius: 9,
+            background: "linear-gradient(135deg, #15307f 0%, #1d3fbe 50%, #3b5be3 100%)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            boxShadow: "0 2px 8px rgba(29,63,190,0.4)",
           }}
         >
-          <Zap size={20} color="white" />
+          <ThunderboltOutlined style={{ color: "#fff", fontSize: 16 }} />
         </div>
         {!collapsed && (
-          <div className="animate-fade-in overflow-hidden">
-            <h1
-              className="font-bold text-base leading-tight"
-              style={{ color: "var(--text-primary)" }}
+          <div style={{ overflow: "hidden" }}>
+            <div
+              style={{
+                fontWeight: 800,
+                fontSize: 14,
+                letterSpacing: "0.08em",
+                color: "var(--text-primary)",
+                lineHeight: 1.2,
+              }}
             >
               DATALIA
-            </h1>
-            <p
-              className="text-xs leading-tight"
-              style={{ color: "var(--text-tertiary)" }}
+            </div>
+            <div
+              style={{
+                fontSize: 10,
+                color: "var(--text-muted)",
+                letterSpacing: "0.04em",
+              }}
             >
-              Marketing Auto
-            </p>
+              Marketing Automation
+            </div>
           </div>
         )}
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 py-4 px-3 flex flex-col gap-1 overflow-y-auto">
-        {navItems.map((item) => {
-          const isActive = activeView === item.id;
-          const Icon = item.icon;
-
-          return (
-            <button
-              key={item.id}
-              id={`nav-${item.id}`}
-              onClick={() => dispatch(setActiveView(item.id))}
-              className="group relative flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 w-full text-left"
-              style={{
-                background: isActive
-                  ? "rgba(99, 102, 241, 0.12)"
-                  : "transparent",
-                color: isActive
-                  ? "var(--accent-primary-hover)"
-                  : "var(--text-secondary)",
-              }}
-              title={collapsed ? item.label : undefined}
-            >
-              {/* Active indicator */}
-              {isActive && (
-                <div
-                  className="absolute left-0 top-1/2 -translate-y-1/2 rounded-r-full"
-                  style={{
-                    width: 3,
-                    height: 24,
-                    background: "var(--accent-primary)",
-                  }}
-                />
-              )}
-
-              <Icon
-                size={20}
-                className="shrink-0 transition-colors duration-200"
-                style={{
-                  color: isActive
-                    ? "var(--accent-primary-hover)"
-                    : undefined,
-                }}
-              />
-
-              {!collapsed && (
-                <div className="overflow-hidden animate-fade-in">
-                  <span className="text-sm font-medium block leading-tight">
-                    {item.label}
-                  </span>
-                  <span
-                    className="text-xs block leading-tight"
-                    style={{ color: "var(--text-muted)" }}
+      {/* Navigation menu */}
+      <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "8px 0" }}>
+        {collapsed ? (
+          /* Collapsed: icon-only with tooltips */
+          <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "4px 8px" }}>
+            {NAV_ITEMS.map((item) => {
+              const isActive = activeView === item.key;
+              return (
+                <Tooltip key={item.key} title={item.label} placement="right">
+                  <button
+                    onClick={() => dispatch(setActiveView(item.key))}
+                    style={{
+                      width: "100%",
+                      height: 40,
+                      border: "none",
+                      borderRadius: 8,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      background: isActive
+                        ? "rgba(29,63,190,0.12)"
+                        : "transparent",
+                      color: isActive ? "#1d3fbe" : "var(--text-secondary)",
+                      fontSize: 16,
+                      transition: "all 0.15s",
+                      position: "relative",
+                    }}
                   >
-                    {item.description}
-                  </span>
-                </div>
-              )}
+                    {isActive && (
+                      <span
+                        style={{
+                          position: "absolute",
+                          left: 0,
+                          top: "50%",
+                          transform: "translateY(-50%)",
+                          width: 3,
+                          height: 20,
+                          borderRadius: "0 3px 3px 0",
+                          background: "#1d3fbe",
+                        }}
+                      />
+                    )}
+                    {item.badge ? (
+                      <Badge
+                        count={item.badge}
+                        size="small"
+                        style={{ fontSize: 9, lineHeight: "14px", height: 14, minWidth: 28, padding: "0 4px" }}
+                      >
+                        {item.icon}
+                      </Badge>
+                    ) : (
+                      item.icon
+                    )}
+                  </button>
+                </Tooltip>
+              );
+            })}
+          </div>
+        ) : (
+          /* Expanded: antd Menu */
+          <Menu
+            mode="inline"
+            selectedKeys={[activeView]}
+            onClick={({ key }) => {
+              dispatch(setActiveView(key));
+              if (isMobile) dispatch(setMobileNav(false));
+            }}
+            items={menuItems}
+            style={{
+              background: "transparent",
+              border: "none",
+              fontSize: 13,
+            }}
+          />
+        )}
+      </div>
 
-              {/* Hover tooltip when collapsed */}
-              {collapsed && (
-                <div
-                  className="absolute left-full ml-3 px-3 py-2 rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-200 whitespace-nowrap z-[60]"
-                  style={{
-                    background: "var(--bg-elevated)",
-                    border: "1px solid var(--border-hover)",
-                    color: "var(--text-primary)",
-                    fontSize: "0.8125rem",
-                    fontWeight: 500,
-                  }}
-                >
-                  {item.label}
-                </div>
-              )}
-            </button>
-          );
-        })}
-      </nav>
-
-      {/* Bottom Section */}
+      {/* Bottom section */}
       <div
-        className="px-3 py-3 shrink-0"
-        style={{ borderTop: "1px solid var(--border-default)" }}
+        style={{
+          borderTop: "1px solid var(--border-default)",
+          padding: "12px 8px",
+          flexShrink: 0,
+        }}
       >
-        {/* Collapse Toggle — desktop only (mobile uses the drawer) */}
+        {/* Collapse toggle — desktop only */}
         {!isMobile && (
           <button
             id="sidebar-toggle"
             onClick={() => dispatch(toggleSidebar())}
-            className="flex items-center justify-center w-full py-2 rounded-lg transition-all duration-200"
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             style={{
-              background: "var(--bg-tertiary)",
+              width: "100%",
+              height: 36,
+              border: "1px solid var(--border-default)",
+              borderRadius: 8,
+              background: "transparent",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
               color: "var(--text-secondary)",
+              fontSize: 14,
+              transition: "all 0.15s",
+              marginBottom: 10,
             }}
           >
-            {collapsed ? (
-              <ChevronRight size={18} />
-            ) : (
-              <ChevronLeft size={18} />
-            )}
+            {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
             {!collapsed && (
-              <span className="ml-2 text-xs font-medium">Collapse</span>
+              <span style={{ fontSize: 12, fontWeight: 500 }}>Collapse</span>
             )}
           </button>
         )}
 
-        {/* User avatar */}
+        {/* User info */}
         {!collapsed && (
           <div
-            className="flex items-center gap-3 mt-3 px-3 py-2.5 rounded-lg animate-fade-in"
-            style={{ background: "var(--bg-tertiary)" }}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              padding: "8px 12px",
+              borderRadius: 8,
+              background: "var(--bg-tertiary)",
+            }}
           >
-            <div
-              className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-white text-xs font-bold"
-              style={{ background: "var(--accent-gradient)" }}
+            <Avatar
+              size={32}
+              style={{
+                background: "linear-gradient(135deg, #1d3fbe, #3b5be3)",
+                fontWeight: 700,
+                fontSize: 12,
+                flexShrink: 0,
+              }}
             >
-              DT
-            </div>
-            <div className="overflow-hidden">
-              <p
-                className="text-sm font-medium leading-tight truncate"
-                style={{ color: "var(--text-primary)" }}
+              {userInitials}
+            </Avatar>
+            <div style={{ overflow: "hidden", flex: 1 }}>
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "var(--text-primary)",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
               >
-                DATALIA Team
-              </p>
-              <p
-                className="text-xs leading-tight truncate"
-                style={{ color: "var(--text-muted)" }}
+                {user?.name || "Datalia Team"}
+              </div>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: "var(--text-muted)",
+                }}
               >
-                Admin
-              </p>
+                {user?.email ? user.email.split("@")[0] : "Admin"}
+              </div>
             </div>
+            <Badge
+              status="success"
+              style={{ flexShrink: 0 }}
+              title="Online"
+            />
+          </div>
+        )}
+
+        {/* Collapsed avatar */}
+        {collapsed && (
+          <div style={{ display: "flex", justifyContent: "center" }}>
+            <Tooltip title={user?.name || "Datalia Team"} placement="right">
+              <Avatar
+                size={32}
+                style={{
+                  background: "linear-gradient(135deg, #1d3fbe, #3b5be3)",
+                  fontWeight: 700,
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                {userInitials}
+              </Avatar>
+            </Tooltip>
           </div>
         )}
       </div>

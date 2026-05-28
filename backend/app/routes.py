@@ -82,6 +82,96 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.get("/stats")
+async def get_stats() -> dict[str, Any]:
+    """Aggregated content statistics for the dashboard KPI strip.
+
+    Returns counts broken down by post status so the frontend never has
+    to load the full posts list just to paint four numbers.
+    """
+    from .services import posts_list as _posts_list, messages_list
+
+    all_posts = _posts_list()
+    by_status: dict[str, int] = {
+        "draft": 0,
+        "scheduled": 0,
+        "pending": 0,
+        "approved": 0,
+        "published": 0,
+        "error": 0,
+        "awaiting": 0,
+        "rejected": 0,
+    }
+    for post in all_posts:
+        s = post.get("status", "draft")
+        if s in by_status:
+            by_status[s] += 1
+
+    recent_messages = messages_list()[:5]
+
+    # Media asset count
+    media_count = sum(
+        1
+        for f in settings.content_dir.rglob("*")
+        if f.is_file() and not f.name.startswith(".")
+    )
+
+    return {
+        "total_posts": len(all_posts),
+        "by_status": by_status,
+        "media_assets": media_count,
+        "recent_activity_count": len(recent_messages),
+    }
+
+
+@router.get("/dashboard-summary")
+async def dashboard_summary() -> dict[str, Any]:
+    """Rich summary payload for the dashboard view.
+
+    Combines post stats, recent activity and connection status so the
+    dashboard page can prime itself with a single request on mount.
+    """
+    from .services import posts_list as _posts_list, messages_list
+    from .oauth import _load_tokens
+
+    all_posts = _posts_list()
+
+    by_status: dict[str, int] = {}
+    for post in all_posts:
+        s = post.get("status", "draft")
+        by_status[s] = by_status.get(s, 0) + 1
+
+    recent_activity = messages_list()[:10]
+
+    token_data = _load_tokens()
+    connected_providers = [
+        provider
+        for provider, data in token_data.items()
+        if data.get("access_token")
+    ]
+
+    media_count = sum(
+        1
+        for f in settings.content_dir.rglob("*")
+        if f.is_file() and not f.name.startswith(".")
+    )
+
+    return {
+        "posts": {
+            "total": len(all_posts),
+            "by_status": by_status,
+        },
+        "connections": {
+            "connected_providers": connected_providers,
+            "total_connected": len(connected_providers),
+        },
+        "media": {
+            "total_assets": media_count,
+        },
+        "recent_activity": recent_activity,
+    }
+
+
 @router.get("/tunnel-status")
 async def tunnel_status() -> dict[str, Any]:
     return {
