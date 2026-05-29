@@ -3,6 +3,7 @@ import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn
 
 import { useState, useRef, useEffect } from "react";
 import { useDispatch } from "react-redux";
+import { useTranslations } from "next-intl";
 import {
   X,
   Upload,
@@ -35,10 +36,10 @@ import TimePicker from "./TimePicker";
 import RatioPicker from "./RatioPicker";
 
 const MEDIA_SOURCES = [
-  { id: "upload-image", kind: "image", source: "upload", label: "Upload Image", icon: Upload },
-  { id: "upload-video", kind: "video", source: "upload", label: "Upload Video", icon: Film },
-  { id: "ai-image", kind: "image", source: "ai", label: "Generate Image", icon: ImagePlus },
-  { id: "ai-video", kind: "video", source: "ai", label: "Generate Video", icon: Sparkles },
+  { id: "upload-image", kind: "image", source: "upload", labelKey: "uploadImage", icon: Upload },
+  { id: "upload-video", kind: "video", source: "upload", labelKey: "uploadVideo", icon: Film },
+  { id: "ai-image", kind: "image", source: "ai", labelKey: "generateImage", icon: ImagePlus },
+  { id: "ai-video", kind: "video", source: "ai", labelKey: "generateVideo", icon: Sparkles },
 ];
 
 /**
@@ -58,12 +59,17 @@ export default function ScheduleModal({
   // editor would be lost the moment the user clicked Schedule.
   initialRatios = null,
   initialTikTok = null,
-  title = "Schedule a post",
-  submitLabel = "Schedule",
+  title,
+  submitLabel,
   onClose,
   onSchedule,
 }) {
   const dispatch = useDispatch();
+  const t = useTranslations("scheduleModal");
+  const tCommon = useTranslations("common");
+  const tCreation = useTranslations("creation");
+  const resolvedTitle = title ?? t("title");
+  const resolvedSubmitLabel = submitLabel ?? tCommon("schedule");
   const [content, setContent] = useState(initialContent);
   const [platforms, setPlatforms] = useState(
     initialPlatforms ?? { facebook: true, instagram: true }
@@ -270,9 +276,9 @@ export default function ScheduleModal({
       >
         <div className="flex items-center justify-between mb-1">
           <h3 className="text-base font-bold" style={{ color: "var(--text-primary)" }}>
-            {title}
+            {resolvedTitle}
           </h3>
-          <button onClick={onClose} className={`${btnGhost}`} style={{ padding: 6 }} aria-label="Close">
+          <button onClick={onClose} className={`${btnGhost}`} style={{ padding: 6 }} aria-label={tCommon("close")}>
             <X size={16} />
           </button>
         </div>
@@ -285,7 +291,7 @@ export default function ScheduleModal({
             className="text-xs font-semibold uppercase tracking-wider"
             style={{ color: "var(--text-tertiary)" }}
           >
-            Content
+            {t("contentLabel")}
           </span>
           <button
             type="button"
@@ -301,19 +307,19 @@ export default function ScheduleModal({
             }}
             title={
               content.trim()
-                ? "Generate a new draft based on the current content"
-                : "Generate a draft from the selected platforms"
+                ? t("regenerateTitle")
+                : t("generateFromPlatformsTitle")
             }
           >
             {isGenerating ? (
               <>
                 <Loader2 size={11} className="animate-spin" />
-                Generating…
+                {tCreation("generating")}
               </>
             ) : (
               <>
                 <Sparkles size={11} />
-                {content.trim() ? "Regenerate" : "Generate with AI"}
+                {content.trim() ? tCreation("regenerate") : t("generateWithAi")}
               </>
             )}
           </button>
@@ -322,7 +328,7 @@ export default function ScheduleModal({
           autoFocus
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          placeholder="What do you want to post? Or click Generate with AI."
+          placeholder={t("contentPlaceholder")}
           rows={3}
           className={`${inputField}`}
           style={{ resize: "none", marginBottom: 14 }}
@@ -330,7 +336,7 @@ export default function ScheduleModal({
 
         {/* Media source chooser */}
         <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--text-tertiary)" }}>
-          Media
+          {t("media")}
         </p>
         <div className="grid grid-cols-2 gap-2 mb-3">
           {MEDIA_SOURCES.map((s) => {
@@ -345,10 +351,10 @@ export default function ScheduleModal({
                   border: "1px solid var(--border-default)",
                   color: "var(--text-secondary)",
                 }}
-                title={s.source === "ai" ? "Generate with AI" : "Pick a file from your device"}
+                title={s.source === "ai" ? t("generateWithAi") : t("pickFromDevice")}
               >
                 <Icon size={14} style={{ color: "var(--accent-primary)" }} />
-                {s.label}
+                {t(s.labelKey)}
                 {s.source === "ai" && (
                   <Sparkles size={11} style={{ color: "var(--status-pending)", marginLeft: "auto" }} />
                 )}
@@ -368,7 +374,7 @@ export default function ScheduleModal({
             ) : (
               <Sparkles size={13} />
             )}{" "}
-            AI image
+            {tCreation("aiImageBtn")}
           </button>
           <button
             type="button"
@@ -381,7 +387,7 @@ export default function ScheduleModal({
             ) : (
               <Film size={13} />
             )}{" "}
-            AI video
+            {tCreation("aiVideoBtn")}
           </button>
         </div>
         <input
@@ -422,7 +428,7 @@ export default function ScheduleModal({
                   {m.kind === "video" ? <Film size={13} /> : <ImagePlus size={13} />}
                   <span className="flex-1 truncate">{m.name}</span>
                   {statusIcon}
-                  <button onClick={() => removeMedia(m.id)} style={{ color: "var(--text-muted)" }} aria-label="Remove media">
+                  <button onClick={() => removeMedia(m.id)} style={{ color: "var(--text-muted)" }} aria-label={t("removeMedia")}>
                     <X size={12} />
                   </button>
                 </div>
@@ -433,7 +439,7 @@ export default function ScheduleModal({
 
         {/* Platforms */}
         <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--text-tertiary)" }}>
-          Platforms
+          {tCreation("platforms")}
         </p>
         <div className="flex flex-wrap gap-2 mb-3">
           {PLATFORMS.map((p) => {
@@ -467,7 +473,7 @@ export default function ScheduleModal({
               className="text-xs font-semibold uppercase tracking-wider mb-2"
               style={{ color: "var(--text-tertiary)" }}
             >
-              Aspect ratio
+              {t("aspectRatio")}
             </p>
             <div className="flex flex-wrap items-center gap-2 mb-4">
               {PLATFORMS.filter((p) => platforms[p.id]).map((p) => {
@@ -510,12 +516,12 @@ export default function ScheduleModal({
 
         <div className="flex justify-end gap-2">
           <button className={`${btnSecondary}`} onClick={onClose}>
-            Cancel
+            {tCommon("cancel")}
           </button>
           <button
             className={`${btnPrimary}`}
             disabled={hasPending}
-            title={hasPending ? "Waiting for media to finish uploading…" : undefined}
+            title={hasPending ? t("waitingForUpload") : undefined}
             onClick={() =>
               onSchedule({
                 content: content.trim(),
@@ -537,7 +543,7 @@ export default function ScheduleModal({
               })
             }
           >
-            {hasPending ? "Uploading…" : submitLabel}
+            {hasPending ? tCommon("uploading") : resolvedSubmitLabel}
           </button>
         </div>
       </div>

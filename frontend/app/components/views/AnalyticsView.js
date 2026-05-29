@@ -26,17 +26,11 @@ import {
   BarChartOutlined,
 } from "@ant-design/icons";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { resetTokenUsage } from "../../store/uiSlice";
 import { fetchCostSummary } from "../../lib/costService";
 
 const { Title, Text } = Typography;
-
-const MOCK_KPIS = [
-  { label: "Posts publiés (30j)", value: "128", delta: "+12%", positive: true },
-  { label: "Engagement moyen", value: "4.7%", delta: "+0.6pt", positive: true },
-  { label: "Portée", value: "82.4k", delta: "+9%", positive: true },
-  { label: "Coût LLM (30j)", value: "$37.10", delta: "-4%", positive: false },
-];
 
 function buildHourlyBuckets(calls, bucketCount = 7) {
   if (!calls.length) {
@@ -83,8 +77,17 @@ function formatTokens(n) {
 
 export default function AnalyticsView() {
   const dispatch = useDispatch();
+  const t = useTranslations("analytics");
+  const tCommon = useTranslations("common");
   const aiUsage = useSelector((s) => s.ui.aiUsage);
   const calls = useMemo(() => aiUsage.recentCalls || [], [aiUsage.recentCalls]);
+
+  const MOCK_KPIS = [
+    { label: t("postsPublished"), value: "128", delta: "+12%", positive: true },
+    { label: t("avgEngagement"), value: "4.7%", delta: "+0.6pt", positive: true },
+    { label: t("reach"), value: "82.4k", delta: "+9%", positive: true },
+    { label: t("llmCost30d"), value: "$37.10", delta: "-4%", positive: false },
+  ];
 
   const buckets = useMemo(() => buildHourlyBuckets(calls), [calls]);
   const maxBar = useMemo(() => Math.max(1, ...buckets.map((b) => b.calls)), [buckets]);
@@ -123,7 +126,7 @@ export default function AnalyticsView() {
   /* Model table columns */
   const modelColumns = [
     {
-      title: "Model",
+      title: t("model"),
       dataIndex: "model",
       key: "model",
       render: (m) => (
@@ -131,14 +134,14 @@ export default function AnalyticsView() {
       ),
     },
     {
-      title: "Calls",
+      title: t("calls"),
       dataIndex: "calls",
       key: "calls",
       width: 70,
       render: (v) => <Tag color="blue">{v}</Tag>,
     },
     {
-      title: "Tokens",
+      title: t("tokens"),
       dataIndex: "tokens",
       key: "tokens",
       width: 100,
@@ -171,10 +174,10 @@ export default function AnalyticsView() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
           <div>
             <Title level={3} style={{ margin: 0, letterSpacing: "-0.01em" }}>
-              Analytiques & Coûts IA
+              {t("titleFull")}
             </Title>
             <Text type="secondary" style={{ fontSize: 13 }}>
-              Utilisation IA en direct et performances des publications.
+              {t("subtitle")}
             </Text>
           </div>
           {hasRealData && (
@@ -183,7 +186,7 @@ export default function AnalyticsView() {
               onClick={() => dispatch(resetTokenUsage())}
               size="small"
             >
-              Réinitialiser
+              {t("reset")}
             </Button>
           )}
         </div>
@@ -195,9 +198,7 @@ export default function AnalyticsView() {
           icon={<ThunderboltOutlined />}
           message={
             <span>
-              <strong>{sessionTokens.toLocaleString()} tokens</strong> across{" "}
-              <strong>{sessionCalls}</strong> appel IA réel{sessionCalls !== 1 ? "s" : ""} this session.
-              Les hits de cache ne consomment pas de tokens.
+              {t("sessionTokens", { n: sessionTokens.toLocaleString(), calls: sessionCalls })}
             </span>
           }
           style={{ marginBottom: 24, borderRadius: 10 }}
@@ -211,15 +212,15 @@ export default function AnalyticsView() {
                 title={
                   <Space size={6}>
                     <ThunderboltOutlined style={{ color: "#1d3fbe" }} />
-                    <span>Tokens (session)</span>
-                    <Tag color="blue" style={{ fontSize: 9, lineHeight: "16px", padding: "0 4px" }}>LIVE</Tag>
+                    <span>{t("tokensSession")}</span>
+                    <Tag color="blue" style={{ fontSize: 9, lineHeight: "16px", padding: "0 4px" }}>{t("liveBadge")}</Tag>
                   </Space>
                 }
                 value={formatTokens(sessionTokens)}
                 valueStyle={{ fontSize: 26, fontWeight: 800, color: "#1d3fbe" }}
               />
               <Text type="secondary" style={{ fontSize: 12 }}>
-                {sessionCalls} real call{sessionCalls !== 1 ? "s" : ""}
+                {t("realCalls", { n: sessionCalls })}
               </Text>
             </Card>
           </Col>
@@ -230,14 +231,14 @@ export default function AnalyticsView() {
                 title={
                   <Space size={6}>
                     <RiseOutlined style={{ color: "#22c55e" }} />
-                    <span>Avg / call</span>
+                    <span>{t("avgPerCall")}</span>
                   </Space>
                 }
                 value={avgPerCall ? formatTokens(avgPerCall) : "—"}
                 valueStyle={{ fontSize: 26, fontWeight: 800, color: "#22c55e" }}
               />
               <Text type="secondary" style={{ fontSize: 12 }}>
-                {hasRealData ? "session avg" : "no calls yet"}
+                {hasRealData ? t("sessionAvg") : t("noCallsYet")}
               </Text>
             </Card>
           </Col>
@@ -248,14 +249,14 @@ export default function AnalyticsView() {
                 title={
                   <Space size={6}>
                     <DatabaseOutlined style={{ color: "#7c3aed" }} />
-                    <span>Modèles utilisés</span>
+                    <span>{t("modelsUsed")}</span>
                   </Space>
                 }
                 value={byModel.length || "—"}
                 valueStyle={{ fontSize: 26, fontWeight: 800, color: "#7c3aed" }}
               />
               <Text type="secondary" style={{ fontSize: 12 }}>
-                {byModel[0]?.model || "no calls yet"}
+                {byModel[0]?.model || t("noCallsYet")}
               </Text>
             </Card>
           </Col>
@@ -266,8 +267,8 @@ export default function AnalyticsView() {
                 title={
                   <Space size={6}>
                     <DollarOutlined style={{ color: "#f59e0b" }} />
-                    <span>Cache hit rate</span>
-                    <Tooltip title="Cache hits avoid appel IA réels and cost 0 tokens.">
+                    <span>{t("cacheHitRate")}</span>
+                    <Tooltip title={t("cacheHitTooltip")}>
                       <InfoCircleOutlined style={{ color: "var(--text-muted)", fontSize: 11 }} />
                     </Tooltip>
                   </Space>
@@ -276,7 +277,7 @@ export default function AnalyticsView() {
                 valueStyle={{ fontSize: 26, fontWeight: 800, color: "#f59e0b" }}
               />
               <Text type="secondary" style={{ fontSize: 12 }}>
-                {cacheHits} hit{cacheHits !== 1 ? "s" : ""} · {sessionCalls} paid
+                {t("hitsPaid", { hits: cacheHits, paid: sessionCalls })}
               </Text>
             </Card>
           </Col>
@@ -290,8 +291,8 @@ export default function AnalyticsView() {
               title={
                 <Space>
                   <BarChartOutlined />
-                  <span>LLM calls — last 7 hours</span>
-                  <Tag color="blue" style={{ fontSize: 9, lineHeight: "16px", padding: "0 4px" }}>LIVE</Tag>
+                  <span>{t("llmCalls7h")}</span>
+                  <Tag color="blue" style={{ fontSize: 9, lineHeight: "16px", padding: "0 4px" }}>{t("liveBadge")}</Tag>
                 </Space>
               }
               style={{ borderRadius: 12 }}
@@ -303,7 +304,7 @@ export default function AnalyticsView() {
                     {buckets.map((b, idx) => (
                       <Tooltip
                         key={idx}
-                        title={`${b.calls} call${b.calls !== 1 ? "s" : ""} · ${formatTokens(b.tokens)} tokens`}
+                        title={t("bucketTooltip", { calls: b.calls, tokens: formatTokens(b.tokens) })}
                       >
                         <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, cursor: "default" }}>
                           <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
@@ -337,7 +338,7 @@ export default function AnalyticsView() {
                 <div style={{ height: 160, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 8 }}>
                   <BarChartOutlined style={{ fontSize: 32, color: "var(--text-muted)", opacity: 0.4 }} />
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    Generate a post to start collecting session data.
+                    {t("emptyChart")}
                   </Text>
                 </div>
               )}
@@ -350,8 +351,8 @@ export default function AnalyticsView() {
               title={
                 <Space>
                   <DatabaseOutlined />
-                  <span>Tokens utilisés par modèle</span>
-                  <Tag color="blue" style={{ fontSize: 9, lineHeight: "16px", padding: "0 4px" }}>LIVE</Tag>
+                  <span>{t("tokenByModel")}</span>
+                  <Tag color="blue" style={{ fontSize: 9, lineHeight: "16px", padding: "0 4px" }}>{t("liveBadge")}</Tag>
                 </Space>
               }
               style={{ borderRadius: 12 }}
@@ -367,7 +368,7 @@ export default function AnalyticsView() {
               ) : (
                 <div style={{ padding: 32, textAlign: "center" }}>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    No AI calls yet this session.
+                    {t("emptyTable")}
                   </Text>
                 </div>
               )}
@@ -380,41 +381,41 @@ export default function AnalyticsView() {
           <Space>
             <DollarOutlined style={{ color: "#f59e0b" }} />
             <Text style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600, color: "var(--text-secondary)" }}>
-              Server-tracked · last 30 days
+              {t("serverTracked")}
             </Text>
             {serverSummary && (
-              <Tag color="gold" style={{ fontSize: 9, lineHeight: "16px", padding: "0 4px" }}>LIVE</Tag>
+              <Tag color="gold" style={{ fontSize: 9, lineHeight: "16px", padding: "0 4px" }}>{t("liveBadge")}</Tag>
             )}
           </Space>
         </div>
         <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
           {[
             {
-              label: "LLM + media spend",
+              label: t("spend30d"),
               value: serverSummary?.totals ? `€${(serverSummary.totals.cost_eur || 0).toFixed(2)}` : "—",
-              sub: serverSummary?.totals ? `$${(serverSummary.totals.cost_usd || 0).toFixed(2)} USD` : "loading…",
+              sub: serverSummary?.totals ? `$${(serverSummary.totals.cost_usd || 0).toFixed(2)} USD` : tCommon("loading"),
               color: "#f59e0b",
             },
             {
-              label: "Real AI calls (30d)",
+              label: t("realCalls30d"),
               value: serverSummary?.totals ? (serverSummary.totals.calls || 0).toLocaleString() : "—",
-              sub: serverSummary?.totals ? `${serverSummary.totals.cache_hits || 0} cache hits` : "—",
+              sub: serverSummary?.totals ? t("cacheHitsCount", { n: serverSummary.totals.cache_hits || 0 }) : "—",
               color: "#1d3fbe",
             },
             {
-              label: "Tokens (30d)",
+              label: t("tokens30d"),
               value: serverSummary?.totals ? formatTokens(serverSummary.totals.tokens || 0) : "—",
               sub: serverSummary?.totals?.saved_by_cache_usd
-                ? `${formatTokens(Math.round((serverSummary.totals.saved_by_cache_usd / 0.001) * 1000))} saved by cache`
+                ? t("savedByCache", { tokens: formatTokens(Math.round((serverSummary.totals.saved_by_cache_usd / 0.001) * 1000)) })
                 : "—",
               color: "#7c3aed",
             },
             {
-              label: "Top workflow",
+              label: t("topWorkflow"),
               value: serverSummary?.by_workflow?.[0]?.key || "—",
               sub: serverSummary?.by_workflow?.[0]
                 ? `$${serverSummary.by_workflow[0].cost_usd.toFixed(3)}`
-                : "no spend yet",
+                : t("noSpendYet"),
               color: "#059669",
             },
           ].map((item) => (
@@ -436,7 +437,7 @@ export default function AnalyticsView() {
           <Space>
             <InfoCircleOutlined style={{ color: "var(--text-muted)" }} />
             <Text type="secondary" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600 }}>
-              Sample data — engagement records not yet wired
+              {t("sampleData")}
             </Text>
           </Space>
         </div>

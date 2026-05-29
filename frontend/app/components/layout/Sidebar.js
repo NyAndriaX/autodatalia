@@ -1,6 +1,7 @@
 "use client";
 
 import { useSelector, useDispatch } from "react-redux";
+import { useTranslations } from "next-intl";
 import { toggleSidebar, setActiveView, setMobileNav } from "../../store/uiSlice";
 import { useIsMobile } from "../../lib/useIsMobile";
 import { Tooltip, Avatar, Badge } from "antd";
@@ -20,46 +21,51 @@ import {
   PlusOutlined,
 } from "@ant-design/icons";
 
-const NAV_SECTIONS = [
-  {
-    title: "Contenu",
-    items: [
-      { key: "dashboard", icon: <DashboardOutlined />, label: "Tableau de bord" },
-      { key: "creation",  icon: <EditOutlined />,      label: "Créer un post"   },
-      { key: "calendar",  icon: <CalendarOutlined />,  label: "Calendrier"      },
-      { key: "library",   icon: <PictureOutlined />,   label: "Médiathèque"    },
-    ],
-  },
-  {
-    title: "Automatisation",
-    items: [
-      { key: "automation", icon: <RobotOutlined />,       label: "Automatisation", badge: "NEW" },
-      { key: "videos",     icon: <VideoCameraOutlined />, label: "Vidéo IA",       badge: "NEW" },
-    ],
-  },
-  {
-    title: "Performance",
-    items: [
-      { key: "analytics", icon: <BarChartOutlined />,  label: "Analytiques" },
-      { key: "credits",   icon: <CreditCardOutlined />,label: "Crédits"     },
-    ],
-  },
-  {
-    title: "Compte",
-    items: [
-      { key: "settings", icon: <SettingOutlined />, label: "Paramètres" },
-    ],
-  },
-];
-
-const NAV_ITEMS_FLAT = NAV_SECTIONS.flatMap((s) => s.items);
-
 export default function Sidebar() {
   const dispatch = useDispatch();
   const { sidebarCollapsed, activeView, mobileNavOpen } = useSelector((s) => s.ui);
   const user    = useSelector((s) => s.auth.user);
   const isMobile = useIsMobile();
   const collapsed = isMobile ? false : sidebarCollapsed;
+
+  const t = useTranslations("nav");
+  const tSidebar = useTranslations("sidebar");
+  const tCommon = useTranslations("common");
+  const tCreation = useTranslations("creation");
+
+  const NAV_SECTIONS = [
+    {
+      title: t("sectionContent"),
+      items: [
+        { key: "dashboard", icon: <DashboardOutlined />, label: tSidebar("dashboard") },
+        { key: "creation",  icon: <EditOutlined />,      label: tCreation("title")    },
+        { key: "calendar",  icon: <CalendarOutlined />,  label: tSidebar("calendar")  },
+        { key: "library",   icon: <PictureOutlined />,   label: tSidebar("library")   },
+      ],
+    },
+    {
+      title: t("sectionAutomation"),
+      items: [
+        { key: "automation", icon: <RobotOutlined />,       label: tSidebar("automation"), badge: "NEW" },
+        { key: "videos",     icon: <VideoCameraOutlined />, label: tSidebar("videos"),     badge: "NEW" },
+      ],
+    },
+    {
+      title: t("sectionPerformance"),
+      items: [
+        { key: "analytics", icon: <BarChartOutlined />,  label: tSidebar("analytics") },
+        { key: "credits",   icon: <CreditCardOutlined />,label: tSidebar("credits")   },
+      ],
+    },
+    {
+      title: t("sectionAccount"),
+      items: [
+        { key: "settings", icon: <SettingOutlined />, label: tCommon("settings") },
+      ],
+    },
+  ];
+
+  const NAV_ITEMS_FLAT = NAV_SECTIONS.flatMap((s) => s.items);
 
   const initials = user?.name
     ? user.name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2)
@@ -118,10 +124,10 @@ export default function Sidebar() {
               color: "var(--text-primary)",
               lineHeight: 1.2,
             }}>
-              DATALIA
+              {tCommon("appName")}
             </div>
             <div style={{ fontSize: 10, color: "var(--text-muted)", letterSpacing: "0.03em" }}>
-              Automatisation Marketing
+              {t("marketingAutomation")}
             </div>
           </div>
         )}
@@ -135,7 +141,7 @@ export default function Sidebar() {
             dispatch(setActiveView("creation"));
             if (isMobile) dispatch(setMobileNav(false));
           }}
-          title="Créer un post"
+          title={tCreation("title")}
           style={{
             display: "flex",
             width: "100%",
@@ -158,7 +164,7 @@ export default function Sidebar() {
           onMouseLeave={(e) => { e.currentTarget.style.transform = ""; }}
         >
           <PlusOutlined style={{ fontSize: 15 }} />
-          {!collapsed && <span>Nouveau post</span>}
+          {!collapsed && <span>{t("newPost")}</span>}
         </button>
       </div>
 
@@ -210,7 +216,7 @@ export default function Sidebar() {
           </div>
         ) : (
           /* Mode développé : sections groupées */
-          <nav aria-label="Navigation principale">
+          <nav aria-label={t("mainNavigation")}>
             {NAV_SECTIONS.map((section) => (
               <div key={section.title} style={{ marginBottom: 4 }}>
                 <p style={{
@@ -293,7 +299,7 @@ export default function Sidebar() {
           <button
             id="sidebar-toggle"
             onClick={() => dispatch(toggleSidebar())}
-            title={collapsed ? "Développer la barre" : "Réduire la barre"}
+            title={collapsed ? t("expandSidebar") : t("collapseSidebar")}
             style={{
               width: "100%", height: 34,
               border: "1px solid var(--border-default)",
@@ -313,7 +319,7 @@ export default function Sidebar() {
             onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
           >
             {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-            {!collapsed && <span style={{ fontSize: 12, fontWeight: 500 }}>Réduire</span>}
+            {!collapsed && <span style={{ fontSize: 12, fontWeight: 500 }}>{tSidebar("collapse")}</span>}
           </button>
         )}
 
@@ -335,17 +341,17 @@ export default function Sidebar() {
             </Avatar>
             <div style={{ overflow: "hidden", flex: 1 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {user?.name || "Équipe Datalia"}
+                {user?.name || tSidebar("team")}
               </div>
               <div style={{ fontSize: 10, color: "var(--text-muted)" }}>
-                {user?.email ? user.email.split("@")[0] : "Admin"}
+                {user?.email ? user.email.split("@")[0] : tSidebar("admin")}
               </div>
             </div>
-            <Badge status="success" title="En ligne" />
+            <Badge status="success" title={t("online")} />
           </div>
         ) : (
           <div style={{ display: "flex", justifyContent: "center" }}>
-            <Tooltip title={user?.name || "Équipe Datalia"} placement="right">
+            <Tooltip title={user?.name || tSidebar("team")} placement="right">
               <Avatar size={30} style={{
                 background: "var(--accent-gradient)",
                 fontWeight: 700, fontSize: 11, cursor: "pointer",

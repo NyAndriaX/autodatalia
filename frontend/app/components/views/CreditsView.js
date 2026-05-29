@@ -2,6 +2,7 @@
 import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn, badgeDraft } from "../../lib/uiClasses";
 
 import { useEffect, useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   Coins,
   RefreshCcw,
@@ -31,27 +32,28 @@ import { fetchCostSummary } from "../../lib/costService";
  */
 const CREDIT_TO_EUR = 0.01;
 const EUR_TO_CREDITS = 1 / CREDIT_TO_EUR; // 100 credits per €1
-const PERIODS = [
-  { id: "24h", label: "Last 24h" },
-  { id: "7d", label: "7 derniers jours" },
-  { id: "30d", label: "30 derniers jours" },
-  { id: "all", label: "Depuis le début" },
-];
 
-const WORKFLOW_LABELS = {
-  post_variants: { label: "Post generation", icon: Sparkles },
-  captions: { label: "Caption generation", icon: Sparkles },
-  hashtags: { label: "Hashtag suggestion", icon: Tag },
-  summary: { label: "Post summarisation", icon: Sparkles },
-  transform: { label: "Quick AI actions", icon: Sparkles },
-  image_description: { label: "Image analysis (vision)", icon: Sparkles },
-  image: { label: "AI image generation", icon: Sparkles },
-  video: { label: "AI video (LTX)", icon: Film },
+const WORKFLOW_ICONS = {
+  post_variants: Sparkles,
+  captions: Sparkles,
+  hashtags: Tag,
+  summary: Sparkles,
+  transform: Sparkles,
+  image_description: Sparkles,
+  image: Sparkles,
+  video: Film,
 };
 
-function workflowLabel(id) {
-  return WORKFLOW_LABELS[id] || { label: id || "Other", icon: Coins };
-}
+const WORKFLOW_LABEL_KEYS = {
+  post_variants: "workflowPostVariants",
+  captions: "workflowCaptions",
+  hashtags: "workflowHashtags",
+  summary: "workflowSummary",
+  transform: "workflowTransform",
+  image_description: "workflowImageDescription",
+  image: "workflowImage",
+  video: "workflowVideo",
+};
 
 function formatTokens(n) {
   if (!n) return "0";
@@ -65,10 +67,26 @@ function eur(n) {
 }
 
 export default function CreditsView() {
+  const t = useTranslations("credits");
+  const tCommon = useTranslations("common");
   const [period, setPeriod] = useState("30d");
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  const PERIODS = [
+    { id: "24h", label: t("period24h") },
+    { id: "7d", label: t("period7d") },
+    { id: "30d", label: t("period30d") },
+    { id: "all", label: t("periodAll") },
+  ];
+
+  function workflowLabel(id) {
+    const key = WORKFLOW_LABEL_KEYS[id];
+    const icon = WORKFLOW_ICONS[id] || Coins;
+    if (key) return { label: t(key), icon };
+    return { label: id || t("other"), icon };
+  }
 
   async function reload(currentPeriod = period) {
     setLoading(true);
@@ -107,13 +125,13 @@ export default function CreditsView() {
         <div className="flex items-end justify-between mb-6 gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold mb-1" style={{ color: "var(--text-primary)" }}>
-              Crédits &amp; dépenses
+              {t("title")}
             </h1>
             <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-              Agrégat en temps réel de tous les appels IA / média réalisés.
+              {t("subtitle")}
               {savedUsd > 0 && (
                 <span style={{ color: "var(--status-approved)" }}>
-                  {" "}· {eur(savedUsd * 0.92)} saved by the cache.
+                  {" "}· {t("savedByCache", { eur: eur(savedUsd * 0.92) })}
                 </span>
               )}
             </p>
@@ -142,7 +160,7 @@ export default function CreditsView() {
                 color: "var(--text-muted)",
                 border: "1px solid var(--border-default)",
               }}
-              title="Actualiser"
+              title={tCommon("refresh")}
             >
               <RefreshCcw size={14} />
             </button>
@@ -165,32 +183,32 @@ export default function CreditsView() {
         >
           <KpiCard
             icon={DollarSign}
-            label="Spent"
+            label={t("spent")}
             primary={eur(totalCoûtEur)}
             secondary={`$${totalCoûtUsd.toFixed(2)} USD`}
             loading={loading}
           />
           <KpiCard
             icon={Coins}
-            label="Credits used"
+            label={t("creditsUsed")}
             primary={usedCredits.toLocaleString()}
-            secondary={`1 credit = €${CREDIT_TO_EUR.toFixed(2)}`}
+            secondary={t("creditDefinition", { eur: CREDIT_TO_EUR.toFixed(2) })}
             loading={loading}
           />
           <KpiCard
             icon={Send}
-            label="AI calls"
+            label={t("aiCalls")}
             primary={(totals.calls || 0).toLocaleString()}
-            secondary={`${totals.cache_hits || 0} cache hits (free)`}
+            secondary={t("cacheHitsFree", { n: totals.cache_hits || 0 })}
             loading={loading}
           />
           <KpiCard
             icon={TrendingUp}
-            label="Tokens"
+            label={t("tokens")}
             primary={formatTokens(totals.tokens || 0)}
             secondary={
               totals.calls > 0
-                ? `~${formatTokens(Math.round(totals.tokens / totals.calls))}/call`
+                ? t("perCall", { n: formatTokens(Math.round(totals.tokens / totals.calls)) })
                 : "—"
             }
             loading={loading}
@@ -204,31 +222,31 @@ export default function CreditsView() {
         >
           <BreakdownCard
             icon={Wallet}
-            title="Where credits went (by workflow)"
+            title={t("byWorkflow")}
             rows={byFlux}
             totalCoût={totalCoûtUsd}
             labelFor={workflowLabel}
-            empty="No spend in this window."
+            empty={t("noWindowSpend")}
           />
           <BreakdownCard
             icon={DollarSign}
-            title="By LLM tier"
+            title={t("byTier")}
             rows={byNiveau}
             totalCoût={totalCoûtUsd}
             labelFor={(id) => ({
               label:
                 id === "fast"
-                  ? "Fast tier (cheap)"
+                  ? t("tierFast")
                   : id === "standard"
-                  ? "Standard tier"
+                  ? t("tierStandard")
                   : id === "premium"
-                  ? "Premium tier"
+                  ? t("tierPremium")
                   : id === "media"
-                  ? "Génération média"
-                  : id || "Unknown",
+                  ? t("tierMedia")
+                  : id || t("unknown"),
               icon: Coins,
             })}
-            empty="No tiered spend yet."
+            empty={t("noTieredSpend")}
           />
         </div>
 
@@ -238,20 +256,20 @@ export default function CreditsView() {
             className="text-sm font-semibold mb-3 inline-flex items-center gap-2"
             style={{ color: "var(--text-primary)" }}
           >
-            <TrendingUp size={14} /> Top models by spend
+            <TrendingUp size={14} /> {t("topModels")}
           </h2>
           {byModèle.length === 0 ? (
             <p className="py-6 text-center text-xs" style={{ color: "var(--text-muted)" }}>
-              No model usage in this window.
+              {t("noModels")}
             </p>
           ) : (
             <table className="w-full text-sm" style={{ color: "var(--text-secondary)" }}>
               <thead>
                 <tr style={{ color: "var(--text-muted)" }} className="text-left text-xs uppercase tracking-wider">
-                  <th className="pb-2 font-semibold">Modèle</th>
-                  <th className="pb-2 font-semibold text-right">Appels</th>
-                  <th className="pb-2 font-semibold text-right">Tokens</th>
-                  <th className="pb-2 font-semibold text-right">Coût</th>
+                  <th className="pb-2 font-semibold">{t("tableModel")}</th>
+                  <th className="pb-2 font-semibold text-right">{t("tableCalls")}</th>
+                  <th className="pb-2 font-semibold text-right">{t("tableTokens")}</th>
+                  <th className="pb-2 font-semibold text-right">{t("tableCost")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -302,6 +320,7 @@ function KpiCard({ icon: Icon, label, primary, secondary, loading }) {
 }
 
 function BreakdownCard({ icon: Icon, title, rows, totalCoût, labelFor, empty }) {
+  const t = useTranslations("credits");
   return (
     <div className={card} style={{ padding: 18 }}>
       <h2
@@ -354,8 +373,8 @@ function BreakdownCard({ icon: Icon, title, rows, totalCoût, labelFor, empty })
                   />
                 </div>
                 <p className="text-[11px] mt-1" style={{ color: "var(--text-tertiary)" }}>
-                  {row.calls} call{row.calls === 1 ? "" : "s"} ·{" "}
-                  {formatTokens(row.tokens)} tokens · {pct.toFixed(1)}%
+                  {t("callPlural", { n: row.calls })} ·{" "}
+                  {t("tokensWithCount", { n: formatTokens(row.tokens) })} · {pct.toFixed(1)}%
                 </p>
               </div>
             );

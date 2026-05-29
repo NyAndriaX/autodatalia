@@ -3,6 +3,7 @@
 import { btnPrimary, btnSecondary, btnGhost, fadeIn } from "../../lib/uiClasses";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
+import { useTranslations } from "next-intl";
 import {
   UploadCloud,
   Sparkles,
@@ -33,15 +34,15 @@ import { addMedia } from "../../store/editorSlice";
 import { addNotification, setActiveView } from "../../store/uiSlice";
 
 const TABS = [
-  { id: "uploads", label: "Fichiers", icon: ImageIcon, desc: "Images et vidéos importés" },
-  { id: "ai", label: "Générés par IA", icon: Sparkles, desc: "Assets créés automatiquement" },
-  { id: "brand", label: "Brand Kit", icon: Palette, desc: "Logos, couleurs et polices" },
+  { id: "uploads", labelKey: "tabFiles", icon: ImageIcon, descKey: "tabFilesDesc" },
+  { id: "ai", labelKey: "tabAi", icon: Sparkles, descKey: "tabAiDesc" },
+  { id: "brand", labelKey: "tabBrand", icon: Palette, descKey: "tabBrandDesc" },
 ];
 
 const TYPE_FILTERS = [
-  { id: "all", label: "Tout" },
-  { id: "image", label: "Images" },
-  { id: "video", label: "Vidéos" },
+  { id: "all", labelKey: "filterAll" },
+  { id: "image", labelKey: "filterImages" },
+  { id: "video", labelKey: "filterVideos" },
 ];
 
 const MAX_MB = Math.round(MAX_SIZE_BYTES / 1024 / 1024);
@@ -56,6 +57,8 @@ function MediaTile({
   onToggleSelect,
   selectionMode,
 }) {
+  const t = useTranslations("library");
+  const tCommon = useTranslations("common");
   const Icon = item.kind === "video" ? Film : ImageIcon;
   const previewSrc = item.remoteUrl || item.previewUrl;
   const isImage = item.kind === "image";
@@ -100,7 +103,7 @@ function MediaTile({
         <div className="flex flex-col items-center gap-2 opacity-40">
           <Icon size={26} style={{ color: "var(--text-muted)" }} />
           <span className="text-[10px] font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
-            {isVideo ? "Vidéo" : "Image"}
+            {isVideo ? t("videoBadge") : t("imageBadge")}
           </span>
         </div>
       )}
@@ -113,7 +116,7 @@ function MediaTile({
             e.stopPropagation();
             onToggleSelect(item);
           }}
-          aria-label={selected ? `Désélectionner ${item.name}` : `Sélectionner ${item.name}`}
+          aria-label={selected ? t("deselectItem", { name: item.name }) : t("selectItem", { name: item.name })}
           aria-pressed={!!selected}
           className={`absolute top-2 left-2 z-10 w-6 h-6 inline-flex items-center justify-center rounded-lg transition-all ${
             selected || selectionMode
@@ -140,7 +143,7 @@ function MediaTile({
           <span
             className="inline-flex items-center justify-center w-5 h-5 rounded-md"
             style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)" }}
-            title="Vidéo"
+            title={t("videoBadge")}
           >
             <Film size={11} className="text-white" />
           </span>
@@ -153,7 +156,7 @@ function MediaTile({
               color: "#fff",
               backdropFilter: "blur(4px)",
             }}
-            title={`Utilisé dans ${usageCount} post${usageCount > 1 ? "s" : ""}`}
+            title={t("usageBadge", { n: usageCount })}
           >
             <CalendarClock size={9} />
             {usageCount}
@@ -176,8 +179,8 @@ function MediaTile({
             border: "1px solid rgba(255,255,255,0.12)",
             backdropFilter: "blur(4px)",
           }}
-          aria-label={`Supprimer ${item.name}`}
-          title="Supprimer"
+          aria-label={t("deleteItem", { name: item.name })}
+          title={tCommon("delete")}
         >
           <Trash2 size={13} />
         </button>
@@ -203,10 +206,10 @@ function MediaTile({
               color: "#fff",
               boxShadow: "var(--shadow-md)",
             }}
-            title="Ajouter à un nouveau post"
+            title={t("addToNewPost")}
           >
             <Wand2 size={12} />
-            Utiliser
+            {t("use")}
           </button>
         </div>
       )}
@@ -218,7 +221,7 @@ function MediaTile({
           style={{ background: "rgba(17,19,26,0.6)", color: "#fff" }}
         >
           <Loader2 size={18} className="animate-spin" />
-          Import en cours…
+          {t("uploading")}
         </div>
       )}
       {item.status === "deleting" && (
@@ -226,7 +229,7 @@ function MediaTile({
           className="absolute inset-0 flex items-center justify-center text-xs"
           style={{ background: "rgba(17,19,26,0.6)", color: "#fff" }}
         >
-          Suppression…
+          {t("deleting")}
         </div>
       )}
       {item.status === "error" && (
@@ -234,7 +237,7 @@ function MediaTile({
           className="absolute inset-0 flex items-center justify-center text-xs px-3 text-center"
           style={{ background: "rgba(220,38,38,0.7)", color: "#fff" }}
         >
-          {item.error || "Échec de l'import"}
+          {item.error || t("uploadFailed")}
         </div>
       )}
 
@@ -254,6 +257,7 @@ function MediaTile({
 
 /* ─── Zone de dépôt ────────────────────────────────────────────────────── */
 function DropZone({ onFiles, searching, hasItems, fileInputRef, onFileChange }) {
+  const t = useTranslations("library");
   const [dragOver, setDragOver] = useState(false);
 
   return (
@@ -281,13 +285,13 @@ function DropZone({ onFiles, searching, hasItems, fileInputRef, onFileChange }) 
       <div>
         <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
           {searching
-            ? "Recherche en cours…"
+            ? t("searching")
             : hasItems
-              ? "Déposez d'autres fichiers ici"
-              : "Déposez vos fichiers ici"}
+              ? t("dropMoreFiles")
+              : t("dropFilesHere")}
         </p>
         <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
-          ou cliquez pour parcourir · max {MAX_MB} Mo par fichier
+          {t("orBrowseMax", { mb: MAX_MB })}
         </p>
       </div>
       <input
@@ -332,6 +336,8 @@ function EmptyPanel({ icon: Icon, title, subtitle, action }) {
 
 /* ─── Vue principale ───────────────────────────────────────────────────── */
 export default function MediaLibraryView() {
+  const t = useTranslations("library");
+  const tCommon = useTranslations("common");
   const dispatch = useDispatch();
   const scheduledPosts = useSelector((s) => s.calendar.scheduledPosts);
   const [tab, setTab] = useState("uploads");
@@ -441,12 +447,12 @@ export default function MediaLibraryView() {
       dispatch(setActiveView("creation"));
       dispatch(
         addNotification({
-          message: `"${item.name}" ajouté au post en cours.`,
+          message: t("addedToPost", { name: item.name }),
           type: "success",
         })
       );
     },
-    [dispatch]
+    [dispatch, t]
   );
 
   const onBulkUseInPost = useCallback(() => {
@@ -463,24 +469,24 @@ export default function MediaLibraryView() {
         filename: (item.id || item.name || "").split("/").pop(),
       }));
     if (!payload.length) {
-      dispatch(addNotification({ message: "Les éléments sélectionnés n'ont pas d'URL utilisable.", type: "error" }));
+      dispatch(addNotification({ message: t("noUsableUrl"), type: "error" }));
       return;
     }
     dispatch(addMedia(payload));
     dispatch(setActiveView("creation"));
     dispatch(
       addNotification({
-        message: `${payload.length} élément${payload.length > 1 ? "s" : ""} ajouté${payload.length > 1 ? "s" : ""} au post.`,
+        message: t("addedBulkToPost", { n: payload.length }),
         type: "success",
       })
     );
     setSelectedIds(new Set());
-  }, [selectedIds, normalizedItems, dispatch]);
+  }, [selectedIds, normalizedItems, dispatch, t]);
 
   useEffect(() => {
     if (tab !== "uploads") return;
     let cancelled = false;
-    const t = setTimeout(async () => {
+    const timer = setTimeout(async () => {
       if (cancelled) return;
       setSearching(true);
       const hits = await listMedia(query.trim());
@@ -489,7 +495,7 @@ export default function MediaLibraryView() {
         setSearching(false);
       }
     }, 200);
-    return () => { cancelled = true; clearTimeout(t); };
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [query, tab]);
 
   const handleFiles = useCallback(async (files) => {
@@ -524,7 +530,7 @@ export default function MediaLibraryView() {
                     ...p,
                     _file: null,
                     status: result.status === "uploaded" ? "uploaded" : "error",
-                    error: result.status === "uploaded" ? null : result.error || "Échec de l'import",
+                    error: result.status === "uploaded" ? null : result.error || t("uploadFailed"),
                     remoteUrl: result.remoteUrl,
                   }
                 : p
@@ -534,7 +540,7 @@ export default function MediaLibraryView() {
     );
     const hits = await listMedia(query.trim());
     setRemoteHits(hits);
-  }, [query]);
+  }, [query, t]);
 
   const onFileChange = (e) => {
     const files = Array.from(e.target.files || []);
@@ -543,7 +549,7 @@ export default function MediaLibraryView() {
   };
 
   const handleDelete = useCallback(async (item) => {
-    if (!window.confirm(`Supprimer « ${item.name} » ? Cette action est irréversible.`)) return;
+    if (!window.confirm(t("deleteConfirm", { name: item.name }))) return;
 
     const isRemote = !!item.remoteUrl || /^[^_].*\.[a-z0-9]+$/i.test(item.id || "");
     if (!isRemote) {
@@ -560,7 +566,7 @@ export default function MediaLibraryView() {
     if (!ok && status !== 404) {
       setUploads((prev) => prev.map((u) => (u.id === item.id ? { ...u, status: "uploaded" } : u)));
       setRemoteHits((prev) => prev.map((h) => (h.id === item.id ? { ...h, status: "uploaded" } : h)));
-      window.alert(`Impossible de supprimer « ${item.name} » (HTTP ${status || "?"}).`);
+      window.alert(t("deleteFailed", { name: item.name, status: status || "?" }));
       return;
     }
 
@@ -572,11 +578,11 @@ export default function MediaLibraryView() {
       const hits = await listMedia(query.trim());
       setRemoteHits(hits);
     } catch { /* best-effort */ }
-  }, [query]);
+  }, [query, t]);
 
   const handleBulkDelete = useCallback(async () => {
     if (!selectedIds.size) return;
-    if (!window.confirm(`Supprimer ${selectedIds.size} élément${selectedIds.size > 1 ? "s" : ""} ? Irréversible.`)) return;
+    if (!window.confirm(t("deleteBulkConfirm", { n: selectedIds.size }))) return;
 
     setUploads((prev) => prev.map((u) => (selectedIds.has(u.id) ? { ...u, status: "deleting" } : u)));
     setRemoteHits((prev) => prev.map((h) => (selectedIds.has(h.id) ? { ...h, status: "deleting" } : h)));
@@ -599,7 +605,7 @@ export default function MediaLibraryView() {
       const hits = await listMedia(query.trim());
       setRemoteHits(hits);
     } catch { /* best-effort */ }
-  }, [selectedIds, normalizedItems, query]);
+  }, [selectedIds, normalizedItems, query, t]);
 
   return (
     <div
@@ -620,10 +626,10 @@ export default function MediaLibraryView() {
             className="text-2xl font-extrabold tracking-tight"
             style={{ fontFamily: "var(--font-display)", color: "var(--text-primary)" }}
           >
-            Médiathèque
+            {t("pageTitle")}
           </h1>
           <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
-            Importez, organisez et réutilisez vos visuels dans vos posts
+            {t("pageSubtitle")}
           </p>
         </div>
         {tab === "uploads" && (
@@ -633,7 +639,7 @@ export default function MediaLibraryView() {
             className={`${btnPrimary} inline-flex items-center gap-2`}
           >
             <UploadCloud size={16} />
-            Importer
+            {t("import")}
           </button>
         )}
       </div>
@@ -642,10 +648,10 @@ export default function MediaLibraryView() {
       {tab === "uploads" && (
         <div className="mb-6 grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))" }}>
           {[
-            { icon: HardDrive, label: "Total", value: stats.total, color: "var(--accent-primary)" },
-            { icon: ImageIcon, label: "Images", value: stats.images, color: "#E1306C" },
-            { icon: Film, label: "Vidéos", value: stats.videos, color: "#0891B2" },
-            { icon: Loader2, label: "En cours", value: stats.uploading, color: "var(--status-pending)" },
+            { icon: HardDrive, label: t("statTotal"), value: stats.total, color: "var(--accent-primary)" },
+            { icon: ImageIcon, label: t("statImages"), value: stats.images, color: "#E1306C" },
+            { icon: Film, label: t("statVideos"), value: stats.videos, color: "#0891B2" },
+            { icon: Loader2, label: t("statInProgress"), value: stats.uploading, color: "var(--status-pending)" },
           ].map(({ icon: Icon, label, value, color }) => (
             <div
               key={label}
@@ -683,14 +689,14 @@ export default function MediaLibraryView() {
         >
           <div className="flex items-center gap-3 flex-wrap">
             <span className="text-sm font-bold" style={{ color: "var(--accent-primary)" }}>
-              {selectedIds.size} sélectionné{selectedIds.size > 1 ? "s" : ""}
+              {t("selected", { n: selectedIds.size })}
             </span>
             <button
               type="button"
               onClick={selectAllVisible}
               className={`${btnGhost} text-xs inline-flex items-center gap-1`}
             >
-              <CheckCheck size={13} /> Tout sélectionner
+              <CheckCheck size={13} /> {tCommon("selectAll")}
             </button>
             <button
               type="button"
@@ -698,7 +704,7 @@ export default function MediaLibraryView() {
               className={`${btnGhost} text-xs inline-flex items-center gap-1`}
               style={{ color: "var(--text-muted)" }}
             >
-              <X size={13} /> Effacer
+              <X size={13} /> {tCommon("clear")}
             </button>
           </div>
           <div className="flex items-center gap-2">
@@ -707,7 +713,7 @@ export default function MediaLibraryView() {
               onClick={onBulkUseInPost}
               className={`${btnPrimary} inline-flex items-center gap-2 text-sm py-2 px-4`}
             >
-              <Wand2 size={14} /> Utiliser dans un post
+              <Wand2 size={14} /> {t("useInNewPost")}
             </button>
             <button
               type="button"
@@ -715,7 +721,7 @@ export default function MediaLibraryView() {
               className="inline-flex items-center gap-2 rounded-[10px] px-4 py-2 text-sm font-semibold transition-all"
               style={{ background: "var(--accent-red-soft)", color: "var(--accent-red)" }}
             >
-              <Trash2 size={14} /> Supprimer
+              <Trash2 size={14} /> {tCommon("delete")}
             </button>
           </div>
         </div>
@@ -726,13 +732,13 @@ export default function MediaLibraryView() {
         className="mb-5 flex gap-1 p-1 rounded-2xl w-fit"
         style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-default)" }}
       >
-        {TABS.map((t) => {
-          const Icon = t.icon;
-          const active = tab === t.id;
+        {TABS.map((tab_) => {
+          const Icon = tab_.icon;
+          const active = tab === tab_.id;
           return (
             <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
+              key={tab_.id}
+              onClick={() => setTab(tab_.id)}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-200"
               style={{
                 background: active ? "var(--bg-card)" : "transparent",
@@ -741,7 +747,7 @@ export default function MediaLibraryView() {
               }}
             >
               <Icon size={15} />
-              {t.label}
+              {t(tab_.labelKey)}
             </button>
           );
         })}
@@ -764,7 +770,7 @@ export default function MediaLibraryView() {
                     border: `1px solid ${typeFilter === f.id ? "rgba(91,91,214,0.25)" : "var(--border-default)"}`,
                   }}
                 >
-                  {f.label}
+                  {t(f.labelKey)}
                 </button>
               ))}
             </div>
@@ -776,7 +782,7 @@ export default function MediaLibraryView() {
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Rechercher un fichier…"
+                placeholder={t("searchPlaceholder")}
                 className="bg-transparent outline-none text-sm"
                 style={{ color: "var(--text-primary)", width: 180 }}
               />
@@ -823,15 +829,15 @@ export default function MediaLibraryView() {
           ) : !searching && !dragging ? (
             <EmptyPanel
               icon={Grid3X3}
-              title="Aucun fichier trouvé"
-              subtitle={query ? `Aucun résultat pour « ${query} »` : "Importez vos premiers visuels pour commencer"}
+              title={t("emptyTitle")}
+              subtitle={query ? t("emptySearchSubtitle", { query }) : t("emptySubtitle")}
               action={
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   className={`${btnSecondary} inline-flex items-center gap-2 text-sm`}
                 >
-                  <UploadCloud size={15} /> Importer un fichier
+                  <UploadCloud size={15} /> {t("importFile")}
                 </button>
               }
             />
@@ -852,15 +858,15 @@ export default function MediaLibraryView() {
       {tab === "ai" && (
         <EmptyPanel
           icon={Sparkles}
-          title="Aucun asset généré par IA"
-          subtitle="Les images et vidéos créées automatiquement apparaîtront ici"
+          title={t("noAi")}
+          subtitle={t("noAiSubtitle")}
           action={
             <button
               type="button"
               onClick={() => dispatch(setActiveView("videos"))}
               className={`${btnSecondary} inline-flex items-center gap-2 text-sm`}
             >
-              <Sparkles size={15} /> Générer une vidéo IA
+              <Sparkles size={15} /> {t("generateAiVideo")}
             </button>
           }
         />
@@ -870,15 +876,15 @@ export default function MediaLibraryView() {
       {tab === "brand" && (
         <EmptyPanel
           icon={Palette}
-          title="Brand Kit"
-          subtitle="Logos, palette de couleurs et polices de votre marque — configurez-les dans les Paramètres"
+          title={t("brandKitTitle")}
+          subtitle={t("brandKitSubtitle")}
           action={
             <button
               type="button"
               onClick={() => dispatch(setActiveView("settings"))}
               className={`${btnSecondary} inline-flex items-center gap-2 text-sm`}
             >
-              <Palette size={15} /> Ouvrir les Paramètres
+              <Palette size={15} /> {t("openSettings")}
             </button>
           }
         />

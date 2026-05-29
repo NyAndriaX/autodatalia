@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSelector, useDispatch } from "react-redux";
+import { useTranslations } from "next-intl";
 import { fetchConnections } from "../../lib/oauthService";
 import { setActiveView } from "../../store/uiSlice";
 import { PLATFORMS, STATUS_META, activePlatformIds } from "../../lib/platforms";
@@ -23,7 +24,7 @@ const MONTH_LONG    = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet
 const PLATFORM_TO_PROVIDER    = { facebook:"meta", instagram:"meta", tiktok:"tiktok", linkedin:"linkedin" };
 const PLATFORM_TO_TARGET_KIND = { facebook:"facebook_page", instagram:"instagram_business", tiktok:"tiktok_account", linkedin:"linkedin_member" };
 
-const fmt = (n) => Math.round(Number(n)||0).toString().replace(/\B(?=(\d{3})+(?!\d))/g,"\u202f");
+const fmt = (n) => Math.round(Number(n)||0).toString().replace(/\B(?=(\d{3})+(?!\d))/g," ");
 
 const STATUS_COLORS = {
   published : { bg:"rgba(6,182,212,.15)",  text:"var(--status-published)", dot:"#06b6d4" },
@@ -34,12 +35,6 @@ const STATUS_COLORS = {
   approved  : { bg:"rgba(34,197,94,.12)",  text:"var(--status-approved)",  dot:"#22c55e" },
   awaiting  : { bg:"rgba(168,85,247,.12)", text:"var(--status-awaiting)",  dot:"#a855f7" },
   rejected  : { bg:"rgba(148,163,184,.15)",text:"var(--status-rejected)",  dot:"#94a3b8" },
-};
-
-const STATUS_LABELS = {
-  published:"Publié", scheduled:"Planifié", draft:"Brouillon",
-  pending:"En attente", error:"Erreur", approved:"Approuvé",
-  awaiting:"En révision", rejected:"Rejeté",
 };
 
 /* ─── sous-composants ────────────────────────────────────────────────────*/
@@ -72,18 +67,19 @@ function KpiCard({ icon: Icon, label, value, sub, color, onClick }) {
 }
 
 function PipelineBar({ stats }) {
+  const t = useTranslations("dashboard");
   const items = [
-    { key:"draft",     label:"Brouillons", dot:"#64748b" },
-    { key:"pending",   label:"En attente", dot:"#f59e0b" },
-    { key:"scheduled", label:"Planifiés",  dot:"#6366f1" },
-    { key:"published", label:"Publiés",    dot:"#22c55e" },
-    { key:"error",     label:"Erreurs",    dot:"#ef4444" },
+    { key:"draft",     label:t("drafts"),    dot:"#64748b" },
+    { key:"pending",   label:t("pending"),   dot:"#f59e0b" },
+    { key:"scheduled", label:t("scheduled"), dot:"#6366f1" },
+    { key:"published", label:t("published"), dot:"#22c55e" },
+    { key:"error",     label:t("errors"),    dot:"#ef4444" },
   ];
   const total = Math.max(1, items.reduce((s,i) => s + (stats.byStatus[i.key]||0), 0));
   return (
     <div className="rounded-2xl p-5" style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
       <p className="mb-3 text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
-        Pipeline de contenu
+        {t("pipelineTitle")}
       </p>
       <div className="flex h-3 w-full overflow-hidden rounded-full" style={{ background:"var(--bg-tertiary)" }}>
         {items.map(({ key, dot }) => {
@@ -106,16 +102,17 @@ function PipelineBar({ stats }) {
 }
 
 function WeekStrip({ week, todayKey, onCalendar }) {
+  const t = useTranslations("dashboard");
   return (
     <div className="rounded-2xl p-5" style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
       <div className="mb-3 flex items-center justify-between">
         <p className="text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
-          7 prochains jours
+          {t("next7Days")}
         </p>
         <button type="button" onClick={onCalendar}
           className="flex items-center gap-1 text-xs font-semibold transition-opacity hover:opacity-70"
           style={{ color:"var(--accent-primary)", border:"none", background:"none", cursor:"pointer" }}>
-          Calendrier complet <ArrowRight size={12} />
+          {t("fullCalendar")} <ArrowRight size={12} />
         </button>
       </div>
       <div className="grid grid-cols-7 gap-2">
@@ -160,24 +157,25 @@ function WeekStrip({ week, todayKey, onCalendar }) {
 }
 
 function AudienceCard({ audience, totalAudience, onManage }) {
+  const t = useTranslations("dashboard");
   const max = Math.max(1, ...audience.map(r => r.count));
   return (
     <div className="rounded-2xl p-5 h-full flex flex-col" style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
       <div className="mb-4 flex items-center justify-between">
         <p className="text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
-          Audience
+          {t("audience")}
         </p>
         <button type="button" onClick={onManage}
           className="text-xs font-semibold transition-opacity hover:opacity-70"
           style={{ color:"var(--accent-primary)", border:"none", background:"none", cursor:"pointer" }}>
-          Gérer
+          {t("manage")}
         </button>
       </div>
       {audience.every(r => !r.connected) ? (
         <div className="flex flex-col items-center justify-center py-6 text-center flex-1">
           <Users size={28} style={{ color:"var(--text-muted)", marginBottom:8 }} />
-          <p className="text-sm font-medium" style={{ color:"var(--text-secondary)" }}>Aucune plateforme connectée</p>
-          <p className="mt-1 text-xs" style={{ color:"var(--text-muted)" }}>Connectez dans les Paramètres pour voir les abonnés</p>
+          <p className="text-sm font-medium" style={{ color:"var(--text-secondary)" }}>{t("noPlatformsConnected")}</p>
+          <p className="mt-1 text-xs" style={{ color:"var(--text-muted)" }}>{t("connectInSettings")}</p>
         </div>
       ) : (
         <div className="flex flex-col gap-3 flex-1">
@@ -196,7 +194,7 @@ function AudienceCard({ audience, totalAudience, onManage }) {
                     {!row.connected && (
                       <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold"
                         style={{ background:"rgba(100,116,139,.12)", color:"var(--text-muted)" }}>
-                        hors ligne
+                        {t("offline")}
                       </span>
                     )}
                   </span>
@@ -212,7 +210,7 @@ function AudienceCard({ audience, totalAudience, onManage }) {
             );
           })}
           <p className="mt-auto pt-2 text-right text-xs font-bold" style={{ color:"var(--text-muted)" }}>
-            {fmt(totalAudience)} abonnés au total
+            {t("followersTotal", { count: fmt(totalAudience) })}
           </p>
         </div>
       )}
@@ -221,6 +219,17 @@ function AudienceCard({ audience, totalAudience, onManage }) {
 }
 
 function RecentPost({ post }) {
+  const t = useTranslations("dashboard");
+  const STATUS_LABELS = {
+    published: t("statusPublished"),
+    scheduled: t("statusScheduled"),
+    draft:     t("statusDraft"),
+    pending:   t("statusPending"),
+    error:     t("statusError"),
+    approved:  t("statusApproved"),
+    awaiting:  t("statusAwaiting"),
+    rejected:  t("statusRejected"),
+  };
   const ids = activePlatformIds(post.platforms);
   const statusColor = STATUS_COLORS[post.status] || STATUS_COLORS.draft;
   return (
@@ -232,7 +241,7 @@ function RecentPost({ post }) {
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium" style={{ color:"var(--text-primary)" }}>
-          {post.content || <span style={{ color:"var(--text-muted)" }}>(sans légende)</span>}
+          {post.content || <span style={{ color:"var(--text-muted)" }}>{t("noCaption")}</span>}
         </p>
         <div className="mt-1 flex items-center gap-2 text-[11px]" style={{ color:"var(--text-muted)" }}>
           <span>{post.scheduledDate || "—"}</span>
@@ -279,6 +288,8 @@ function ActionCard({ icon: Icon, title, description, color, onClick }) {
 
 /* ─── composant principal ───────────────────────────────────────────────*/
 export default function DashboardView() {
+  const t              = useTranslations("dashboard");
+  const tSidebar       = useTranslations("sidebar");
   const dispatch       = useDispatch();
   const scheduledPosts = useSelector((s) => s.calendar.scheduledPosts);
   const aiUsage        = useSelector((s) => s.ui.aiUsage);
@@ -360,22 +371,22 @@ export default function DashboardView() {
             {dateLabel}
           </p>
           <h1 className="text-2xl font-extrabold leading-tight tracking-tight" style={{ color:"var(--text-primary)" }}>
-            {user?.name ? `Bonjour, ${user.name.split(" ")[0]} 👋` : "Bonjour 👋"}
+            {user?.name ? t("helloUser", { name: user.name.split(" ")[0] }) : t("helloNoUser")}
           </h1>
           <p className="mt-1 text-sm" style={{ color:"var(--text-muted)" }}>
-            Voici votre tableau de bord marketing du jour.
+            {t("subtitleMarketing")}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button type="button" onClick={() => dispatch(setActiveView("calendar"))}
             className="flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 hover:-translate-y-px hover:shadow-md"
             style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)", color:"var(--text-primary)", cursor:"pointer" }}>
-            <Calendar size={15} /> Calendrier
+            <Calendar size={15} /> {tSidebar("calendar")}
           </button>
           <button type="button" onClick={() => dispatch(setActiveView("creation"))}
             className="flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:-translate-y-px hover:shadow-lg"
             style={{ background:"var(--accent-gradient)", border:"none", cursor:"pointer", boxShadow:"0 4px 14px rgba(29,63,190,.35)" }}>
-            <PlusCircle size={15} /> Nouveau post
+            <PlusCircle size={15} /> {t("newPost")}
           </button>
         </div>
       </div>
@@ -386,15 +397,15 @@ export default function DashboardView() {
           style={{ background:"rgba(29,63,190,.08)", border:"1px solid rgba(29,63,190,.25)" }}>
           <Sparkles size={18} style={{ color:"var(--accent-primary)", flexShrink:0, marginTop:1 }} />
           <div className="flex-1">
-            <p className="text-sm font-semibold" style={{ color:"var(--text-primary)" }}>Connectez votre première plateforme</p>
+            <p className="text-sm font-semibold" style={{ color:"var(--text-primary)" }}>{t("connectFirstPlatform")}</p>
             <p className="mt-0.5 text-xs" style={{ color:"var(--text-muted)" }}>
-              Reliez Facebook, Instagram, TikTok ou LinkedIn pour commencer à publier.
+              {t("connectIntro")}
             </p>
           </div>
           <button type="button" onClick={() => dispatch(setActiveView("settings"))}
             className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold text-white"
             style={{ background:"var(--accent-gradient)", border:"none", cursor:"pointer" }}>
-            Aller aux paramètres
+            {t("goToSettings")}
           </button>
         </div>
       )}
@@ -404,26 +415,26 @@ export default function DashboardView() {
           <AlertCircle size={18} style={{ color:"var(--status-error)", flexShrink:0, marginTop:1 }} />
           <div className="flex-1">
             <p className="text-sm font-semibold" style={{ color:"var(--text-primary)" }}>
-              {stats.byStatus.error} erreur{stats.byStatus.error > 1 ? "s" : ""} de publication
+              {t("publishErrors", { count: stats.byStatus.error })}
             </p>
             <p className="mt-0.5 text-xs" style={{ color:"var(--text-muted)" }}>
-              Consultez les posts échoués dans la vue Calendrier.
+              {t("checkFailedPosts")}
             </p>
           </div>
           <button type="button" onClick={() => dispatch(setActiveView("calendar"))}
             className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold"
             style={{ background:"rgba(239,68,68,.15)", border:"none", color:"var(--status-error)", cursor:"pointer" }}>
-            Voir les erreurs
+            {t("viewErrors")}
           </button>
         </div>
       )}
 
       {/* ══ KPI ══════════════════════════════════════════════════════════ */}
       <div className="mb-5 grid gap-3" style={{ gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4,1fr)" }}>
-        <KpiCard icon={Zap}          label="Crédits utilisés"  value={fmt(creditsSpent)}         sub={`≈ ${eurSpent} € cette session`}         color="#1d3fbe"  onClick={() => dispatch(setActiveView("credits"))} />
-        <KpiCard icon={Users}        label="Audience totale"   value={fmt(totalAudience)}         sub={`${connectedCount} plateforme${connectedCount!==1?"s":""} connectée${connectedCount!==1?"s":""}`} color="#22c55e" onClick={() => dispatch(setActiveView("settings"))} />
-        <KpiCard icon={Calendar}     label="Planifiés · 7 j"   value={stats.thisWeek}             sub={`${stats.total} post${stats.total!==1?"s":""} au total`}                     color="#6366f1"  onClick={() => dispatch(setActiveView("calendar"))} />
-        <KpiCard icon={CheckCircle2} label="Publiés · 7 j"     value={stats.publishedThisWeek}    sub={`${stats.byStatus.published} publié${stats.byStatus.published!==1?"s":""} au total`} color="#06b6d4" onClick={() => dispatch(setActiveView("calendar"))} />
+        <KpiCard icon={Zap}          label={t("creditsSpent")}  value={fmt(creditsSpent)}         sub={t("approxThisSession", { eur: eurSpent })}         color="#1d3fbe"  onClick={() => dispatch(setActiveView("credits"))} />
+        <KpiCard icon={Users}        label={t("totalAudience")}   value={fmt(totalAudience)}         sub={t("platformsConnectedCount", { count: connectedCount })} color="#22c55e" onClick={() => dispatch(setActiveView("settings"))} />
+        <KpiCard icon={Calendar}     label={t("scheduled7d")}   value={stats.thisWeek}             sub={t("postsTotal", { count: stats.total })}                     color="#6366f1"  onClick={() => dispatch(setActiveView("calendar"))} />
+        <KpiCard icon={CheckCircle2} label={t("published7d")}     value={stats.publishedThisWeek}    sub={t("publishedTotal", { count: stats.byStatus.published })} color="#06b6d4" onClick={() => dispatch(setActiveView("calendar"))} />
       </div>
 
       {/* ══ PIPELINE + CALENDRIER + AUDIENCE ════════════════════════════ */}
@@ -445,23 +456,23 @@ export default function DashboardView() {
           style={{ borderBottom:"1px solid var(--border-default)" }}>
           <div className="flex items-center gap-2">
             <TrendingUp size={16} style={{ color:"var(--accent-primary)" }} />
-            <p className="text-sm font-bold" style={{ color:"var(--text-primary)" }}>Posts publiés récemment</p>
+            <p className="text-sm font-bold" style={{ color:"var(--text-primary)" }}>{t("recentPublishedPosts")}</p>
           </div>
           <button type="button" onClick={() => dispatch(setActiveView("calendar"))}
             className="flex items-center gap-1 text-xs font-semibold transition-opacity hover:opacity-70"
             style={{ color:"var(--accent-primary)", border:"none", background:"none", cursor:"pointer" }}>
-            Voir tout <ArrowRight size={12} />
+            {t("seeAll")} <ArrowRight size={12} />
           </button>
         </div>
         {recentPublished.length === 0 ? (
           <div className="flex flex-col items-center py-12 text-center">
             <FileText size={32} style={{ color:"var(--text-muted)", marginBottom:10 }} />
-            <p className="text-sm font-medium" style={{ color:"var(--text-secondary)" }}>Aucun post publié</p>
-            <p className="mt-1 text-xs" style={{ color:"var(--text-muted)" }}>Créez et publiez un post pour le voir ici.</p>
+            <p className="text-sm font-medium" style={{ color:"var(--text-secondary)" }}>{t("noPublishedPost")}</p>
+            <p className="mt-1 text-xs" style={{ color:"var(--text-muted)" }}>{t("createToSeeHere")}</p>
             <button type="button" onClick={() => dispatch(setActiveView("creation"))}
               className="mt-4 flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white"
               style={{ background:"var(--accent-gradient)", border:"none", cursor:"pointer" }}>
-              <PlusCircle size={14} /> Créer le premier post
+              <PlusCircle size={14} /> {t("createFirstPost")}
             </button>
           </div>
         ) : (
@@ -472,13 +483,13 @@ export default function DashboardView() {
       {/* ══ ACTIONS RAPIDES ══════════════════════════════════════════════ */}
       <div>
         <p className="mb-3 text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
-          Actions rapides
+          {t("quickActions")}
         </p>
         <div className="grid gap-3" style={{ gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4,1fr)" }}>
-          <ActionCard icon={PlusCircle} title="Créer un post"       description="Rédigez avec l'IA, ajoutez un média, publiez."  color="#1d3fbe" onClick={() => dispatch(setActiveView("creation"))} />
-          <ActionCard icon={Bot}        title="Automatisations"     description="Règles IA planifiées qui publient pour vous."    color="#7c3aed" onClick={() => dispatch(setActiveView("automation"))} />
-          <ActionCard icon={Image}      title="Médiathèque"         description="Gérez et importez tous vos fichiers."            color="#0891b2" onClick={() => dispatch(setActiveView("library"))} />
-          <ActionCard icon={BarChart2}  title="Analytiques"         description="Coûts IA, cache, métriques de publication."      color="#059669" onClick={() => dispatch(setActiveView("analytics"))} />
+          <ActionCard icon={PlusCircle} title={t("createPost")}       description={t("actionCreateDesc")}  color="#1d3fbe" onClick={() => dispatch(setActiveView("creation"))} />
+          <ActionCard icon={Bot}        title={tSidebar("automation")}     description={t("actionAutomationDesc")}    color="#7c3aed" onClick={() => dispatch(setActiveView("automation"))} />
+          <ActionCard icon={Image}      title={tSidebar("library")}         description={t("actionLibraryDesc")}            color="#0891b2" onClick={() => dispatch(setActiveView("library"))} />
+          <ActionCard icon={BarChart2}  title={tSidebar("analytics")}         description={t("actionAnalyticsDesc")}      color="#059669" onClick={() => dispatch(setActiveView("analytics"))} />
         </div>
       </div>
 

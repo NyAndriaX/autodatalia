@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import { useSelector, useDispatch } from "react-redux";
 import { btnPrimary, btnSecondary, btnGhost, inputField, fadeIn } from "../../lib/uiClasses";
 import TikTokOptionsPanel from "./TikTokOptionsPanel";
@@ -20,7 +21,7 @@ import {
   submitForValidationThunk,
   publishNowThunk,
 } from "../../store/editorThunks";
-import { addNotification } from "../../store/uiSlice";
+import { addNotification, setActiveView } from "../../store/uiSlice";
 import { schedulePostThunk } from "../../store/calendarThunks";
 import {
   Sparkles,
@@ -110,6 +111,7 @@ function effectiveRatio(platformId, ratios) {
 }
 
 export default function CreationEditor() {
+  const t = useTranslations("creation");
   const dispatch = useDispatch();
   const { currentPost, aiGeneration } = useSelector((state) => state.editor);
   const recentPublishes = useSelector((s) => s.ui.recentPublishes);
@@ -120,39 +122,69 @@ export default function CreationEditor() {
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
   const [generatingMediaKind, setGeneratingMediaKind] = useState(null);
 
-  // ─── AI media generation (image / video) ──────────────────────────
-  // Same backend endpoints the PostEditorPopup and ScheduleModal use;
-  // previously missing from the main editor surface.
+  // ─── AI media generation (image inline, video → /videos handoff) ──
+  // Image gen still runs inline (fast, single call). Video gen hands
+  // off to the AI Video page so the user picks model, mode (text /
+  // image / UGC) and reference image. The handoff stashes the prompt
+  // + first uploaded image (if any) into sessionStorage; VideoJobsView
+  // pops it on mount.
   const handleGenerateMedia = async (kind) => {
     const prompt = currentPost.content.trim();
     if (!prompt) {
       dispatch(
         addNotification({
-          message: `Enter a prompt before generating a ${kind}.`,
+          message: t("enterPromptBeforeGenerating", { kind }),
           type: "error",
         })
       );
       return;
     }
+    const ratio =
+      Object.values(currentPost.ratios || {})[0] ||
+      (kind === "video" ? "9:16" : "1:1");
+
+    if (kind === "video") {
+      const uploadedImage = (currentPost.media || []).find(
+        (m) => m.kind === "image" && m.status === "uploaded" && m.remoteUrl
+      );
+      const prefill = {
+        prompt,
+        ratio,
+        mode: uploadedImage ? "image" : "text",
+        referenceImage: uploadedImage
+          ? { filename: uploadedImage.filename, url: uploadedImage.remoteUrl }
+          : null,
+      };
+      try {
+        sessionStorage.setItem(
+          "datalia.videoJobs.prefill",
+          JSON.stringify(prefill)
+        );
+      } catch {
+        /* private mode — proceed without prefill */
+      }
+      dispatch(setActiveView("videos"));
+      return;
+    }
+
     setGeneratingMediaKind(kind);
     try {
-      const ratio =
-        Object.values(currentPost.ratios || {})[0] || (kind === "video" ? "9:16" : "1:1");
-      const result =
-        kind === "video"
-          ? await generateVideoAsset({ prompt, ratio })
-          : await generateImageAsset({ prompt, ratio });
+      const result = await generateImageAsset({ prompt, ratio });
       dispatch(addMedia([result.mediaItem]));
       dispatch(
         addNotification({
-          message: `${kind === "video" ? "Video" : "Image"} generated via ${result.data?.provider || "backend"}.`,
+          message: t("imageGeneratedVia", {
+            provider: result.data?.provider || "backend",
+          }),
           type: "success",
         })
       );
     } catch (err) {
       dispatch(
         addNotification({
-          message: `${kind === "video" ? "Video" : "Image"} generation failed: ${err.message || "unknown error"}`,
+          message: t("imageGenerationFailed", {
+            error: err.message || "unknown error",
+          }),
           type: "error",
         })
       );
@@ -287,7 +319,7 @@ export default function CreationEditor() {
               className="text-xs font-bold uppercase tracking-wider m-0"
               style={{ color: "var(--text-tertiary)" }}
             >
-              Creation workflow
+              {t("creationWorkflow")}
             </p>
             <span
               className="text-xs font-semibold px-2.5 py-1 rounded-full"
@@ -300,7 +332,7 @@ export default function CreationEditor() {
                   : "var(--accent-primary)",
               }}
             >
-              {workflow.progressPct}% ready
+              {t("percentReady", { pct: workflow.progressPct })}
             </span>
           </div>
           <WorkflowSteps
@@ -314,10 +346,16 @@ export default function CreationEditor() {
 
         {/* Mode Selector */}
         <div className="px-6 py-4 shrink-0" style={{ borderBottom: "1px solid var(--border-default)" }}>
-          <div className="flex gap-2" role="tablist" aria-label="Creation mode">
+          <div className="flex gap-2" role="tablist" aria-label={t("creationModeAria")}>
             {MODES.map((mode) => {
               const isActive = currentPost.mode === mode.id;
               const Icon = mode.icon;
+              const modeLabelKey =
+                mode.id === "free"
+                  ? "freePrompt"
+                  : mode.id === "template"
+                  ? "fromTemplate"
+                  : "fromScratch";
               return (
                 <button
                   key={mode.id}
@@ -333,7 +371,7 @@ export default function CreationEditor() {
                   }}
                 >
                   <Icon size={16} aria-hidden="true" />
-                  {mode.label}
+                  {t(modeLabelKey)}
                 </button>
               );
             })}
@@ -347,7 +385,7 @@ export default function CreationEditor() {
             style={{ color: "var(--text-tertiary)" }}
             id="platform-label"
           >
-            Target Platforms
+            {t("targetPlatforms")}
           </p>
           <div className="flex gap-2 flex-wrap" role="group" aria-labelledby="platform-label">
             {PLATFORMS.map((platform) => {
@@ -390,7 +428,7 @@ export default function CreationEditor() {
                 className="text-xs font-semibold uppercase tracking-wider mb-2 block"
                 style={{ color: "var(--text-tertiary)" }}
               >
-                Selected Brand Template
+                {t("selectedBrandTemplate")}
               </label>
               <select
                 id="template-select"
@@ -398,29 +436,29 @@ export default function CreationEditor() {
                 value={currentPost.template}
                 onChange={(e) => dispatch(setTemplate(e.target.value))}
               >
-                {TEMPLATES.map((t) => (
-                  <option key={t.id} value={t.id}>{t.label}</option>
+                {TEMPLATES.map((tpl) => (
+                  <option key={tpl.id} value={tpl.id}>{t(`template_${tpl.id}`)}</option>
                 ))}
               </select>
               <p className="text-[11px] mt-2" style={{ color: "var(--accent-primary)" }}>
-                ℹ️ The selected template will be passed to the AI as context.
+                {t("templateAiHint")}
               </p>
             </div>
           )}
 
           {/* Text editor */}
           <div className="relative">
-            <label htmlFor="content-editor" className="sr-only">Post content</label>
+            <label htmlFor="content-editor" className="sr-only">{t("postContent")}</label>
             <textarea
               id="content-editor"
               value={currentPost.content}
               onChange={(e) => dispatch(setContent(e.target.value))}
               placeholder={
                 currentPost.mode === "free"
-                  ? "Describe what you want to post… AI will generate your content."
+                  ? t("placeholderFree")
                   : currentPost.mode === "template"
-                  ? "Add any specific remarks, variables, or instructions for the AI here..."
-                  : "Write your post from scratch here…"
+                  ? t("placeholderTemplate")
+                  : t("placeholderScratch")
               }
               className="w-full min-h-[260px] resize-none rounded-xl p-5 text-base leading-relaxed"
               style={{
@@ -441,11 +479,11 @@ export default function CreationEditor() {
             >
               <span className="flex items-center gap-1.5 text-xs">
                 <Type size={12} aria-hidden="true" />
-                {contentLength} chars
+                {t("charsCount", { n: contentLength })}
               </span>
               <span className="flex items-center gap-1.5 text-xs">
                 <Hash size={12} aria-hidden="true" />
-                {hashtagCount} hashtags
+                {t("hashtagsCount", { n: hashtagCount })}
               </span>
               {activePlatforms.map((p) => {
                 const over = contentLength > p.maxChars;
@@ -454,7 +492,11 @@ export default function CreationEditor() {
                     key={p.id}
                     className="text-xs"
                     style={{ color: over ? "var(--status-error)" : undefined }}
-                    aria-label={`${p.label}: ${contentLength} of ${p.maxChars} characters`}
+                    aria-label={t("charsOfPlatform", {
+                      platform: p.label,
+                      current: contentLength,
+                      max: p.maxChars,
+                    })}
                   >
                     {p.label}: {contentLength}/{p.maxChars}
                   </span>
@@ -471,7 +513,7 @@ export default function CreationEditor() {
                 className="text-xs font-semibold uppercase tracking-wider mb-2"
                 style={{ color: "var(--text-tertiary)" }}
               >
-                AI Variants
+                {t("aiVariants")}
               </p>
               <div className="flex gap-2 flex-wrap">
                 {aiGeneration.variants.map((v, i) => {
@@ -491,8 +533,8 @@ export default function CreationEditor() {
                         className="text-[11px] font-semibold block mb-1"
                         style={{ color: active ? "var(--accent-primary)" : "var(--text-tertiary)" }}
                       >
-                        Variant {i + 1}
-                        {active ? " • selected" : ""}
+                        {t("variantNum", { n: i + 1 })}
+                        {active ? t("variantSelectedSuffix") : ""}
                       </span>
                       <span
                         className="text-xs block line-clamp-3"
@@ -518,7 +560,7 @@ export default function CreationEditor() {
                 style={{ color: "var(--text-tertiary)" }}
                 id="tone-label"
               >
-                Tone
+                {t("tone")}
               </p>
               <select
                 id="tone-select"
@@ -526,12 +568,12 @@ export default function CreationEditor() {
                 value={currentPost.tone || ""}
                 onChange={(e) => dispatch(setTone(e.target.value || null))}
                 className={`${inputField} cursor-pointer`}
-                title="Sent to the AI on the next Generate"
+                title={t("toneSentHint")}
               >
-                <option value="">Auto — let the model choose</option>
-                {TONES.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.label} — {t.hint}
+                <option value="">{t("toneAuto")}</option>
+                {TONES.map((tone) => (
+                  <option key={tone.id} value={tone.id}>
+                    {tone.label} — {tone.hint}
                   </option>
                 ))}
               </select>
@@ -540,6 +582,7 @@ export default function CreationEditor() {
             <div className="flex gap-2">
               {QUICK_ACTIONS.map((action) => {
                 const Icon = action.icon;
+                const actionLabel = t(action.id);
                 return (
                   <button
                     key={action.id}
@@ -547,15 +590,15 @@ export default function CreationEditor() {
                     className={`${btnSecondary} flex items-center gap-2 text-xs h-9`}
                     disabled={isBusy || !currentPost.content.trim()}
                     onClick={() => dispatch(applyQuickActionThunk(action.id))}
-                    aria-label={`${action.label} — transform content`}
-                    title={`${action.label} the current content (local, no tokens)`}
+                    aria-label={t("quickActionAria", { action: actionLabel })}
+                    title={t("quickActionTitle", { action: actionLabel })}
                   >
                     {aiGeneration.isApplyingAction ? (
                       <Loader2 size={14} className="animate-spin" aria-hidden="true" />
                     ) : (
                       <Icon size={14} aria-hidden="true" />
                     )}
-                    {action.label}
+                    {actionLabel}
                   </button>
                 );
               })}
@@ -570,7 +613,7 @@ export default function CreationEditor() {
               aria-expanded={showHashtags}
             >
               <Hash size={14} aria-hidden="true" />
-              {showHashtags ? "Hide hashtags" : "Suggest hashtags"}
+              {showHashtags ? t("hideHashtags") : t("suggestHashtags")}
               <ChevronDown
                 size={12}
                 aria-hidden="true"
@@ -614,28 +657,28 @@ export default function CreationEditor() {
                 onClick={() => handleGenerateMedia("image")}
                 disabled={!!generatingMediaKind}
                 className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
-                title="Generate an image from the current prompt"
+                title={t("aiImageTitle")}
               >
                 {generatingMediaKind === "image" ? (
                   <Loader2 size={13} className="animate-spin" />
                 ) : (
                   <Sparkles size={13} />
                 )}{" "}
-                AI image
+                {t("aiImageBtn")}
               </button>
               <button
                 id="generate-ai-video-btn"
                 onClick={() => handleGenerateMedia("video")}
                 disabled={!!generatingMediaKind}
                 className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
-                title="Generate a motion video from the current prompt"
+                title={t("aiVideoTitle")}
               >
                 {generatingMediaKind === "video" ? (
                   <Loader2 size={13} className="animate-spin" />
                 ) : (
                   <Film size={13} />
                 )}{" "}
-                AI video
+                {t("aiVideoBtn")}
               </button>
             </div>
           </div>
@@ -664,17 +707,17 @@ export default function CreationEditor() {
               {aiGeneration.isGenerating ? (
                 <>
                   <Loader2 size={20} className="animate-spin" aria-hidden="true" />
-                  Generating…
+                  {t("generating")}
                 </>
               ) : (
                 <>
                   <Sparkles size={20} aria-hidden="true" />
-                  Generate{currentPost.tone ? ` (${TONES.find((t) => t.id === currentPost.tone)?.label || "tone"})` : ""}
+                  {t("generate")}{currentPost.tone ? ` (${TONES.find((tone) => tone.id === currentPost.tone)?.label || t("tone")})` : ""}
                 </>
               )}
             </button>
             <p className="text-[11px] text-center mt-2" style={{ color: "var(--text-muted)" }}>
-              Unchanged prompt reuses the last result — no tokens spent.
+              {t("unchangedReuses")}
             </p>
             {aiGeneration.variants.length > 0 && (
               <div className="flex items-center justify-center gap-4 mt-2">
@@ -691,20 +734,20 @@ export default function CreationEditor() {
                   disabled={aiGeneration.isGenerating}
                   className="text-xs font-medium inline-flex items-center gap-1"
                   style={{ color: confirmRegen ? "var(--status-pending)" : "var(--accent-primary)" }}
-                  title="Force a fresh generation (spends tokens)"
+                  title={t("regenerateTitle")}
                 >
                   <RefreshCw size={12} aria-hidden="true" />
-                  {confirmRegen ? `Confirm · ~${estTokens(1)} tokens` : "Regenerate"}
+                  {confirmRegen ? t("confirmTokens", { tokens: estTokens(1) }) : t("regenerate")}
                 </button>
                 <button
                   onClick={() => dispatch(generateContentThunk(true, 3))}
                   disabled={aiGeneration.isGenerating}
                   className="text-xs font-medium inline-flex items-center gap-1"
                   style={{ color: "var(--accent-primary)" }}
-                  title={`Generate 3 alternatives (~${estTokens(3)} tokens)`}
+                  title={t("alternativesTitle", { tokens: estTokens(3) })}
                 >
                   <Sparkles size={12} aria-hidden="true" />
-                  + Alternatives
+                  {t("plusAlternatives")}
                 </button>
               </div>
             )}
@@ -727,11 +770,11 @@ export default function CreationEditor() {
             id="save-draft-btn"
             className={`${btnGhost} inline-flex items-center gap-2 text-sm`}
             onClick={() => dispatch(saveDraftThunk())}
-            aria-label="Save post as draft"
+            aria-label={t("saveDraftAria")}
             style={{ color: "var(--text-secondary)" }}
           >
             <Save size={14} aria-hidden="true" />
-            Save draft
+            {t("saveDraft")}
           </button>
           <div className="flex-1" />
           <SplitPublishButton
@@ -752,7 +795,7 @@ export default function CreationEditor() {
           boxShadow: "inset 1px 0 0 var(--border-default), -18px 0 40px rgba(15, 23, 42, 0.08)",
           minHeight: isMobile ? "70vh" : undefined,
         }}
-        aria-label="Live post preview"
+        aria-label={t("livePostPreviewAria")}
       >
         {/* No bulky header — the preview itself owns the panel. The tab
             strip only appears when more than one platform is active; the
@@ -763,7 +806,7 @@ export default function CreationEditor() {
             className="px-3 py-1.5 shrink-0 flex gap-1 overflow-x-auto"
             style={{ borderBottom: "1px solid var(--border-default)" }}
             role="tablist"
-            aria-label="Platform previews"
+            aria-label={t("platformPreviewsAria")}
           >
             {activePlatforms.map((p, idx) => {
               const Icon = p.icon;
@@ -773,7 +816,7 @@ export default function CreationEditor() {
                   key={p.id}
                   role="tab"
                   aria-selected={isActive}
-                  aria-label={`Preview ${p.label}`}
+                  aria-label={t("previewPlatformAria", { platform: p.label })}
                   onClick={() => setCurrentPreviewIdx(idx)}
                   className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold transition-all duration-200 whitespace-nowrap"
                   style={{
@@ -831,8 +874,8 @@ export default function CreationEditor() {
               style={{ color: "var(--text-muted)" }}
             >
               <Zap size={40} className="mb-3 opacity-30" aria-hidden="true" />
-              <p className="text-sm">No platforms selected</p>
-              <p className="text-xs mt-1">Toggle platforms on the left to preview</p>
+              <p className="text-sm">{t("noPlatformsSelected")}</p>
+              <p className="text-xs mt-1">{t("togglePlatformsHint")}</p>
             </div>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col items-center">
@@ -915,6 +958,7 @@ export default function CreationEditor() {
    ratio, the user picks per platform — sourced from RATIOS_BY_PLATFORM
    in lib/platforms.js. Closes on outside click / Escape. */
 function RatioPicker({ platform, value, onChange, media }) {
+  const t = useTranslations("creation");
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const spec = RATIOS_BY_PLATFORM[platform.id];
@@ -957,7 +1001,7 @@ function RatioPicker({ platform, value, onChange, media }) {
         }}
         aria-haspopup="listbox"
         aria-expanded={open}
-        title={`Pick the aspect ratio used to preview ${platform.label} posts`}
+        title={t("pickRatioTitle", { platform: platform.label })}
       >
         <Frame size={12} aria-hidden="true" />
         {value}
@@ -1020,7 +1064,7 @@ function RatioPicker({ platform, value, onChange, media }) {
                       color: "var(--text-muted)",
                     }}
                   >
-                    default
+                    {t("defaultBadge")}
                   </span>
                 )}
                 {isSelected && (
@@ -1041,6 +1085,7 @@ function RatioPicker({ platform, value, onChange, media }) {
    and one ghost (Save draft) — every other path lives in the dropdown.
    Closes on outside click / Escape, mirrors RatioPicker. */
 function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
+  const t = useTranslations("creation");
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -1062,11 +1107,11 @@ function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
         id="publish-now-btn"
         className={`${btnPrimary} flex items-center gap-2`}
         onClick={onPublish}
-        aria-label="Publish post now"
+        aria-label={t("publishNowAria")}
         style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
       >
         <Send size={16} aria-hidden="true" />
-        Publish now
+        {t("publishNow")}
       </button>
       <button
         type="button"
@@ -1074,7 +1119,7 @@ function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
         className={`${btnPrimary}`}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="More publish options"
+        aria-label={t("morePublishOptions")}
         style={{
           borderTopLeftRadius: 0,
           borderBottomLeftRadius: 0,
@@ -1097,7 +1142,7 @@ function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
         >
           <MenuItem
             icon={CalendarClock}
-            label="Schedule for later…"
+            label={t("scheduleForLater")}
             onClick={() => {
               setOpen(false);
               onSchedule();
@@ -1105,8 +1150,8 @@ function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
           />
           <MenuItem
             icon={MessageSquare}
-            label="Submit for validation"
-            sub="Telegram approval flow"
+            label={t("submitForValidation")}
+            sub={t("telegramApprovalFlow")}
             onClick={() => {
               setOpen(false);
               onValidate();
@@ -1153,6 +1198,7 @@ function PlatformPreview({
   media = [],
   creator = null,
 }) {
+  const t = useTranslations("creation");
   const [mediaIdx, setMediaIdx] = useState(0);
   const Icon = platform.icon;
   const charPercent = Math.min((content.length / platform.maxChars) * 100, 100);
@@ -1191,7 +1237,7 @@ function PlatformPreview({
         border: "1px solid var(--border-default)",
         boxShadow: "0 28px 48px rgba(15, 23, 42, 0.16)",
       }}
-      aria-label={`${platform.label} post preview`}
+      aria-label={t("platformPostPreview", { platform: platform.label })}
     >
       {/* Platform header — text uses the theme primary so it stays readable
           in both light + dark; identity is carried by the icon + the side
@@ -1205,7 +1251,7 @@ function PlatformPreview({
           {platform.label}
         </span>
         <div className="flex-1" />
-        <span className={`platform-tag ${platform.className}`}>Preview</span>
+        <span className={`platform-tag ${platform.className}`}>{t("previewBadge")}</span>
       </div>
 
       {/* Media — real uploads, or an empty-state placeholder */}
@@ -1260,7 +1306,7 @@ function PlatformPreview({
                   <button
                     onClick={(e) => { e.stopPropagation(); setMediaIdx(i => i - 1); }}
                     className="absolute left-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full flex items-center justify-center bg-black/50 text-white hover:bg-black/70 transition-colors z-10"
-                    aria-label="Previous media"
+                    aria-label={t("previousMedia")}
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
                   </button>
@@ -1269,7 +1315,7 @@ function PlatformPreview({
                   <button
                     onClick={(e) => { e.stopPropagation(); setMediaIdx(i => i + 1); }}
                     className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full flex items-center justify-center bg-black/50 text-white hover:bg-black/70 transition-colors z-10"
-                    aria-label="Next media"
+                    aria-label={t("nextMedia")}
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
                   </button>
@@ -1282,9 +1328,9 @@ function PlatformPreview({
             <Icon size={32} className="mx-auto mb-2 opacity-30" style={{ color: platform.color }} aria-hidden="true" />
             <p className="text-xs">
               {ratio}{" "}
-              {isVertical ? "Vertical" : isSquare ? "Square" : "Landscape"}
+              {isVertical ? t("vertical") : isSquare ? t("square") : t("landscape")}
             </p>
-            <p className="text-xs mt-0.5 opacity-60">Upload media on the left to preview</p>
+            <p className="text-xs mt-0.5 opacity-60">{t("uploadHint")}</p>
           </div>
         )}
       </div>
@@ -1312,7 +1358,7 @@ function PlatformPreview({
           )}
           <div>
             <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{creatorHandle}</p>
-            <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>Just now</p>
+            <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{t("justNow")}</p>
           </div>
         </div>
         <p
@@ -1327,7 +1373,7 @@ function PlatformPreview({
             WebkitLineClamp: 5,
           }}
         >
-          {content || "Your post content will appear here…"}
+          {content || t("postContentPlaceholder")}
         </p>
       </div>
 
@@ -1376,7 +1422,7 @@ function PlatformPreview({
         <span
           className="text-[10px] flex items-center gap-1"
           style={{ color: hashOverLimit ? "var(--status-error)" : "var(--text-muted)" }}
-          aria-label={`${hashtagCount} of ${platform.maxHashtags} hashtags`}
+          aria-label={t("hashtagsOfMax", { current: hashtagCount, max: platform.maxHashtags })}
         >
           <Hash size={10} aria-hidden="true" />
           {hashtagCount}/{platform.maxHashtags}

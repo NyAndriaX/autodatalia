@@ -3,6 +3,7 @@
 import { btnPrimary, btnSecondary, inputField } from "../../lib/uiClasses";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDispatch } from "react-redux";
+import { useTranslations } from "next-intl";
 import {
   Bot, Plus, Trash2, Save, Loader2, Power, PowerOff, Clock,
   ListChecks, X, Settings2, Sparkles, Zap, CalendarDays, Radio,
@@ -18,44 +19,52 @@ import { addNotification } from "../../store/uiSlice";
 import { PLATFORMS, TONES } from "../../lib/platforms";
 import TimePicker from "./TimePicker";
 
-/* ─── données statiques (traduites) ─────────────────────────────────────*/
-const CONTENT_TYPES = [
-  { id:"photo",    label:"Photo",    emoji:"🖼️" },
-  { id:"video",    label:"Vidéo",    emoji:"🎬" },
-  { id:"carousel", label:"Carrousel",emoji:"📱" },
-  { id:"template", label:"Modèle",   emoji:"📄" },
-  { id:"text",     label:"Texte",    emoji:"✍️" },
-];
+const LEAD_PRESETS = [5, 30, 60];
 
-const OBJECTIVES = [
-  { id:"informative",  label:"Informatif"   },
-  { id:"promotional",  label:"Promotionnel" },
-  { id:"engagement",   label:"Engagement"   },
-  { id:"acquisition",  label:"Acquisition"  },
-];
+function useStaticData() {
+  const t = useTranslations("automation");
+  const CONTENT_TYPES = [
+    { id:"photo",    label:t("photo"),     emoji:"🖼️" },
+    { id:"video",    label:t("video"),     emoji:"🎬" },
+    { id:"carousel", label:t("carousel"),  emoji:"📱" },
+    { id:"template", label:t("template"),  emoji:"📄" },
+    { id:"text",     label:t("text"),      emoji:"✍️" },
+  ];
+  const OBJECTIVES = [
+    { id:"informative",  label:t("informative")  },
+    { id:"promotional",  label:t("promotional")  },
+    { id:"engagement",   label:t("engagement")   },
+    { id:"acquisition",  label:t("acquisition")  },
+  ];
+  const FREQUENCIES = [
+    { id:"daily",    label:t("daily")         },
+    { id:"weekdays", label:t("specificDays")  },
+    { id:"weekly",   label:t("weekly")        },
+    { id:"monthly",  label:t("monthly")       },
+    { id:"custom",   label:t("custom")        },
+  ];
+  const WEEKDAY_LABELS = [
+    t("weekdayMon"), t("weekdayTue"), t("weekdayWed"),
+    t("weekdayThu"), t("weekdayFri"), t("weekdaySat"), t("weekdaySun"),
+  ];
+  return { CONTENT_TYPES, OBJECTIVES, FREQUENCIES, WEEKDAY_LABELS };
+}
 
-const FREQUENCIES = [
-  { id:"daily",    label:"Quotidien"        },
-  { id:"weekdays", label:"Jours spécifiques"},
-  { id:"weekly",   label:"Hebdomadaire"     },
-  { id:"monthly",  label:"Mensuel"          },
-  { id:"custom",   label:"Personnalisé"     },
-];
-
-const WEEKDAY_LABELS = ["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"];
-const LEAD_PRESETS   = [5, 30, 60];
-
-function resuméPlanning(rule) {
-  const s     = rule.schedule || {};
-  const times = (s.times || []).join(", ") || "—";
-  switch (s.frequency) {
-    case "daily":    return `Quotidien à ${times}`;
-    case "weekdays": return `${(s.weekdays||[]).map((d) => WEEKDAY_LABELS[d]).join(", ")||"(aucun jour)"} à ${times}`;
-    case "weekly":   return `Chaque ${WEEKDAY_LABELS[(s.weekdays||[])[0]??0]} à ${times}`;
-    case "monthly":  return `Jour(s) ${(s.month_days||[]).join(", ")||"?"} à ${times}`;
-    case "custom":   return `Personnalisé · ${times}`;
-    default:         return "—";
-  }
+function useResumePlanning() {
+  const t = useTranslations("automation");
+  const { WEEKDAY_LABELS } = useStaticData();
+  return (rule) => {
+    const s     = rule.schedule || {};
+    const times = (s.times || []).join(", ") || "—";
+    switch (s.frequency) {
+      case "daily":    return t("summaryDaily",    { times });
+      case "weekdays": return t("summaryWeekdays", { days: (s.weekdays||[]).map((d) => WEEKDAY_LABELS[d]).join(", ") || t("noDay"), times });
+      case "weekly":   return t("summaryWeekly",   { day: WEEKDAY_LABELS[(s.weekdays||[])[0]??0], times });
+      case "monthly":  return t("summaryMonthly",  { days: (s.month_days||[]).join(", ") || "?", times });
+      case "custom":   return t("summaryCustom",   { times });
+      default:         return "—";
+    }
+  };
 }
 
 /* ─── Chips ──────────────────────────────────────────────────────────────*/
@@ -96,9 +105,11 @@ function Champ({ label, hint, children }) {
 
 /* ─── Carte de règle ─────────────────────────────────────────────────────*/
 function CarteRegle({ rule, active, onClick }) {
+  const t = useTranslations("automation");
+  const resumePlanning = useResumePlanning();
   const nbMedia = rule.num_media?.mode === "range"
-    ? `${rule.num_media.min}–${rule.num_media.max} médias`
-    : `${rule.num_media?.count ?? 1} média${(rule.num_media?.count ?? 1) > 1 ? "s" : ""}`;
+    ? t("mediaRange", { min: rule.num_media.min, max: rule.num_media.max })
+    : t("mediaCount", { n: rule.num_media?.count ?? 1 });
   return (
     <button type="button" onClick={onClick}
       className="w-full rounded-2xl p-4 text-left transition-all duration-150"
@@ -125,12 +136,12 @@ function CarteRegle({ rule, active, onClick }) {
             background: rule.active ? "rgba(34,197,94,.15)"   : "rgba(100,116,139,.12)",
             color:      rule.active ? "var(--status-approved)" : "var(--text-muted)",
           }}>
-          {rule.active ? "Actif" : "Inactif"}
+          {rule.active ? t("activeShort") : t("inactive")}
         </span>
       </div>
       <div className="mt-2 flex items-center gap-1.5 text-[11px]" style={{ color:"var(--text-muted)" }}>
         <Clock size={10} />
-        <span className="truncate">{resuméPlanning(rule)}</span>
+        <span className="truncate">{resumePlanning(rule)}</span>
       </div>
       <div className="mt-1 flex items-center gap-1.5 text-[11px]" style={{ color:"var(--text-muted)" }}>
         <ListChecks size={10} />
@@ -142,6 +153,7 @@ function CarteRegle({ rule, active, onClick }) {
 
 /* ─── État vide ──────────────────────────────────────────────────────────*/
 function EtatVide() {
+  const t = useTranslations("automation");
   return (
     <div className="flex h-full flex-col items-center justify-center py-20 text-center">
       <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl"
@@ -149,10 +161,10 @@ function EtatVide() {
         <Bot size={32} style={{ color:"var(--accent-primary)" }} />
       </div>
       <p className="text-base font-bold" style={{ color:"var(--text-primary)" }}>
-        Sélectionnez ou créez une règle
+        {t("emptyStateTitle")}
       </p>
       <p className="mt-2 max-w-xs text-sm" style={{ color:"var(--text-muted)" }}>
-        Les règles définissent quoi générer, quand publier, et qui valide via Telegram.
+        {t("emptyStateDesc")}
       </p>
     </div>
   );
@@ -161,6 +173,9 @@ function EtatVide() {
 /* ─── Composant principal ────────────────────────────────────────────────*/
 export default function AutomationView() {
   const dispatch = useDispatch();
+  const t = useTranslations("automation");
+  const tCommon = useTranslations("common");
+  const { CONTENT_TYPES, OBJECTIVES, FREQUENCIES, WEEKDAY_LABELS } = useStaticData();
   const [rules,      setRules]      = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [selectedId, setSelectedId] = useState(null);
@@ -173,11 +188,11 @@ export default function AutomationView() {
     try {
       setRules(await listAutomationRules());
     } catch (err) {
-      dispatch(addNotification({ message:`Impossible de charger les règles : ${err.message}`, type:"error" }));
+      dispatch(addNotification({ message: t("loadRulesFailed", { error: err.message }), type:"error" }));
     } finally {
       setLoading(false);
     }
-  }, [dispatch]);
+  }, [dispatch, t]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -187,9 +202,9 @@ export default function AutomationView() {
   );
 
   useEffect(() => {
-    if (selectedId === "new") setDraft({ ...DEFAULT_AUTOMATION_RULE, name:"Nouvelle règle" });
+    if (selectedId === "new") setDraft({ ...DEFAULT_AUTOMATION_RULE, name: t("newRuleDraftName") });
     else if (selected)        setDraft({ ...DEFAULT_AUTOMATION_RULE, ...selected });
-  }, [selectedId, selected]);
+  }, [selectedId, selected, t]);
 
   const upd         = (patch) => setDraft((d) => ({ ...d, ...patch }));
   const updPlanning = (patch) => setDraft((d) => ({ ...d, schedule:  { ...d.schedule, ...patch } }));
@@ -214,7 +229,7 @@ export default function AutomationView() {
 
   const handleSave = async () => {
     if (!draft.name?.trim()) {
-      dispatch(addNotification({ message:"Le nom de la règle est obligatoire.", type:"error" }));
+      dispatch(addNotification({ message: t("ruleNameRequired"), type:"error" }));
       return;
     }
     setSaving(true);
@@ -222,15 +237,15 @@ export default function AutomationView() {
       if (selectedId === "new") {
         const created = await createAutomationRule(draft);
         await refresh();
-        dispatch(addNotification({ message:`Règle créée : ${created.name}`, type:"success" }));
+        dispatch(addNotification({ message: t("ruleCreated", { name: created.name }), type:"success" }));
       } else if (selected) {
         await updateAutomationRule(selected.id, draft);
         await refresh();
-        dispatch(addNotification({ message:"Règle mise à jour.", type:"success" }));
+        dispatch(addNotification({ message: t("ruleUpdated"), type:"success" }));
       }
       setSelectedId(null);
     } catch (err) {
-      dispatch(addNotification({ message:`Échec de l'enregistrement : ${err.message}`, type:"error" }));
+      dispatch(addNotification({ message: t("saveFailed", { error: err.message }), type:"error" }));
     } finally {
       setSaving(false);
     }
@@ -241,26 +256,26 @@ export default function AutomationView() {
       await updateAutomationRule(rule.id, { ...rule, active: !rule.active });
       refresh();
     } catch (err) {
-      dispatch(addNotification({ message:`Erreur : ${err.message}`, type:"error" }));
+      dispatch(addNotification({ message: t("errorPrefix", { error: err.message }), type:"error" }));
     }
   };
 
   const handleSupprimer = async (rule) => {
-    if (!window.confirm(`Supprimer la règle "${rule.name}" ?`)) return;
+    if (!window.confirm(t("deleteRuleConfirm", { name: rule.name }))) return;
     try {
       await deleteAutomationRule(rule.id);
       if (selectedId === rule.id) setSelectedId(null);
       refresh();
-      dispatch(addNotification({ message:"Règle supprimée.", type:"success" }));
+      dispatch(addNotification({ message: t("ruleDeleted"), type:"success" }));
     } catch (err) {
-      dispatch(addNotification({ message:`Erreur : ${err.message}`, type:"error" }));
+      dispatch(addNotification({ message: t("errorPrefix", { error: err.message }), type:"error" }));
     }
   };
 
   const ONGLETS = [
-    { id:"contenu",     label:"Contenu",     icon:Sparkles     },
-    { id:"planification",label:"Planification",icon:CalendarDays },
-    { id:"telegram",    label:"Telegram",    icon:Zap          },
+    { id:"contenu",      label:t("tabContent"),      icon:Sparkles     },
+    { id:"planification",label:t("tabSchedule"),     icon:CalendarDays },
+    { id:"telegram",     label:t("tabTelegram"),     icon:Zap          },
   ];
 
   return (
@@ -276,16 +291,16 @@ export default function AutomationView() {
             </div>
             <div>
               <h1 className="text-xl font-extrabold leading-tight" style={{ color:"var(--text-primary)" }}>
-                Automatisation
+                {t("pageTitle")}
               </h1>
               <p className="text-xs" style={{ color:"var(--text-muted)" }}>
-                Génération · Validation Telegram · Publication planifiée
+                {t("pageSubtitle")}
               </p>
             </div>
           </div>
           <button type="button" onClick={() => { setSelectedId("new"); setOnglet("contenu"); }}
             className={`${btnPrimary} inline-flex items-center gap-2`}>
-            <Plus size={15} /> Nouvelle règle
+            <Plus size={15} /> {t("newRule")}
           </button>
         </div>
 
@@ -297,16 +312,16 @@ export default function AutomationView() {
             <div className="rounded-2xl p-4 h-full"
               style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
               <p className="mb-3 text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
-                {loading ? "Chargement…" : `${rules.length} règle${rules.length !== 1 ? "s" : ""}`}
+                {loading ? tCommon("loading") : t("rulesCount", { n: rules.length })}
               </p>
               {loading && (
                 <div className="flex items-center gap-2 text-xs" style={{ color:"var(--text-muted)" }}>
-                  <Loader2 size={12} className="animate-spin" /> Chargement des règles…
+                  <Loader2 size={12} className="animate-spin" /> {t("loadingRules")}
                 </div>
               )}
               {!loading && rules.length === 0 && (
                 <div className="py-8 text-center text-sm" style={{ color:"var(--text-muted)" }}>
-                  Aucune règle. Cliquez sur<br />"Nouvelle règle" pour commencer.
+                  {t("noRulesShort")}
                 </div>
               )}
               <div className="flex flex-col gap-2">
@@ -331,7 +346,7 @@ export default function AutomationView() {
                   <div className="flex items-center gap-3 min-w-0">
                     <Settings2 size={18} style={{ color:"var(--accent-primary)", flexShrink:0 }} />
                     <h2 className="truncate text-base font-bold" style={{ color:"var(--text-primary)" }}>
-                      {selectedId === "new" ? "Nouvelle règle" : draft.name}
+                      {selectedId === "new" ? t("newRule") : draft.name}
                     </h2>
                     {selected && (
                       <span className="shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-bold"
@@ -339,7 +354,7 @@ export default function AutomationView() {
                           background: selected.active ? "rgba(34,197,94,.15)" : "rgba(100,116,139,.12)",
                           color:      selected.active ? "var(--status-approved)" : "var(--text-muted)",
                         }}>
-                        {selected.active ? "Actif" : "Inactif"}
+                        {selected.active ? t("activeShort") : t("inactive")}
                       </span>
                     )}
                   </div>
@@ -350,13 +365,13 @@ export default function AutomationView() {
                           className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
                           style={{ padding:"6px 12px" }}>
                           {selected.active
-                            ? <><PowerOff size={12}/> Désactiver</>
-                            : <><Power    size={12}/> Activer</>}
+                            ? <><PowerOff size={12}/> {t("deactivate")}</>
+                            : <><Power    size={12}/> {t("activate")}</>}
                         </button>
                         <button type="button" onClick={() => handleSupprimer(selected)}
                           className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold"
                           style={{ background:"rgba(239,68,68,.1)", color:"var(--status-error)", border:"none", cursor:"pointer" }}>
-                          <Trash2 size={12}/> Supprimer
+                          <Trash2 size={12}/> {tCommon("delete")}
                         </button>
                       </>
                     )}
@@ -394,20 +409,20 @@ export default function AutomationView() {
                   {onglet === "contenu" && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8">
                       <div>
-                        <Champ label="Nom de la règle">
+                        <Champ label={t("ruleName")}>
                           <input type="text" className={inputField} value={draft.name}
                             onChange={(e) => upd({ name: e.target.value })}
-                            placeholder="ex. Carrousel du matin" />
+                            placeholder={t("ruleNamePlaceholder")} />
                         </Champ>
-                        <Champ label="Type de contenu">
+                        <Champ label={t("contentType")}>
                           <Chips options={CONTENT_TYPES} value={draft.content_type}
                             onChange={(v) => upd({ content_type: v })} />
                         </Champ>
-                        <Champ label="Nombre de médias"
-                          hint="Fixe = toujours N · Plage = l'IA choisit dans [min, max]">
+                        <Champ label={t("numMedia")}
+                          hint={t("numMediaHint")}>
                           <div className="mb-2">
                             <Chips
-                              options={[{ id:"fixed", label:"Fixe" }, { id:"range", label:"Plage" }]}
+                              options={[{ id:"fixed", label:t("fixed") }, { id:"range", label:t("range") }]}
                               value={draft.num_media?.mode || "fixed"}
                               onChange={(v) => updMédias({ mode: v })} />
                           </div>
@@ -420,46 +435,47 @@ export default function AutomationView() {
                               <input type="number" min={1} max={10} className={inputField} style={{ width:76 }}
                                 value={draft.num_media?.min ?? 2}
                                 onChange={(e) => updMédias({ min: parseInt(e.target.value||1,10) })} />
-                              <span className="text-xs" style={{ color:"var(--text-muted)" }}>à</span>
+                              <span className="text-xs" style={{ color:"var(--text-muted)" }}>{t("rangeTo")}</span>
                               <input type="number" min={1} max={10} className={inputField} style={{ width:76 }}
                                 value={draft.num_media?.max ?? 4}
                                 onChange={(e) => updMédias({ max: parseInt(e.target.value||1,10) })} />
                             </div>
                           )}
                         </Champ>
-                        <Champ label="Domaine / sujet">
+                        <Champ label={t("domain")}>
                           <input type="text" className={inputField} value={draft.domain}
                             onChange={(e) => upd({ domain: e.target.value })}
-                            placeholder="immobilier, marketing, santé…" />
+                            placeholder={t("domainPlaceholderShort")} />
                         </Champ>
-                        <Champ label="Audience cible">
+                        <Champ label={t("audience")}>
                           <input type="text" className={inputField} value={draft.target_audience}
                             onChange={(e) => upd({ target_audience: e.target.value })}
-                            placeholder="PDG, start-ups, investisseurs…" />
+                            placeholder={t("audiencePlaceholderShort")} />
                         </Champ>
                       </div>
                       <div>
-                        <Champ label="Ton de communication">
+                        <Champ label={t("communicationTone")}>
                           <Chips
-                            options={[{ id:"", label:"Auto" }, ...TONES.map((t) => ({ id:t.id, label:t.label }))]}
+                            options={[{ id:"", label:t("toneAuto") }, ...TONES.map((tn) => ({ id:tn.id, label:tn.label }))]}
                             value={draft.tone || ""}
                             onChange={(v) => upd({ tone: v })} />
                         </Champ>
-                        <Champ label="Objectif">
+                        <Champ label={t("objective")}>
                           <Chips options={OBJECTIVES} value={draft.objective}
                             onChange={(v) => upd({ objective: v })} />
                         </Champ>
-                        <Champ label="Style de description">
+                        <Champ label={t("descriptionStyle")}>
                           <input type="text" className={inputField} value={draft.description_style}
                             onChange={(e) => upd({ description_style: e.target.value })}
-                            placeholder="concis, factuel, sans emojis" />
+                            placeholder={t("descriptionStylePlaceholder")} />
                         </Champ>
-                        <Champ label="Brief supplémentaire (optionnel)">
+                        <Champ label={t("extraBriefOptional")}>
                           <textarea className={inputField} rows={3} value={draft.extra_brief}
                             onChange={(e) => upd({ extra_brief: e.target.value })}
-                            placeholder="Instruction libre ajoutée en début de prompt IA." />
+                            placeholder={t("extraBriefPlaceholder")} />
                         </Champ>
-                        <Champ label="Plateformes">
+                        <Champ label={t("platforms")}>
+
                           <div className="flex flex-wrap gap-1.5">
                             {PLATFORMS.map((p) => {
                               const Icon = p.icon;
@@ -487,13 +503,13 @@ export default function AutomationView() {
                   {onglet === "planification" && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8">
                       <div>
-                        <Champ label="Fréquence">
+                        <Champ label={t("frequency")}>
                           <Chips options={FREQUENCIES} value={draft.schedule?.frequency || "daily"}
                             onChange={(v) => updPlanning({ frequency: v })} />
                         </Champ>
 
                         {(draft.schedule?.frequency === "weekdays" || draft.schedule?.frequency === "weekly") && (
-                          <Champ label="Jours de la semaine">
+                          <Champ label={t("daysOfWeek")}>
                             <div className="flex flex-wrap gap-1.5">
                               {WEEKDAY_LABELS.map((lbl, i) => {
                                 const on = (draft.schedule?.weekdays || []).includes(i);
@@ -515,7 +531,7 @@ export default function AutomationView() {
                         )}
 
                         {draft.schedule?.frequency === "monthly" && (
-                          <Champ label="Jours du mois" hint="Séparés par des virgules (ex. 1, 15, 28)">
+                          <Champ label={t("daysOfMonth")} hint={t("daysOfMonthHint")}>
                             <input type="text" className={inputField}
                               value={(draft.schedule?.month_days || []).join(", ")}
                               onChange={(e) => {
@@ -524,15 +540,15 @@ export default function AutomationView() {
                                   .filter((n) => Number.isInteger(n) && n >= 1 && n <= 31);
                                 updPlanning({ month_days: nums });
                               }}
-                              placeholder="1, 15, 28" />
+                              placeholder={t("rulePromptDaysPlaceholder")} />
                           </Champ>
                         )}
 
-                        <Champ label="Heures de publication">
+                        <Champ label={t("publishTimes")}>
                           <div className="flex flex-col gap-2">
-                            {(draft.schedule?.times || []).map((t, idx) => (
+                            {(draft.schedule?.times || []).map((time, idx) => (
                               <div key={idx} className="flex items-center gap-2">
-                                <TimePicker value={t} onChange={(next) => majHeure(idx, next)} />
+                                <TimePicker value={time} onChange={(next) => majHeure(idx, next)} />
                                 {(draft.schedule?.times || []).length > 1 && (
                                   <button type="button" onClick={() => supprimerHeure(idx)}
                                     className="rounded-lg p-1.5"
@@ -545,17 +561,17 @@ export default function AutomationView() {
                             <button type="button" onClick={ajouterHeure}
                               className="self-start text-xs font-semibold inline-flex items-center gap-1"
                               style={{ color:"var(--accent-primary)", background:"none", border:"none", cursor:"pointer" }}>
-                              <Plus size={12} /> Ajouter une heure
+                              <Plus size={12} /> {t("addTime")}
                             </button>
                           </div>
                         </Champ>
                       </div>
                       <div>
-                        <Champ label="Fuseau horaire">
+                        <Champ label={t("timezone")}>
                           <input type="text" className={inputField}
                             value={draft.schedule?.timezone || "UTC"}
                             onChange={(e) => updPlanning({ timezone: e.target.value })}
-                            placeholder="Europe/Paris, America/Toronto" />
+                            placeholder={t("timezonePlaceholder")} />
                         </Champ>
                       </div>
                     </div>
@@ -567,16 +583,14 @@ export default function AutomationView() {
                       <div className="mb-5 rounded-2xl p-4"
                         style={{ background:"rgba(29,63,190,.06)", border:"1px solid rgba(29,63,190,.2)" }}>
                         <p className="text-xs font-semibold" style={{ color:"var(--accent-primary)" }}>
-                          Comment ça fonctionne
+                          {t("howItWorks")}
                         </p>
                         <p className="mt-1 text-xs leading-relaxed" style={{ color:"var(--text-muted)" }}>
-                          Avant chaque publication, le bot envoie un aperçu au chat du validateur.
-                          Celui-ci peut approuver, modifier ou rejeter le post. Définissez le délai
-                          d'avance pour laisser suffisamment de temps à l'équipe de répondre.
+                          {t("howItWorksDesc")}
                         </p>
                       </div>
 
-                      <Champ label="Délai de validation" hint="Combien de temps avant la publication le bot demande l'approbation.">
+                      <Champ label={t("validationLead")} hint={t("leadHint")}>
                         <div className="flex flex-wrap items-center gap-2 mb-2">
                           {LEAD_PRESETS.map((m) => {
                             const on = draft.validation_lead_minutes === m;
@@ -590,23 +604,23 @@ export default function AutomationView() {
                                   border:     `1px solid ${on ? "transparent" : "var(--border-default)"}`,
                                   cursor:"pointer",
                                 }}>
-                                {m < 60 ? `${m} min` : `${m/60} h`}
+                                {m < 60 ? t("minutesShort", { n: m }) : t("hoursShort", { n: m/60 })}
                               </button>
                             );
                           })}
                           <input type="number" min={1} max={1440} className={inputField} style={{ width:88 }}
                             value={draft.validation_lead_minutes || 30}
                             onChange={(e) => upd({ validation_lead_minutes: parseInt(e.target.value||30,10) })} />
-                          <span className="text-xs" style={{ color:"var(--text-muted)" }}>min</span>
+                          <span className="text-xs" style={{ color:"var(--text-muted)" }}>{t("minLabel")}</span>
                         </div>
                       </Champ>
 
-                      <Champ label="ID de chat Telegram (optionnel)"
-                        hint="Vide = utiliser le chat par défaut du serveur.">
+                      <Champ label={t("telegramChatLabel")}
+                        hint={t("validationChatHint")}>
                         <input type="text" className={inputField}
                           value={draft.validation_chat_id || ""}
                           onChange={(e) => upd({ validation_chat_id: e.target.value || null })}
-                          placeholder="ID numérique" />
+                          placeholder={t("telegramChatPlaceholder")} />
                       </Champ>
                     </div>
                   )}
@@ -624,13 +638,13 @@ export default function AutomationView() {
                   <div className="flex items-center gap-2">
                     <button type="button" onClick={() => setSelectedId(null)}
                       className={`${btnSecondary} inline-flex items-center gap-2`}>
-                      Annuler
+                      {tCommon("cancel")}
                     </button>
                     <button type="button" onClick={handleSave} disabled={saving}
                       className={`${btnPrimary} inline-flex items-center gap-2`}>
                       {saving
-                        ? <><Loader2 size={13} className="animate-spin"/> Enregistrement…</>
-                        : <><Save size={13}/> Enregistrer</>}
+                        ? <><Loader2 size={13} className="animate-spin"/> {t("saving")}</>
+                        : <><Save size={13}/> {tCommon("save")}</>}
                     </button>
                   </div>
                 </div>

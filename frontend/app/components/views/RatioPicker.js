@@ -3,6 +3,7 @@ import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useTranslations } from "next-intl";
 import { ChevronDown, Check, Frame } from "lucide-react";
 import { RATIOS_BY_PLATFORM, parseRatio } from "../../lib/platforms";
 
@@ -23,6 +24,8 @@ const POPOVER_HEIGHT_APPROX = 220;
  *   compact  — slimmer trigger; useful inline in a modal form row
  */
 export default function RatioPicker({ platform, value, onChange, compact = false }) {
+  const t = useTranslations("ratio");
+  const tCreation = useTranslations("creation");
   const [open, setOpen] = useState(false);
   const [popoverPos, setPopoverPos] = useState(null);
   const triggerRef = useRef(null);
@@ -144,7 +147,7 @@ export default function RatioPicker({ platform, value, onChange, compact = false
                   color: "var(--text-muted)",
                 }}
               >
-                default
+                {tCreation("defaultBadge")}
               </span>
             )}
             {isSelected && (
@@ -171,7 +174,7 @@ export default function RatioPicker({ platform, value, onChange, compact = false
         }}
         aria-haspopup="listbox"
         aria-expanded={open}
-        title={`Aspect ratio for ${platform.label}`}
+        title={t("aspectRatioFor", { platform: platform.label })}
       >
         <Frame size={11} aria-hidden="true" />
         {effective}

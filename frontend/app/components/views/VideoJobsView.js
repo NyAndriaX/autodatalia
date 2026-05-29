@@ -1,7 +1,7 @@
 "use client";
-import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn, badgeDraft } from "../../lib/uiClasses";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import {
   Film,
   Plus,
@@ -13,42 +13,123 @@ import {
   Loader2,
   Play,
   ExternalLink,
+  ImagePlus,
+  Type,
+  Image as ImageIcon,
+  Sparkles,
+  X,
 } from "lucide-react";
 import {
   createVideoJob,
   deleteVideoJob,
   listVideoJobs,
+  listVideoModels,
 } from "../../lib/videoJobsService";
+import { uploadToBackend } from "../../lib/uploadService";
+import { btnPrimary, card, fadeIn } from "../../lib/uiClasses";
 
 /**
- * Management interface for Génération vidéo IA jobs.
+ * Management interface for AI video generation jobs.
  *
- * Each job is a queued call against the configured video provider —
- * LTX-Video via Replicate when REPLICATE_API_TOKEN is set, ffmpeg
- * Ken Burns as fallback. The view polls /video-jobs every few seconds
- * so an in-progress job shows its progress bar updating live.
- *
- * Create form on the left, job list on the right. Clicking a finished
- * job's preview opens a modal-less full-bleed player (keeps DOM simple).
+ * Lets the user pick a fal.ai model (Kling, Higgsfield, Veo, etc.),
+ * choose a mode (text-to-video / image-to-video / UGC) and supply a
+ * reference image when the model + mode call for one. Polls every 4s
+ * so in-flight jobs show progress live. CreationEditor can stash a
+ * prefill in sessionStorage to hand off prompt + reference image.
  */
+
 const RATIOS = ["1:1", "4:5", "9:16", "16:9"];
 
+// Mode catalogue — drives which controls are visible.
+const MODES = [
+  { id: "text", icon: Type, labelKey: "modeText" },
+  { id: "image", icon: ImageIcon, labelKey: "modeImage" },
+  { id: "ugc", icon: Sparkles, labelKey: "modeUgc", descKey: "modeUgcDesc" },
+];
+
+// Session-storage key the Creation editor stashes the prefill into.
+// Popped once on mount so a soft refresh doesn't re-apply stale state.
+const PREFILL_KEY = "datalia.videoJobs.prefill";
+
 const STATUS_META = {
-  queued: { label: "En attente", icon: Clock, color: "var(--text-muted)" },
-  running: { label: "En cours", icon: Loader2, color: "var(--status-pending)", spin: true },
-  succeeded: { label: "Ready", icon: CheckCircle2, color: "var(--status-approved)" },
-  failed: { label: "Échoué", icon: XCircle, color: "var(--status-error)" },
-  cancelled: { label: "Annulerled", icon: XCircle, color: "var(--text-muted)" },
+  queued: { key: "statusQueued", icon: Clock, color: "var(--text-muted)" },
+  running: { key: "statusRunning", icon: Loader2, color: "var(--status-pending)", spin: true },
+  succeeded: { key: "statusReady", icon: CheckCircle2, color: "var(--status-approved)" },
+  failed: { key: "statusFailed", icon: XCircle, color: "var(--status-error)" },
+  cancelled: { key: "statusCancelled", icon: XCircle, color: "var(--text-muted)" },
 };
 
 export default function VideoJobsView() {
+  const t = useTranslations("videos");
+  const tCommon = useTranslations("common");
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [prompt, setDescription] = useState("");
+  const [prompt, setPrompt] = useState("");
   const [ratio, setRatio] = useState("9:16");
   const [duration, setDuration] = useState(6);
   const [submitting, setSubmitting] = useState(false);
+  const [models, setModels] = useState([]);
+  const [selectedModel, setSelectedModel] = useState(null);
+  const [mode, setMode] = useState("text");
+  const [referenceImage, setReferenceImage] = useState(null); // { filename, url }
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [prefilledNotice, setPrefilledNotice] = useState(false);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    listVideoModels().then((data) => {
+      const m = data?.models || [];
+      setModels(m);
+      setSelectedModel(data?.default || m[0]?.id || null);
+    });
+  }, []);
+
+  // Pop the prefill stashed by the Creation editor's "AI video" button.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = sessionStorage.getItem(PREFILL_KEY);
+      if (!raw) return;
+      const pre = JSON.parse(raw);
+      sessionStorage.removeItem(PREFILL_KEY);
+      if (pre.prompt) setPrompt(pre.prompt);
+      if (pre.referenceImage) {
+        setReferenceImage(pre.referenceImage);
+        setMode(pre.mode || "image");
+      }
+      if (pre.ratio) setRatio(pre.ratio);
+      setPrefilledNotice(true);
+    } catch {
+      /* ignore malformed prefill */
+    }
+  }, []);
+
+  const selectedModelObj = models.find((m) => m.id === selectedModel);
+  const features = selectedModelObj?.features || {
+    image_to_video: false,
+    audio: false,
+    max_duration_seconds: 15,
+    supports_ugc: false,
+  };
+
+  // Auto-flip mode when the model doesn't support what's selected.
+  useEffect(() => {
+    if (!features.image_to_video && (mode === "image" || mode === "ugc")) {
+      setMode("text");
+      setReferenceImage(null);
+    }
+    if (mode === "ugc" && !features.supports_ugc) {
+      setMode(features.image_to_video ? "image" : "text");
+    }
+  }, [features.image_to_video, features.supports_ugc, mode]);
+
+  // Clamp duration to model max.
+  useEffect(() => {
+    if (features.max_duration_seconds && duration > features.max_duration_seconds) {
+      setDuration(features.max_duration_seconds);
+    }
+  }, [features.max_duration_seconds, duration]);
 
   const reload = useCallback(async () => {
     try {
@@ -56,7 +137,7 @@ export default function VideoJobsView() {
       setJobs(data || []);
       setError(null);
     } catch (err) {
-      setError(err.message || "Échoué to load video jobs.");
+      setError(err.message || "Failed to load video jobs.");
     } finally {
       setLoading(false);
     }
@@ -64,31 +145,63 @@ export default function VideoJobsView() {
 
   useEffect(() => {
     reload();
-    // Poll every 4s so in-flight jobs update progress.
-    const t = setInterval(reload, 4000);
-    return () => clearInterval(t);
+    const id = setInterval(reload, 4000);
+    return () => clearInterval(id);
   }, [reload]);
+
+  async function handleImagePick(file) {
+    if (!file) return;
+    setUploadingImage(true);
+    try {
+      const res = await uploadToBackend(file);
+      if (res.status !== "uploaded") {
+        throw new Error(res.error || "Upload failed");
+      }
+      setReferenceImage({ filename: res.filename, url: res.remoteUrl });
+      if (mode === "text") setMode("image");
+    } catch (err) {
+      setError(err.message || "Upload failed");
+    } finally {
+      setUploadingImage(false);
+    }
+  }
 
   async function handleCreate(e) {
     e.preventDefault();
     if (!prompt.trim() || submitting) return;
+    if ((mode === "image" || mode === "ugc") && !referenceImage) {
+      setError(t("referenceImageHint"));
+      return;
+    }
     setSubmitting(true);
+    setError(null);
     try {
+      // UGC mode lightly prefixes the prompt so the model knows to
+      // generate a creator-style shot of the supplied product.
+      const finalPrompt =
+        mode === "ugc"
+          ? `UGC-style ad video: a person holding and showing this product to the camera, soft natural light, vertical handheld feel. ${prompt.trim()}`
+          : prompt.trim();
       await createVideoJob({
-        prompt: prompt.trim(),
+        prompt: finalPrompt,
         ratio,
         durationSeconds: duration,
+        imageFilename: referenceImage?.filename || null,
+        falModel: selectedModel,
+        mode,
       });
-      setDescription("");
+      setPrompt("");
+      setReferenceImage(null);
+      setPrefilledNotice(false);
       reload();
     } catch (err) {
-      setError(err.message || "Échoué to queue job.");
+      setError(err.message || "Failed to queue job.");
     } finally {
       setSubmitting(false);
     }
   }
 
-  async function handleSupprimer(jobId) {
+  async function handleDelete(jobId) {
     try {
       await deleteVideoJob(jobId);
       setJobs((prev) => prev.filter((j) => j.id !== jobId));
@@ -99,141 +212,261 @@ export default function VideoJobsView() {
 
   return (
     <div className={`h-full overflow-y-auto ${fadeIn}`} style={{ padding: 24 }}>
-        <div className="flex items-end justify-between mb-6 gap-4 flex-wrap">
-          <div>
-            <h1 className="text-2xl font-bold mb-1 inline-flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
-              <Film size={22} /> Génération vidéo IA
-            </h1>
-            <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-              Lancez un job LTX-Video. La génération réelle prend 30–120 s selon la durée ; annulez depuis la liste.
-            </p>
-          </div>
-          <button
-            onClick={reload}
-            className="p-2 rounded-lg transition-all"
+      <div className="flex items-end justify-between mb-6 gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold mb-1 inline-flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+            <Film size={22} /> {t("title")}
+          </h1>
+          <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+            {t("subtitle")}
+          </p>
+        </div>
+        <button
+          onClick={reload}
+          className="p-2 rounded-lg transition-all"
+          style={{
+            background: "var(--bg-secondary)",
+            color: "var(--text-muted)",
+            border: "1px solid var(--border-default)",
+          }}
+          title={tCommon("refresh")}
+        >
+          <RefreshCcw size={14} />
+        </button>
+      </div>
+
+      {error && (
+        <div
+          className="mb-4 p-3 rounded-lg text-sm"
+          style={{ background: "var(--status-error-bg)", color: "var(--status-error)" }}
+        >
+          {error}
+        </div>
+      )}
+
+      <div
+        className="grid gap-4"
+        style={{ gridTemplateColumns: "minmax(320px, 1fr) 2fr" }}
+      >
+        <form onSubmit={handleCreate} className={card} style={{ padding: 18 }}>
+          <h2 className="text-sm font-semibold mb-3 inline-flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+            <Plus size={14} /> {t("newVideo")}
+          </h2>
+
+          {prefilledNotice && (
+            <div
+              className="mb-3 p-2 rounded-md text-[11px] inline-flex items-center gap-2"
+              style={{ background: "var(--bg-tertiary)", color: "var(--text-secondary)" }}
+            >
+              <Sparkles size={11} /> {t("prefilledFromEditor")}
+            </div>
+          )}
+
+          <label className="text-[11px] uppercase tracking-wider block mb-1" style={{ color: "var(--text-muted)" }}>
+            {t("modelLabel")}
+          </label>
+          <select
+            value={selectedModel || ""}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            className="w-full p-2 rounded-lg text-sm mb-3"
             style={{
               background: "var(--bg-secondary)",
-              color: "var(--text-muted)",
               border: "1px solid var(--border-default)",
+              color: "var(--text-primary)",
             }}
-            title="Refresh"
           >
-            <RefreshCcw size={14} />
-          </button>
-        </div>
+            {models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label} · {t("modelCostPerSec", { cost: m.cost_per_second_usd.toFixed(2) })}
+              </option>
+            ))}
+          </select>
 
-        {error && (
-          <div
-            className="mb-4 p-3 rounded-lg text-sm"
-            style={{ background: "var(--status-error-bg)", color: "var(--status-error)" }}
-          >
-            {error}
-          </div>
-        )}
-
-        <div
-          className="grid gap-4"
-          style={{ gridTemplateColumns: "minmax(320px, 1fr) 2fr" }}
-        >
-          {/* Create form */}
-          <form onSubmit={handleCreate} className={card} style={{ padding: 18 }}>
-            <h2 className="text-sm font-semibold mb-3 inline-flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
-              <Plus size={14} /> New video
-            </h2>
-
-            <label className="text-[11px] uppercase tracking-wider block mb-1" style={{ color: "var(--text-muted)" }}>
-              Description
-            </label>
-            <textarea
-              value={prompt}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="A cinematic dolly shot of a coffee being poured into a glass, warm lighting…"
-              rows={5}
-              className="w-full p-2 rounded-lg text-sm mb-3"
-              style={{
-                background: "var(--bg-secondary)",
-                border: "1px solid var(--border-default)",
-                color: "var(--text-primary)",
-                resize: "vertical",
-              }}
-            />
-
-            <label className="text-[11px] uppercase tracking-wider block mb-1" style={{ color: "var(--text-muted)" }}>
-              Aspect ratio
-            </label>
-            <div className="grid grid-cols-4 gap-1.5 mb-3">
-              {RATIOS.map((r) => (
+          <label className="text-[11px] uppercase tracking-wider block mb-1" style={{ color: "var(--text-muted)" }}>
+            {t("modeLabel")}
+          </label>
+          <div className="grid grid-cols-3 gap-1.5 mb-3">
+            {MODES.map((m) => {
+              const ModeIcon = m.icon;
+              const disabled =
+                (m.id === "image" && !features.image_to_video) ||
+                (m.id === "ugc" && !features.supports_ugc);
+              return (
                 <button
-                  key={r}
+                  key={m.id}
                   type="button"
-                  onClick={() => setRatio(r)}
-                  className="py-2 text-xs font-medium rounded-lg transition-all"
+                  onClick={() => !disabled && setMode(m.id)}
+                  disabled={disabled}
+                  className="py-2 px-2 text-[11px] font-medium rounded-lg transition-all inline-flex flex-col items-center gap-1"
                   style={{
-                    background: ratio === r ? "var(--accent-primary)" : "var(--bg-secondary)",
-                    color: ratio === r ? "white" : "var(--text-secondary)",
+                    background: mode === m.id ? "var(--accent-primary)" : "var(--bg-secondary)",
+                    color: mode === m.id ? "white" : disabled ? "var(--text-tertiary)" : "var(--text-secondary)",
                     border: "1px solid var(--border-default)",
+                    opacity: disabled ? 0.45 : 1,
+                    cursor: disabled ? "not-allowed" : "pointer",
+                  }}
+                  title={m.descKey ? t(m.descKey) : undefined}
+                >
+                  <ModeIcon size={14} />
+                  {t(m.labelKey)}
+                </button>
+              );
+            })}
+          </div>
+
+          {(mode === "image" || mode === "ugc") && (
+            <div className="mb-3">
+              <label className="text-[11px] uppercase tracking-wider block mb-1" style={{ color: "var(--text-muted)" }}>
+                {t("referenceImage")}
+              </label>
+              {referenceImage ? (
+                <div
+                  className="relative rounded-lg overflow-hidden"
+                  style={{ aspectRatio: "16/9", background: "var(--bg-tertiary)" }}
+                >
+                  <img
+                    src={referenceImage.url}
+                    alt="reference"
+                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setReferenceImage(null)}
+                    className="absolute top-1.5 right-1.5 p-1 rounded-full"
+                    style={{ background: "rgba(0,0,0,0.6)", color: "#fff" }}
+                    title={t("removeImage")}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadingImage}
+                  className="w-full py-3 rounded-lg text-xs font-medium inline-flex items-center justify-center gap-1.5"
+                  style={{
+                    background: "var(--bg-secondary)",
+                    color: "var(--text-secondary)",
+                    border: "1px dashed var(--border-default)",
                   }}
                 >
-                  {r}
+                  {uploadingImage ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
+                  {t("uploadImage")}
                 </button>
+              )}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(e) => handleImagePick(e.target.files?.[0])}
+              />
+              <p className="text-[10px] mt-1.5" style={{ color: "var(--text-tertiary)" }}>
+                {t("referenceImageHint")}
+              </p>
+            </div>
+          )}
+
+          <label className="text-[11px] uppercase tracking-wider block mb-1" style={{ color: "var(--text-muted)" }}>
+            {t("prompt")}
+          </label>
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder={mode === "ugc" ? t("ugcPromptHint") : t("promptPlaceholder")}
+            rows={5}
+            className="w-full p-2 rounded-lg text-sm mb-3"
+            style={{
+              background: "var(--bg-secondary)",
+              border: "1px solid var(--border-default)",
+              color: "var(--text-primary)",
+              resize: "vertical",
+            }}
+          />
+
+          <label className="text-[11px] uppercase tracking-wider block mb-1" style={{ color: "var(--text-muted)" }}>
+            {t("aspectRatio")}
+          </label>
+          <div className="grid grid-cols-4 gap-1.5 mb-3">
+            {RATIOS.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setRatio(r)}
+                className="py-2 text-xs font-medium rounded-lg transition-all"
+                style={{
+                  background: ratio === r ? "var(--accent-primary)" : "var(--bg-secondary)",
+                  color: ratio === r ? "white" : "var(--text-secondary)",
+                  border: "1px solid var(--border-default)",
+                }}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+
+          <label className="text-[11px] uppercase tracking-wider block mb-1" style={{ color: "var(--text-muted)" }}>
+            {t("duration", { n: duration })}
+          </label>
+          <input
+            type="range"
+            min={3}
+            max={features.max_duration_seconds || 15}
+            value={duration}
+            onChange={(e) => setDuration(Number(e.target.value))}
+            className="w-full mb-4"
+          />
+
+          <button
+            type="submit"
+            disabled={submitting || !prompt.trim() || ((mode === "image" || mode === "ugc") && !referenceImage)}
+            className={`${btnPrimary} w-full inline-flex items-center justify-center gap-2`}
+          >
+            {submitting ? <Loader2 size={14} className="animate-spin" /> : <Film size={14} />}
+            {submitting ? t("queueing") : t("generate")}
+          </button>
+          <p className="text-[11px] mt-3" style={{ color: "var(--text-tertiary)" }}>
+            {t("estCost", {
+              eur: (
+                duration *
+                (selectedModelObj?.cost_per_second_usd ?? 0.04) *
+                0.92
+              ).toFixed(2),
+            })}
+          </p>
+        </form>
+
+        <div className={card} style={{ padding: 18 }}>
+          <h2 className="text-sm font-semibold mb-3 inline-flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+            <Film size={14} /> {t("jobsCount", { n: jobs.length })}
+          </h2>
+          {loading && jobs.length === 0 ? (
+            <p className="py-8 text-center text-xs" style={{ color: "var(--text-muted)" }}>
+              {tCommon("loading")}
+            </p>
+          ) : jobs.length === 0 ? (
+            <p className="py-8 text-center text-xs" style={{ color: "var(--text-muted)" }}>
+              {t("noJobs")}
+            </p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {jobs.map((job) => (
+                <JobRow key={job.id} job={job} onDelete={() => handleDelete(job.id)} />
               ))}
             </div>
-
-            <label className="text-[11px] uppercase tracking-wider block mb-1" style={{ color: "var(--text-muted)" }}>
-              Duration: {duration}s
-            </label>
-            <input
-              type="range"
-              min={3}
-              max={15}
-              value={duration}
-              onChange={(e) => setDuration(Number(e.target.value))}
-              className="w-full mb-4"
-            />
-
-            <button
-              type="submit"
-              disabled={submitting || !prompt.trim()}
-              className={`${btnPrimary} w-full inline-flex items-center justify-center gap-2`}
-            >
-              {submitting ? <Loader2 size={14} className="animate-spin" /> : <Film size={14} />}
-              {submitting ? "Queueing…" : "Générer une vidéo"}
-            </button>
-            <p className="text-[11px] mt-3" style={{ color: "var(--text-tertiary)" }}>
-              Uses LTX-Video on Replicate when configured. Costs are tracked in
-              the Credits view (~€{(duration * 0.04 * 0.92).toFixed(2)} for this run).
-            </p>
-          </form>
-
-          {/* Travaux list */}
-          <div className={card} style={{ padding: 18 }}>
-            <h2 className="text-sm font-semibold mb-3 inline-flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
-              <Film size={14} /> Travaux ({jobs.length})
-            </h2>
-            {loading && jobs.length === 0 ? (
-              <p className="py-8 text-center text-xs" style={{ color: "var(--text-muted)" }}>
-                Loading…
-              </p>
-            ) : jobs.length === 0 ? (
-              <p className="py-8 text-center text-xs" style={{ color: "var(--text-muted)" }}>
-                Aucun job. Queue one on the left.
-              </p>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {jobs.map((job) => (
-                  <JobRow key={job.id} job={job} onSupprimer={() => handleSupprimer(job.id)} />
-                ))}
-              </div>
-            )}
-          </div>
+          )}
         </div>
+      </div>
     </div>
   );
 }
 
-function JobRow({ job, onSupprimer }) {
+function JobRow({ job, onDelete }) {
+  const t = useTranslations("videos");
   const meta = STATUS_META[job.status] || STATUS_META.queued;
   const Icon = meta.icon;
+  const statusLabel = t(meta.key);
   return (
     <div
       className="p-3 rounded-lg"
@@ -278,10 +511,10 @@ function JobRow({ job, onSupprimer }) {
               {job.prompt.length > 100 ? `${job.prompt.slice(0, 100)}…` : job.prompt}
             </p>
             <button
-              onClick={onSupprimer}
+              onClick={onDelete}
               className="p-1 rounded transition-all"
               style={{ color: "var(--text-muted)" }}
-              title="Supprimer job"
+              title={t("deleteJob")}
             >
               <Trash2 size={13} />
             </button>
@@ -296,7 +529,7 @@ function JobRow({ job, onSupprimer }) {
               style={{ background: "var(--bg-tertiary)", color: meta.color }}
             >
               <Icon size={10} className={meta.spin ? "animate-spin" : ""} />
-              {meta.label}
+              {statusLabel}
             </span>
             <span>{job.provider}</span>
             <span>·</span>
@@ -341,7 +574,7 @@ function JobRow({ job, onSupprimer }) {
                 className="text-[11px] inline-flex items-center gap-1"
                 style={{ color: "var(--accent-primary)" }}
               >
-                <Play size={11} /> Open <ExternalLink size={10} />
+                <Play size={11} /> {t("openOutput")} <ExternalLink size={10} />
               </a>
               <a
                 href={job.output_url}
@@ -349,7 +582,7 @@ function JobRow({ job, onSupprimer }) {
                 className="text-[11px]"
                 style={{ color: "var(--text-muted)" }}
               >
-                Télécharger
+                {t("download")}
               </a>
             </div>
           )}

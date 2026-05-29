@@ -2,6 +2,7 @@
 import { btnGhost, fadeIn, badgeDraft } from "../../lib/uiClasses";
 
 import { useState, useMemo, useEffect, useRef, useSyncExternalStore } from "react";
+import { useTranslations } from "next-intl";
 import { useSelector, useDispatch } from "react-redux";
 import {
   markNotificationRead,
@@ -41,53 +42,53 @@ import {
   ExternalLink,
 } from "lucide-react";
 
-const VIEW_META = {
+const buildViewMeta = (t) => ({
   dashboard: {
-    title: "Tableau de bord",
-    subtitle: "Vue d'ensemble de votre pipeline de contenu",
-    breadcrumb: "Accueil",
+    title: t("viewDashboardTitle"),
+    subtitle: t("viewDashboardSubtitle"),
+    breadcrumb: t("breadcrumbHome"),
   },
   creation: {
-    title: "Créer un post",
-    subtitle: "Rédigez, prévisualisez et publiez sur toutes les plateformes",
-    breadcrumb: "Contenu",
+    title: t("viewCreationTitle"),
+    subtitle: t("viewCreationSubtitle"),
+    breadcrumb: t("breadcrumbContent"),
   },
   automation: {
-    title: "Automatisation",
-    subtitle: "Règles de génération et de publication automatique",
-    breadcrumb: "Automatisation",
+    title: t("viewAutomationTitle"),
+    subtitle: t("viewAutomationSubtitle"),
+    breadcrumb: t("breadcrumbAutomation"),
   },
   calendar: {
-    title: "Calendrier",
-    subtitle: "Planifiez et suivez votre calendrier de publication",
-    breadcrumb: "Contenu",
+    title: t("viewCalendarTitle"),
+    subtitle: t("viewCalendarSubtitle"),
+    breadcrumb: t("breadcrumbContent"),
   },
   library: {
-    title: "Médiathèque",
-    subtitle: "Importez et gérez tous vos fichiers visuels",
-    breadcrumb: "Contenu",
+    title: t("viewLibraryTitle"),
+    subtitle: t("viewLibrarySubtitle"),
+    breadcrumb: t("breadcrumbContent"),
   },
   videos: {
-    title: "Vidéo IA",
-    subtitle: "Générez et suivez les tâches vidéo",
-    breadcrumb: "Automatisation",
+    title: t("viewVideosTitle"),
+    subtitle: t("viewVideosSubtitle"),
+    breadcrumb: t("breadcrumbAutomation"),
   },
   analytics: {
-    title: "Analytiques",
-    subtitle: "Utilisation IA, cache et métriques de publication",
-    breadcrumb: "Performance",
+    title: t("viewAnalyticsTitle"),
+    subtitle: t("viewAnalyticsSubtitle"),
+    breadcrumb: t("breadcrumbPerformance"),
   },
   credits: {
-    title: "Crédits",
-    subtitle: "Dépenses de session et consommation de tokens",
-    breadcrumb: "Performance",
+    title: t("viewCreditsTitle"),
+    subtitle: t("viewCreditsSubtitle"),
+    breadcrumb: t("breadcrumbPerformance"),
   },
   settings: {
-    title: "Paramètres",
-    subtitle: "Connexions OAuth et préférences",
-    breadcrumb: "Compte",
+    title: t("viewSettingsTitle"),
+    subtitle: t("viewSettingsSubtitle"),
+    breadcrumb: t("breadcrumbAccount"),
   },
-};
+});
 
 const CONNECTIVITY_DOT = {
   online: "var(--status-approved)",
@@ -112,6 +113,9 @@ const getSystemDark = () =>
 
 export default function Topbar() {
   const dispatch = useDispatch();
+  const t = useTranslations("topbar");
+  const tCommon = useTranslations("common");
+  const VIEW_META = useMemo(() => buildViewMeta(t), [t]);
   const { activeView, notifications, searchQuery, sidebarCollapsed, connectivity, theme, search, messages, aiUsage } =
     useSelector((state) => state.ui);
   const authUser = useSelector((state) => state.auth.user);
@@ -236,7 +240,7 @@ export default function Topbar() {
         <input
           id="global-search"
           type="text"
-          placeholder="Rechercher des posts, modèles, médias…"
+          placeholder={t("searchPlaceholder")}
           value={searchQuery}
           onChange={(e) => {
             setSearchView(activeView);
@@ -258,7 +262,7 @@ export default function Topbar() {
           onBlur={() => setSearchFocused(false)}
           className="flex-1 bg-transparent border-none outline-none px-3 py-2.5 pr-2 text-sm"
           style={{ color: "var(--text-primary)", outline: "none" }}
-          aria-label="Global search"
+          aria-label={t("globalSearch")}
           autoComplete="off"
           spellCheck={false}
         />
@@ -271,7 +275,7 @@ export default function Topbar() {
               dispatch(clearSearch());
               setShowResults(false);
             }}
-            aria-label="Clear search"
+            aria-label={t("clearSearch")}
           >
             <X size={14} aria-hidden="true" />
           </button>
@@ -304,15 +308,15 @@ export default function Topbar() {
               background: "var(--bg-elevated)",
             }}
           >
-            Résultats de recherche
+            {t("searchResults")}
           </div>
           {search.status === "loading" ? (
             <div className="flex items-center gap-2 px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
-              <Loader2 size={14} className="animate-spin" /> Recherche en cours…
+              <Loader2 size={14} className="animate-spin" /> {t("searchInProgress")}
             </div>
           ) : search.results.length === 0 ? (
             <div className="px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
-              Aucun résultat pour “{searchQuery}”
+              {t("noResultsFor", { query: searchQuery })}
             </div>
           ) : (
             <ul className="max-h-72 overflow-y-auto py-1">
@@ -364,7 +368,7 @@ export default function Topbar() {
             className={`${btnGhost} shrink-0`}
             style={{ padding: 6 }}
             onClick={() => dispatch(toggleMobileNav())}
-            aria-label="Open navigation menu"
+            aria-label={t("openNavMenu")}
           >
             <Menu size={20} aria-hidden="true" />
           </button>
@@ -377,7 +381,7 @@ export default function Topbar() {
             {VIEW_META[activeView]?.breadcrumb || "Datalia"}
             <span style={{ margin: "0 6px", opacity: 0.5 }}>/</span>
             <span style={{ color: "var(--accent-primary)" }}>
-              {VIEW_META[activeView]?.title || "Dashboard"}
+              {VIEW_META[activeView]?.title || t("viewDashboardTitle")}
             </span>
           </p>
           {!isMobile && VIEW_META[activeView]?.subtitle && (
@@ -415,7 +419,7 @@ export default function Topbar() {
             className={`${btnGhost} shrink-0`}
             style={{ padding: 6 }}
             onClick={() => setMobileSearchOpen(false)}
-            aria-label="Close search"
+            aria-label={t("closeSearch")}
           >
             <X size={18} aria-hidden="true" />
           </button>
@@ -430,7 +434,7 @@ export default function Topbar() {
             id="mobile-search-toggle"
             className={`${btnGhost}`}
             onClick={() => setMobileSearchOpen(true)}
-            aria-label="Open search"
+            aria-label={t("openSearch")}
           >
             <Search size={18} aria-hidden="true" />
           </button>
@@ -445,7 +449,7 @@ export default function Topbar() {
               border: "1px solid var(--border-default)",
               color: "var(--text-tertiary)",
             }}
-            title={`${aiUsage.totalTokens.toLocaleString()} tokens across ${aiUsage.calls} AI call${aiUsage.calls !== 1 ? "s" : ""} this session`}
+            title={t("aiUsageTooltip", { tokens: aiUsage.totalTokens.toLocaleString(), calls: aiUsage.calls })}
           >
             <Coins size={13} aria-hidden="true" style={{ color: "var(--status-pending)" }} />
             {aiUsage.totalTokens.toLocaleString()}
@@ -457,8 +461,8 @@ export default function Topbar() {
           id="theme-toggle"
           className={`${btnGhost}`}
           onClick={toggleTheme}
-          title={`Switch to ${resolved === "dark" ? "light" : "dark"} mode`}
-          aria-label={`Switch to ${resolved === "dark" ? "light" : "dark"} mode`}
+          title={resolved === "dark" ? t("switchToLight") : t("switchToDark")}
+          aria-label={resolved === "dark" ? t("switchToLight") : t("switchToDark")}
         >
           {resolved === "dark" ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
         </button>
@@ -467,8 +471,8 @@ export default function Topbar() {
         <button
           id="telegram-status"
           className={`${btnGhost} flex items-center gap-2`}
-          title={`Backend status: ${backendStatus}`}
-          aria-label={`Backend status: ${backendStatus}`}
+          title={t("backendStatus", { status: backendStatus })}
+          aria-label={t("backendStatus", { status: backendStatus })}
         >
           <MessageSquare size={18} aria-hidden="true" />
           <span
@@ -486,7 +490,7 @@ export default function Topbar() {
             onClick={() => setShowNotifications((v) => !v)}
             aria-haspopup="true"
             aria-expanded={showNotifications}
-            aria-label={unreadCount > 0 ? `${unreadCount} messages non lus` : "Notifications"}
+            aria-label={unreadCount > 0 ? t("unreadMessages", { count: unreadCount }) : t("notifications")}
           >
             <Bell size={18} aria-hidden="true" />
             {unreadCount > 0 && (
@@ -507,7 +511,7 @@ export default function Topbar() {
               style={{ background: "var(--bg-card)", border: "1px solid var(--border-default)", boxShadow: "var(--shadow-dropdown)" }}
             >
               <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid var(--border-default)" }}>
-                <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>Notifications</span>
+                <span className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{t("notifications")}</span>
                 <div className="flex items-center gap-2">
                   {feed.length > 0 && (
                     <button
@@ -520,12 +524,12 @@ export default function Topbar() {
                         dispatch(clearNotifications());
                         dispatch(markAllMessagesReadThunk());
                       }}
-                      title="Tout marquer comme lu"
+                      title={t("markAllRead")}
                     >
-                      Tout effacer
+                      {t("clearAll")}
                     </button>
                   )}
-                  <button onClick={() => setShowNotifications(false)} className={`${btnGhost} p-1`} aria-label="Fermer">
+                  <button onClick={() => setShowNotifications(false)} className={`${btnGhost} p-1`} aria-label={tCommon("close")}>
                     <X size={14} aria-hidden="true" />
                   </button>
                 </div>
@@ -533,9 +537,9 @@ export default function Topbar() {
 
               {feed.length === 0 ? (
                 <div className="py-5 px-4 text-center">
-                  <p className="text-sm" style={{ color: "var(--text-muted)" }}>Aucune notification</p>
+                  <p className="text-sm" style={{ color: "var(--text-muted)" }}>{t("noNotifications")}</p>
                   <p className="text-xs mt-1" style={{ color: "var(--text-tertiary)" }}>
-                    Les notifications apparaîtront ici
+                    {t("notificationsWillAppearHere")}
                   </p>
                 </div>
               ) : (
@@ -567,8 +571,8 @@ export default function Topbar() {
                               onClick={(e) => e.stopPropagation()}
                               className="shrink-0 inline-flex items-center justify-center rounded p-0.5"
                               style={{ color: "var(--accent-primary)" }}
-                              aria-label="Open the live post in a new tab"
-                              title="Open the live post in a new tab"
+                              aria-label={t("openLivePostNewTab")}
+                              title={t("openLivePostNewTab")}
                             >
                               <ExternalLink size={11} />
                             </a>
@@ -597,7 +601,7 @@ export default function Topbar() {
             onClick={() => setShowUserMenu((v) => !v)}
             aria-haspopup="true"
             aria-expanded={showUserMenu}
-            aria-label="User menu"
+            aria-label={t("userMenu")}
           >
             <div
               className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold"
@@ -617,16 +621,16 @@ export default function Topbar() {
             >
               <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--border-default)" }}>
                 <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>
-                  {authUser?.name || "Guest"}
+                  {authUser?.name || t("guest")}
                 </p>
                 <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>
-                  {authUser?.email || "Not signed in"}
+                  {authUser?.email || t("notSignedIn")}
                 </p>
               </div>
               <ul className="py-1">
                 {[
-                  { icon: User, label: "Mon profil", action: () => dispatch(setActiveView("settings")) },
-                  { icon: Settings, label: "Settings", action: () => dispatch(setActiveView("settings")) },
+                  { icon: User, label: t("myProfile"), action: () => dispatch(setActiveView("settings")) },
+                  { icon: Settings, label: tCommon("settings"), action: () => dispatch(setActiveView("settings")) },
                 ].map(({ icon: Icon, label, action }) => (
                   <li key={label}>
                     <button
@@ -654,7 +658,7 @@ export default function Topbar() {
                     }}
                   >
                     <LogOut size={14} aria-hidden="true" />
-                    Se déconnecter
+                    {tCommon("logout")}
                   </button>
                 </li>
               </ul>
