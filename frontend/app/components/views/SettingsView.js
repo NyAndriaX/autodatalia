@@ -14,6 +14,7 @@ import {
   disconnect as oauthDisconnect,
 } from "../../lib/oauthService";
 import { fetchTelegramStatus, sendTelegramTest } from "../../lib/validationService";
+import { fetchBackendKeys, patchBackendKeys } from "../../lib/backendKeysService";
 import {
   Send,
   KeyRound,
@@ -129,6 +130,192 @@ function TimezoneField({ value, onChange }) {
     </div>
   );
 }
+
+/* Backend-backed API keys section.
+
+   Reads /settings/keys on mount, renders one input per editable
+   variable grouped by category, lets the team rotate keys without
+   touching infra/.env. Secrets are masked in the placeholder; typing
+   replaces the value, leaving the field empty + saving CLEARS the
+   override so the env default kicks back in.
+
+   "Save changes" PATCHes only the fields the user actually edited
+   (tracked in `edits`), so an untouched secret keeps its persisted
+   value and an empty-but-untouched field doesn't accidentally clear
+   a key set in env. */
+function BackendKeysSection() {
+  const dispatch = useDispatch();
+  const [keys, setKeys] = useState({});
+  const [edits, setEdits] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const GROUPS = [
+    {
+      title: "LLM (text generation)",
+      ids: ["AI_API_KEY", "AI_MODEL", "AI_MODEL_FAST", "AI_MODEL_PREMIUM"],
+    },
+    {
+      title: "AI image generation",
+      ids: ["AI_IMAGE_API_KEY", "AI_IMAGE_API_BASE_URL", "AI_IMAGE_MODEL"],
+    },
+    {
+      title: "AI video generation",
+      ids: [
+        "FAL_API_KEY",
+        "FAL_VIDEO_MODEL",
+        "LTX_API_KEY",
+        "LTX_VIDEO_MODEL",
+        "REPLICATE_API_TOKEN",
+        "REPLICATE_VIDEO_MODEL",
+        "REPLICATE_VIDEO_VERSION",
+      ],
+    },
+    {
+      title: "Telegram",
+      ids: ["TELEGRAM_BOT_TOKEN", "TELEGRAM_DEFAULT_CHAT_ID"],
+    },
+  ];
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await fetchBackendKeys();
+      setKeys(data?.keys || {});
+      setEdits({});
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  async function handleSave() {
+    if (Object.keys(edits).length === 0) return;
+    setSaving(true);
+    try {
+      const data = await patchBackendKeys(edits);
+      setKeys(data?.keys || {});
+      setEdits({});
+      dispatch(
+        addNotification({
+          message: "Backend keys updated. Active immediately for new calls.",
+          type: "success",
+        })
+      );
+    } catch (err) {
+      dispatch(
+        addNotification({
+          message: `Couldn't save keys: ${err.message || err}`,
+          type: "error",
+        })
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const dirty = Object.keys(edits).length > 0;
+
+  return (
+    <Section
+      icon={KeyRound}
+      title="Backend API keys"
+      desc="Live values used by the running backend. Saved to backend/content/runtime_settings.json — overrides infra/.env, no container restart needed."
+    >
+      {loading ? (
+        <p className="text-xs" style={{ color: "var(--text-muted)" }}>
+          Loading…
+        </p>
+      ) : (
+        <>
+          {GROUPS.map((group) => (
+            <div key={group.title} className="mb-4">
+              <p
+                className="text-[11px] font-semibold uppercase tracking-wider mb-2"
+                style={{ color: "var(--text-tertiary)" }}
+              >
+                {group.title}
+              </p>
+              {group.ids.map((id) => {
+                const entry = keys[id] || { set: false, masked: "", value: "", secret: false };
+                const editValue = id in edits ? edits[id] : "";
+                const isSecret = entry.secret;
+                return (
+                  <label key={id} className="block mb-3">
+                    <span
+                      className="text-[10px] font-semibold tracking-wider block mb-1 inline-flex items-center gap-2"
+                      style={{ color: "var(--text-tertiary)" }}
+                    >
+                      {id}
+                      {entry.set && (
+                        <span
+                          className="inline-flex items-center gap-1 text-[10px] font-normal"
+                          style={{ color: "var(--status-approved)" }}
+                        >
+                          <Check size={10} />
+                          {isSecret ? entry.masked : "set"}
+                        </span>
+                      )}
+                    </span>
+                    <input
+                      className="input-field"
+                      type={isSecret ? "password" : "text"}
+                      value={isSecret ? editValue : (id in edits ? editValue : entry.value)}
+                      onChange={(e) =>
+                        setEdits((prev) => ({ ...prev, [id]: e.target.value }))
+                      }
+                      placeholder={
+                        isSecret
+                          ? entry.set
+                            ? "Type a new value to replace…"
+                            : "Not set"
+                          : "Empty = use env default"
+                      }
+                      autoComplete="off"
+                    />
+                  </label>
+                );
+              })}
+            </div>
+          ))}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={!dirty || saving}
+              className="btn-primary inline-flex items-center gap-2"
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+              Save changes
+              {dirty && <span className="text-[10px] opacity-80">({Object.keys(edits).length})</span>}
+            </button>
+            {dirty && (
+              <button
+                type="button"
+                onClick={() => setEdits({})}
+                className="btn-ghost text-xs"
+              >
+                Discard
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={reload}
+              disabled={loading}
+              className="btn-ghost text-xs inline-flex items-center gap-1 ml-auto"
+            >
+              <RefreshCw size={12} /> Reload
+            </button>
+          </div>
+        </>
+      )}
+    </Section>
+  );
+}
+
 
 function Field({ label, name, value, onChange, placeholder, type = "text" }) {
   return (
@@ -596,35 +783,7 @@ export default function SettingsView() {
           />
         </Section>
 
-        <Section
-          icon={KeyRound}
-          title="AI API Keys"
-          desc="Provider keys. Stored only on this device."
-        >
-          <Field
-            label="OpenRouter / OpenAI key"
-            name="openrouterKey"
-            value={s.openrouterKey}
-            onChange={update}
-            placeholder="sk-or-v1-…"
-            type="password"
-          />
-          <Field
-            label="Anthropic key"
-            name="anthropicKey"
-            value={s.anthropicKey}
-            onChange={update}
-            placeholder="sk-ant-…"
-            type="password"
-          />
-          <Field
-            label="Default model"
-            name="defaultModel"
-            value={s.defaultModel}
-            onChange={update}
-            placeholder="google/gemini-2.0-flash-lite-001"
-          />
-        </Section>
+        <BackendKeysSection />
 
         <Section
           icon={Send}

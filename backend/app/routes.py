@@ -14,6 +14,8 @@ from .models import (
     ContentItem,
     CostLogResponse,
     CostSummary,
+    SettingsKeysResponse,
+    SettingsKeysUpdateRequest,
     GenerateRequest,
     GenerateResponse,
     HashtagsRequest,
@@ -239,6 +241,43 @@ async def costs_summary(period: str = "30d") -> CostSummary:
 async def costs_log(limit: int = 200) -> CostLogResponse:
     from .cost_tracking import list_logs
     return CostLogResponse(entries=list_logs(limit=limit))
+
+
+# ── Runtime-editable API keys ────────────────────────────────────────
+
+
+@router.get("/settings/keys", response_model=SettingsKeysResponse)
+async def settings_keys_get() -> SettingsKeysResponse:
+    """Snapshot of every editable key for the Settings page.
+
+    Secrets are returned masked (``abcd••••WXYZ``); model ids and base
+    URLs ship in clear. See runtime_config.EDITABLE_KEYS for the full
+    allowlist.
+    """
+    from .runtime_config import snapshot_for_ui
+    return SettingsKeysResponse(keys=snapshot_for_ui())
+
+
+@router.patch(
+    "/settings/keys",
+    response_model=SettingsKeysResponse,
+    dependencies=[auth_required],
+)
+async def settings_keys_patch(
+    body: SettingsKeysUpdateRequest,
+) -> SettingsKeysResponse:
+    """Persist new values into runtime_settings.json AND hot-update the
+    live ``settings`` object so the next AI call uses the new key
+    without a container restart. Empty strings clear the override.
+    """
+    from .runtime_config import (
+        save_overrides,
+        apply_overrides_to_settings,
+        snapshot_for_ui,
+    )
+    save_overrides(body.updates)
+    apply_overrides_to_settings()
+    return SettingsKeysResponse(keys=snapshot_for_ui())
 
 
 # ── Publishing — fan post out to real social networks ────────────────

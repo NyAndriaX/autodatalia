@@ -426,6 +426,31 @@ class VideoModelsResponse(BaseModel):
     default: str
 
 
+class SettingsKeyEntry(BaseModel):
+    """One row in the editable-settings UI."""
+
+    set: bool = False
+    masked: str = ""
+    value: str = ""
+    secret: bool = True
+
+
+class SettingsKeysResponse(BaseModel):
+    """GET /settings/keys — current state of every editable setting."""
+
+    keys: dict[str, SettingsKeyEntry]
+
+
+class SettingsKeysUpdateRequest(BaseModel):
+    """PATCH /settings/keys body. Map of env var name → new value.
+
+    Empty strings clear that key. Keys not in EDITABLE_KEYS (server-side
+    allowlist) are silently dropped — see runtime_config.py.
+    """
+
+    updates: dict[str, str]
+
+
 # ── Cost dashboard ─────────────────────────────────────────────────────
 
 

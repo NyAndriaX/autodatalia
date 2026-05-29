@@ -562,6 +562,21 @@ def _hailuo_inputs(*, prompt, ratio, duration_seconds, image_url, quality):
     return inputs
 
 
+def _higgsfield_inputs(*, prompt, ratio, duration_seconds, image_url, quality):
+    """Higgsfield's Soul / Mix / Dop models all accept the same input
+    shape: a prompt + aspect ratio + optional reference image.
+    Duration is fixed by the model (typically 4-5s) so we just send
+    a request without a duration knob.
+    """
+    inputs = {
+        "prompt": prompt,
+        "aspect_ratio": _aspect_label(ratio),
+    }
+    if image_url:
+        inputs["image_url"] = image_url
+    return inputs
+
+
 FAL_MODEL_SPECS: dict[str, dict[str, Any]] = {
     # Kling 2.1 Standard — strong photoreal quality at ~$0.15/s. The
     # CEO-recommended default for "looks like an ad, not a demo".
@@ -608,6 +623,38 @@ FAL_MODEL_SPECS: dict[str, dict[str, Any]] = {
             "audio": True,
             "max_duration_seconds": 8,
             "supports_ugc": False,
+        },
+    },
+    # Higgsfield Soul — explicitly tuned for UGC / influencer-style
+    # short-form. The CEO mentioned this as the "looks like a real
+    # person filming a product" model. ~$0.10/s.
+    "fal-ai/higgsfield-lite-text-to-video": {
+        "label": "Higgsfield Lite (UGC)",
+        "endpoints": {
+            "text_to_video": "fal-ai/higgsfield-lite-text-to-video",
+            "image_to_video": "fal-ai/higgsfield-lite-image-to-video",
+        },
+        "build_inputs": _higgsfield_inputs,
+        "cost_per_second_usd": 0.08,
+        "features": {
+            "image_to_video": True,
+            "audio": False,
+            "max_duration_seconds": 5,
+            "supports_ugc": True,
+        },
+    },
+    "fal-ai/higgsfield-soul": {
+        "label": "Higgsfield Soul (cinematic UGC)",
+        "endpoints": {
+            "text_to_video": "fal-ai/higgsfield-soul",
+        },
+        "build_inputs": _higgsfield_inputs,
+        "cost_per_second_usd": 0.15,
+        "features": {
+            "image_to_video": False,
+            "audio": False,
+            "max_duration_seconds": 5,
+            "supports_ugc": True,
         },
     },
     # MiniMax Hailuo 02 — great alternative for image-to-video.

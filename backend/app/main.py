@@ -76,6 +76,11 @@ async def on_startup() -> None:
     # container doesn't crash the API.
     from .db import init_db
     init_db()
+    # Pull any UI-edited API keys / models from runtime_settings.json
+    # into the live settings object so the running process picks them
+    # up without a container rebuild.
+    from .runtime_config import apply_overrides_to_settings
+    apply_overrides_to_settings()
     # The free ngrok tunnel exposes the API publicly with no auth, so it
     # only starts when explicitly enabled (e.g. for Instagram publishing).
     if settings.tunnel_enabled:
