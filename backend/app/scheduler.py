@@ -274,12 +274,7 @@ def start_scheduler() -> None:
     if _TASK is not None and not _TASK.done():
         return
     _STOP = False
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    _TASK = loop.create_task(_loop())
+    _TASK = asyncio.create_task(_loop())
 
 
 def stop_scheduler() -> None:

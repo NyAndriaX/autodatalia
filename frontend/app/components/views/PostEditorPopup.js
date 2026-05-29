@@ -1,5 +1,5 @@
 "use client";
-import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn, badgeDraft } from "../../lib/uiClasses";
+import { btnPrimary, btnSecondary, btnGhost, inputField, fadeIn, badgeDraft } from "../../lib/uiClasses";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch } from "react-redux";
@@ -24,12 +24,13 @@ import {
   PLATFORMS,
   PLATFORM_MAP,
   STATUS_META,
+  STATUS_LABEL_KEYS,
   RATIOS_BY_PLATFORM,
   parseRatio,
   activePlatformIds,
 } from "../../lib/platforms";
 import { isoDateKey, parseDateKey, startOfToday } from "../../lib/dateUtils";
-import { addNotification, addTokenUsage, recordCacheHit } from "../../store/uiSlice";
+import { addNotification, addTokenUsage, recordCacheHit, setActiveView } from "../../store/uiSlice";
 import TikTokOptionsPanel from "./TikTokOptionsPanel";
 import {
   ACCEPTED_TYPES,
@@ -39,10 +40,7 @@ import {
   revokeMediaItem,
 } from "../../lib/uploadService";
 import { generateContent } from "../../lib/aiService";
-import {
-  generateImageAsset,
-  generateVideoAsset,
-} from "../../lib/mediaGenerationService";
+import { generateImageAsset } from "../../lib/mediaGenerationService";
 import { getScheduleTimezone } from "../../lib/timezone";
 import DatePicker from "./DatePicker";
 import TimePicker from "./TimePicker";
@@ -62,6 +60,8 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
   const t = useTranslations("postEditor");
   const tCommon = useTranslations("common");
   const tCreation = useTranslations("creation");
+  const tDashboard = useTranslations("dashboard");
+  const tNotifications = useTranslations("notifications");
   const [content, setContent] = useState(post.content ?? "");
   const [platforms, setPlatforms] = useState(
     post.platforms ?? { facebook: true }
@@ -86,15 +86,19 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
   const [tabIdx, setTabIdx] = useState(0);
   const safeTabIdx = Math.min(tabIdx, Math.max(0, activeIds.length - 1));
 
-  // Track previewUrls *this popup* created so we can revoke them on close.
+  // Track media items *this popup* created so we can revoke them on close.
   // Media that came in via `post.media` keeps its own lifecycle (the upload
   // service or store owns it), so we don't blanket-revoke everything.
-  const ownedPreviewIds = useRef(new Set());
+  // Holds the actual MediaItem objects (not just ids) so the cleanup
+  // effect doesn't have to depend on the React `media` state — that
+  // dependency was the root of the stale-closure bug where items added
+  // after mount were never revoked.
+  const ownedItems = useRef(new Map());
 
   useEffect(() => {
-    const owned = ownedPreviewIds.current;
+    const owned = ownedItems.current;
     return () => {
-      for (const m of media) if (owned.has(m.id)) revokeMediaItem(m);
+      for (const m of owned.values()) revokeMediaItem(m);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -104,9 +108,9 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
 
   const removeMedia = (id) => {
     setMedia((list) => {
-      const target = list.find((m) => m.id === id);
-      if (target && ownedPreviewIds.current.has(id)) revokeMediaItem(target);
-      ownedPreviewIds.current.delete(id);
+      const owned = ownedItems.current.get(id);
+      if (owned) revokeMediaItem(owned);
+      ownedItems.current.delete(id);
       return list.filter((m) => m.id !== id);
     });
   };
@@ -125,7 +129,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
       return;
     }
     const item = toMediaItem(file);
-    ownedPreviewIds.current.add(item.id);
+    ownedItems.current.set(item.id, item);
     setMedia((list) => [...list, item]);
     updateMedia(item.id, { status: "uploading" });
     const result = await uploadToBackend(file);
@@ -133,7 +137,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
     if (result.status !== "uploaded") {
       dispatch(
         addNotification({
-          message: `${file.name} couldn't be uploaded — the scheduler will fire this post without media.`,
+          message: tNotifications("mediaUploadFailedScheduler", { filename: file.name }),
           type: "error",
         })
       );
@@ -194,7 +198,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
       }
     } catch (err) {
       dispatch(addNotification({
-        message: `Generation failed: ${err.message || "unknown error"}`,
+        message: tCreation("generationFailed", { error: err.message || tCommon("unknownError") }),
         type: "error",
       }));
     } finally {
@@ -225,25 +229,57 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
       );
       return;
     }
+    const ratio =
+      Object.values(ratios || {})[0] || (kind === "video" ? "9:16" : "1:1");
+
+    // Video generation routinely exceeds 60s and the public HTTPS proxies
+    // (ngrok/Cloudflare) time out the request before the job finishes.
+    // Hand off to VideoJobsView — it owns the queue UI, polling, and
+    // "attach to post" flow, so the popup doesn't try to inline-poll a
+    // VideoJob that has no output_url/filename yet.
+    if (kind === "video") {
+      const uploadedImage = (media || []).find(
+        (m) => m.kind === "image" && m.status === "uploaded" && m.remoteUrl
+      );
+      const prefill = {
+        prompt,
+        ratio,
+        mode: uploadedImage ? "image" : "text",
+        referenceImage: uploadedImage
+          ? { filename: uploadedImage.filename, url: uploadedImage.remoteUrl }
+          : null,
+      };
+      try {
+        sessionStorage.setItem(
+          "datalia.videoJobs.prefill",
+          JSON.stringify(prefill)
+        );
+      } catch {
+        /* private mode — proceed without prefill */
+      }
+      onClose?.();
+      dispatch(setActiveView("videos"));
+      return;
+    }
+
     setGeneratingMediaKind(kind);
     try {
-      const ratio =
-        Object.values(ratios || {})[0] || (kind === "video" ? "9:16" : "1:1");
-      const result =
-        kind === "video"
-          ? await generateVideoAsset({ prompt, ratio })
-          : await generateImageAsset({ prompt, ratio });
+      const result = await generateImageAsset({ prompt, ratio });
       setMedia((list) => [...list, result.mediaItem]);
       dispatch(
         addNotification({
-          message: `${kind === "video" ? "Video" : "Image"} generated via ${result.data?.provider || "backend"}.`,
+          message: tCreation("imageGeneratedVia", {
+            provider: result.data?.provider || "backend",
+          }),
           type: "success",
         })
       );
     } catch (err) {
       dispatch(
         addNotification({
-          message: `${kind === "video" ? "Video" : "Image"} generation failed: ${err.message || "unknown error"}`,
+          message: tCreation("imageGenerationFailed", {
+            error: err.message || tCommon("unknownError"),
+          }),
           type: "error",
         })
       );
@@ -306,7 +342,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
       >
         {/* Header */}
         <div
-          className="flex items-center justify-between px-5 py-3 shrink-0"
+          className="flex items-center justify-between px-4 md:px-5 py-3 shrink-0"
           style={{ borderBottom: "1px solid var(--border-default)" }}
         >
           <div className="flex items-center gap-2">
@@ -320,7 +356,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
               className={STATUS_META[status]?.badgeClass || badgeDraft}
               style={{ fontSize: 10 }}
             >
-              {STATUS_META[status]?.label || status}
+              {tDashboard(STATUS_LABEL_KEYS[status] ?? "statusDraft")}
             </span>
           </div>
           <button
@@ -333,11 +369,10 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
           </button>
         </div>
 
-        {/* Body — split layout */}
+        {/* Body — split layout (stacks on mobile, side-by-side from md+) */}
         <div
-          className="flex-1 grid"
+          className="flex-1 grid grid-cols-1 md:grid-cols-2 auto-rows-fr"
           style={{
-            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
             minHeight: 0,
             /* overflow visible on the grid so each column manages its
                own scroll independently. The previous overflow-hidden
@@ -348,9 +383,9 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
         >
           {/* LEFT — editor */}
           <div
-            className="overflow-y-auto p-5"
+            className="overflow-y-auto p-4 md:p-5 border-b md:border-b-0 md:border-r"
             style={{
-              borderRight: "1px solid var(--border-default)",
+              borderColor: "var(--border-default)",
               minHeight: 0, /* required for grid child scroll */
             }}
           >
@@ -631,7 +666,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
                 className={STATUS_META[status]?.badgeClass || badgeDraft}
                 style={{ fontSize: 10 }}
               >
-                {STATUS_META[status]?.label || status}
+                {tDashboard(STATUS_LABEL_KEYS[status] ?? "statusDraft")}
               </span>
               {status === "scheduled" && (
                 <span
@@ -719,7 +754,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
 
           {/* RIGHT — preview */}
           <div
-            className="overflow-y-auto p-5"
+            className="overflow-y-auto p-4 md:p-5"
             style={{ background: "var(--bg-secondary)" }}
           >
             {activeIds.length === 0 ? (
@@ -792,7 +827,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
 
         {/* Footer actions */}
         <div
-          className="flex items-center justify-between px-5 py-3 shrink-0"
+          className="flex items-center justify-between flex-wrap gap-2 px-4 md:px-5 py-3 shrink-0"
           style={{ borderTop: "1px solid var(--border-default)" }}
         >
           <button

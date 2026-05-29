@@ -13,6 +13,7 @@ import {
   setActiveView,
   clearSearch,
   toggleMobileNav,
+  setLocale,
 } from "../../store/uiSlice";
 import {
   searchThunk,
@@ -27,7 +28,6 @@ import {
   Bell,
   MessageSquare,
   ChevronDown,
-  Command,
   X,
   LogOut,
   Settings,
@@ -40,6 +40,7 @@ import {
   Menu,
   Coins,
   ExternalLink,
+  Globe,
 } from "lucide-react";
 
 const buildViewMeta = (t) => ({
@@ -115,8 +116,9 @@ export default function Topbar() {
   const dispatch = useDispatch();
   const t = useTranslations("topbar");
   const tCommon = useTranslations("common");
+  const tLang = useTranslations("languages");
   const VIEW_META = useMemo(() => buildViewMeta(t), [t]);
-  const { activeView, notifications, searchQuery, sidebarCollapsed, connectivity, theme, search, messages, aiUsage } =
+  const { activeView, notifications, searchQuery, sidebarCollapsed, connectivity, theme, search, messages, aiUsage, locale } =
     useSelector((state) => state.ui);
   const authUser = useSelector((state) => state.auth.user);
   const isMobile = useIsMobile();
@@ -224,6 +226,12 @@ export default function Topbar() {
 
   const toggleTheme = () => dispatch(setTheme(resolved === "dark" ? "light" : "dark"));
 
+  // Compact two-locale switcher. Two languages → one button is friendlier
+  // than a dropdown; expand to a menu if a third locale ever lands.
+  const currentLocale = locale === "fr" ? "fr" : "en";
+  const nextLocale = currentLocale === "en" ? "fr" : "en";
+  const toggleLocale = () => dispatch(setLocale(nextLocale));
+
   // Shared search UI — rendered inline on desktop, in a full-width overlay on
   // mobile (so the search bar never disappears, just collapses to an icon).
   const searchPanel = (
@@ -280,14 +288,6 @@ export default function Topbar() {
             <X size={14} aria-hidden="true" />
           </button>
         )}
-        <div
-          className="flex items-center gap-1 mr-3 px-2 py-1 rounded text-xs"
-          style={{ background: "var(--bg-elevated)", color: "var(--text-muted)", border: "1px solid var(--border-default)" }}
-          aria-hidden="true"
-        >
-          <Command size={11} />
-          <span>K</span>
-        </div>
       </div>
 
       {/* Results dropdown */}
@@ -427,7 +427,7 @@ export default function Topbar() {
       )}
 
       {/* Right: Actions */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 shrink-0">
         {/* Mobile: open the search overlay */}
         {isMobile && !mobileSearchOpen && (
           <button
@@ -455,6 +455,20 @@ export default function Topbar() {
             {aiUsage.totalTokens.toLocaleString()}
           </span>
         )}
+
+        {/* Language switch — flips between EN and FR */}
+        <button
+          id="language-toggle"
+          className={`${btnGhost} flex items-center gap-1.5 px-2`}
+          onClick={toggleLocale}
+          title={tLang(nextLocale)}
+          aria-label={tLang(nextLocale)}
+        >
+          <Globe size={16} aria-hidden="true" />
+          <span className="text-[11px] font-bold uppercase tracking-wider">
+            {currentLocale}
+          </span>
+        </button>
 
         {/* Theme toggle */}
         <button
@@ -506,7 +520,7 @@ export default function Topbar() {
 
           {showNotifications && (
             <div
-              className={`absolute right-0 top-full mt-2 w-80 rounded-xl ${fadeIn} overflow-hidden`}
+              className={`absolute right-0 top-full mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-xl ${fadeIn} overflow-hidden`}
               role="menu"
               style={{ background: "var(--bg-card)", border: "1px solid var(--border-default)", boxShadow: "var(--shadow-dropdown)" }}
             >
@@ -615,7 +629,7 @@ export default function Topbar() {
 
           {showUserMenu && (
             <div
-              className={`absolute right-0 top-full mt-2 w-52 rounded-xl ${fadeIn} overflow-hidden`}
+              className={`absolute right-0 top-full mt-2 w-52 max-w-[calc(100vw-1.5rem)] rounded-xl ${fadeIn} overflow-hidden`}
               role="menu"
               style={{ background: "var(--bg-card)", border: "1px solid var(--border-default)", boxShadow: "var(--shadow-dropdown)" }}
             >

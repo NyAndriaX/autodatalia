@@ -159,16 +159,13 @@ function BrandPanel({ isDark }) {
   return (
     <div
       style={{
-        flex: "0 0 52%",
         background: "linear-gradient(145deg, #0b1638 0%, #1d3fbe 60%, #3b5be3 100%)",
         position: "relative",
         overflow: "hidden",
-        display: "flex",
         flexDirection: "column",
-        padding: "48px 56px",
         color: "#fff",
       }}
-      className="hidden md:flex"
+      className="hidden md:flex md:basis-[48%] lg:basis-[52%] md:shrink-0 md:grow-0 p-8 md:p-10 lg:p-14"
     >
       {/* Decorative blobs */}
       <div
@@ -268,8 +265,8 @@ function BrandPanel({ isDark }) {
         </div>
 
         <h1
+          className="text-3xl lg:text-[40px]"
           style={{
-            fontSize: 40,
             fontWeight: 800,
             lineHeight: 1.15,
             color: "#fff",
@@ -383,6 +380,7 @@ function BrandPanel({ isDark }) {
           zIndex: 1,
           display: "flex",
           gap: 32,
+          flexWrap: "wrap",
           paddingTop: 32,
           borderTop: "1px solid rgba(255,255,255,0.1)",
           marginTop: 32,
@@ -444,6 +442,7 @@ function AuthPanel({ isDark, dispatch, resolved }) {
 
   return (
     <div
+      className="px-4 py-8 sm:px-6 md:px-8"
       style={{
         flex: 1,
         background: bg,
@@ -451,7 +450,6 @@ function AuthPanel({ isDark, dispatch, resolved }) {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        padding: "32px 24px",
         position: "relative",
       }}
     >
@@ -459,10 +457,9 @@ function AuthPanel({ isDark, dispatch, resolved }) {
       <button
         onClick={() => dispatch(setTheme(resolved === "dark" ? "light" : "dark"))}
         aria-label="Toggle theme"
+        className="!top-3 !right-3 sm:!top-6 sm:!right-6"
         style={{
           position: "absolute",
-          top: 24,
-          right: 24,
           width: 36,
           height: 36,
           borderRadius: 8,
@@ -485,9 +482,9 @@ function AuthPanel({ isDark, dispatch, resolved }) {
         <div style={{ marginBottom: 36, textAlign: "center" }}>
           <Title
             level={2}
+            className="!text-2xl sm:!text-[28px]"
             style={{
               margin: 0,
-              fontSize: 28,
               fontWeight: 800,
               color: textPrimary,
               letterSpacing: "-0.02em",
@@ -504,10 +501,10 @@ function AuthPanel({ isDark, dispatch, resolved }) {
 
         {/* Auth card */}
         <div
+          className="p-5 sm:p-8"
           style={{
             background: cardBg,
             borderRadius: 16,
-            padding: "32px",
             boxShadow: isDark
               ? "0 4px 40px rgba(0,0,0,0.5)"
               : "0 4px 40px rgba(29,63,190,0.08), 0 1px 4px rgba(0,0,0,0.06)",
@@ -584,7 +581,7 @@ function AuthPanel({ isDark, dispatch, resolved }) {
                 block
                 size="large"
                 icon={!isLoading ? <ArrowRightOutlined /> : null}
-                iconPosition="end"
+                iconPlacement="end"
                 style={{
                   height: 46,
                   borderRadius: 10,
@@ -665,7 +662,7 @@ function AuthPanel({ isDark, dispatch, resolved }) {
                 block
                 size="large"
                 icon={!isLoading ? <ArrowRightOutlined /> : null}
-                iconPosition="end"
+                iconPlacement="end"
                 style={{
                   height: 46,
                   borderRadius: 10,

@@ -9,6 +9,7 @@ export default function WorkflowSteps({
   completedIds = [],
   onStepClick,
   compact = false,
+  ariaLabel = "Workflow progress",
 }) {
   const completed = new Set(completedIds);
   const currentIdx = steps.findIndex((s) => s.id === currentId);
@@ -16,7 +17,7 @@ export default function WorkflowSteps({
   return (
     <nav
       className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-card)] px-4 py-3"
-      aria-label="Workflow progress"
+      aria-label={ariaLabel}
     >
       <ol className="m-0 flex list-none items-start p-0">
         {steps.map((step, idx) => {

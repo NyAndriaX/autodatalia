@@ -211,7 +211,7 @@ export default function VideoJobsView() {
   }
 
   return (
-    <div className={`h-full overflow-y-auto ${fadeIn}`} style={{ padding: 24 }}>
+    <div className={`h-full overflow-y-auto p-4 md:p-6 ${fadeIn}`}>
       <div className="flex items-end justify-between mb-6 gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold mb-1 inline-flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
@@ -244,10 +244,7 @@ export default function VideoJobsView() {
         </div>
       )}
 
-      <div
-        className="grid gap-4"
-        style={{ gridTemplateColumns: "minmax(320px, 1fr) 2fr" }}
-      >
+      <div className="grid gap-4 grid-cols-1 lg:[grid-template-columns:minmax(320px,1fr)_2fr]">
         <form onSubmit={handleCreate} className={card} style={{ padding: 18 }}>
           <h2 className="text-sm font-semibold mb-3 inline-flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
             <Plus size={14} /> {t("newVideo")}
@@ -521,7 +518,7 @@ function JobRow({ job, onDelete }) {
           </div>
 
           <div
-            className="flex items-center gap-2 mt-1 text-[11px]"
+            className="flex items-center gap-2 mt-1 text-[11px] flex-wrap"
             style={{ color: "var(--text-muted)" }}
           >
             <span

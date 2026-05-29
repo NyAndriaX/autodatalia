@@ -1,5 +1,6 @@
 """Authentication logic using JWT and SQLite."""
 
+import hmac
 import time
 from typing import Any
 
@@ -49,7 +50,7 @@ def require_token(request: Request) -> int:
         presented = request.query_params.get("token", "")
 
     # Fallback to the global token for backward compatibility if configured
-    if settings.backend_auth_token and presented == settings.backend_auth_token:
+    if settings.backend_auth_token and hmac.compare_digest(presented, settings.backend_auth_token):
         return 1  # Dummy user ID for global token usage
 
     if not presented:
@@ -62,12 +63,8 @@ def require_token(request: Request) -> int:
         user_id = int(payload["sub"])
         return user_id
     except jwt.ExpiredSignatureError:
-        if not settings.backend_auth_token:
-            return 1
         raise HTTPException(status_code=401, detail="Token has expired.")
     except (jwt.InvalidTokenError, ValueError):
-        if not settings.backend_auth_token:
-            return 1
         raise HTTPException(status_code=401, detail="Invalid token.")
 
 

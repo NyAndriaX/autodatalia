@@ -48,7 +48,11 @@ export const PLATFORMS = [
     id: "tiktok",
     label: "TikTok",
     icon: Video,
-    color: "var(--platform-tiktok-fg)",
+    // Hex (not the CSS var) so callers that build alpha shades via
+    // string concat — e.g. `${p.color}40` for a translucent border —
+    // produce valid CSS. Using `var(--…)` here breaks every such use
+    // site (the connection card border, platform pills, etc.).
+    color: "#EE1D52",
     className: platformTiktok,
     maxChars: 2200,
     maxHashtags: 5,
@@ -187,4 +191,21 @@ export const STATUS_META = {
   cancelled: { label: "Cancelled", badgeClass: badgeRejected, colorVar: "var(--status-rejected)" },
   published: { label: "Published", badgeClass: badgeApproved, colorVar: "var(--status-published)" },
   error: { label: "Error", badgeClass: badgeError, colorVar: "var(--status-error)" },
+};
+
+/**
+ * Translation-key map for status labels. Callers should prefer rendering
+ * `tDashboard(STATUS_LABEL_KEYS[status] ?? "statusDraft")` over reading
+ * STATUS_META[status].label (which is English-only).
+ */
+export const STATUS_LABEL_KEYS = {
+  draft: "statusDraft",
+  scheduled: "statusScheduled",
+  pending: "statusPending",
+  awaiting_validation: "statusAwaitingValidation",
+  approved: "statusApproved",
+  rejected: "statusRejected",
+  cancelled: "statusCancelled",
+  published: "statusPublished",
+  error: "statusError",
 };

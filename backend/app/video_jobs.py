@@ -107,6 +107,25 @@ def _update_job(job_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _claim_job(job_id: str, *, expected_status: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+    """Atomic compare-and-set: apply ``patch`` only if the job's current
+    status equals ``expected_status``. Returns the updated job dict on
+    success, or ``None`` if the job is missing or the status didn't
+    match (i.e. someone else already claimed it).
+    """
+    with _JOBS_LOCK:
+        jobs = _read_raw()
+        for job in jobs:
+            if job.get("id") == job_id:
+                if job.get("status") != expected_status:
+                    return None
+                for k, v in patch.items():
+                    job[k] = v
+                _write_raw(jobs)
+                return dict(job)
+    return None
+
+
 def delete_job(job_id: str) -> bool:
     with _JOBS_LOCK:
         jobs = _read_raw()
@@ -370,8 +389,8 @@ async def _run_replicate_job(job: dict[str, Any]) -> dict[str, Any]:
                 "external_id": external_id,
             },
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("[cost] record_media_job failed: %s", exc)
 
     return _update_job(job["id"], {
         "status": "succeeded",
@@ -480,8 +499,8 @@ async def _run_ltx_job(job: dict[str, Any]) -> dict[str, Any]:
                 "external_id": external_id,
             },
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("[cost] record_media_job failed: %s", exc)
 
     return _update_job(job["id"], {
         "status": "succeeded",
@@ -730,9 +749,18 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
     spec = FAL_MODEL_SPECS.get(requested_model) or FAL_MODEL_SPECS["fal-ai/ltx-video"]
     # Image-to-video endpoint when a reference image is supplied AND the
     # model supports it; otherwise text-to-video.
-    endpoint = spec["endpoints"].get(
-        "image_to_video" if public_image_url and spec["endpoints"].get("image_to_video") else "text_to_video"
+    supports_image = bool(
+        spec["endpoints"].get("image_to_video")
+        and spec.get("features", {}).get("image_to_video")
     )
+    endpoint = spec["endpoints"].get(
+        "image_to_video" if public_image_url and supports_image else "text_to_video"
+    )
+    if not (public_image_url and supports_image):
+        # Don't pass a reference image to text-only endpoints; the shared
+        # build_inputs callables would otherwise attach image_url and the
+        # provider will either ignore it or 400.
+        public_image_url = None
     if not endpoint:
         raise RuntimeError(
             f"fal model '{requested_model}' has no usable endpoint configured"
@@ -769,9 +797,13 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
         "external_id": request_id,
     })
 
-    # 2. Poll status
-    status_url = f"{queue_url}/requests/{request_id}/status"
-    result_url = f"{queue_url}/requests/{request_id}"
+    # 2. Poll status. fal returns canonical status_url / response_url in
+    # the submission — use them. Building them by string concat breaks on
+    # apps with sub-endpoints (e.g. fal-ai/kling-video/.../text-to-video),
+    # because the status route lives on the parent app id, not the
+    # sub-endpoint.
+    status_url = submission.get("status_url") or f"{queue_url}/requests/{request_id}/status"
+    result_url = submission.get("response_url") or f"{queue_url}/requests/{request_id}"
     deadline = time.time() + 10 * 60
     while time.time() < deadline:
         await asyncio.sleep(3)
@@ -827,7 +859,7 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
         record_media_job(
             workflow="video",
             provider="fal",
-            model=settings.fal_video_model,
+            model=requested_model,
             cost_usd=cost_usd,
             user_id=job.get("user_id"),
             metadata={
@@ -836,8 +868,8 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
                 "external_id": request_id,
             },
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("[cost] record_media_job failed: %s", exc)
 
     return _update_job(job["id"], {
         "status": "succeeded",
@@ -983,6 +1015,24 @@ async def run_job(job_id: str) -> dict[str, Any] | None:
         return None
     if job.get("status") in ("succeeded", "failed", "cancelled"):
         return job
+    if job.get("status") == "running":
+        # Another caller (sync media_generation path or a previous worker
+        # tick) already claimed this job. Returning early here prevents
+        # double-submission to the provider, which would otherwise bill
+        # twice for the same prediction.
+        return job
+    # Atomic queued → running claim. If another caller flipped the
+    # status between get_job and here (e.g. the worker tick fired while
+    # the sync /media/generate/video path was about to await run_job),
+    # the CAS returns None and we bail without re-executing the job.
+    claimed = _claim_job(
+        job_id,
+        expected_status="queued",
+        patch={"status": "running", "started_at": job.get("started_at") or time.time()},
+    )
+    if claimed is None:
+        return get_job(job_id)
+    job = claimed
 
     primary = job["provider"]
     # Build the candidate chain — primary first, then fallback if the
@@ -999,12 +1049,16 @@ async def run_job(job_id: str) -> dict[str, Any] | None:
             result = await _dispatch_provider(provider, job)
             attempts.append({"provider": provider, "ok": True})
             # Stamp the attempts log + (if we fell back) the effective
-            # provider so the UI can show the chain. The runner already
-            # set status=succeeded; we just enrich the record.
-            return _update_job(job_id, {
+            # provider so the UI shows what actually rendered the video.
+            # Without overwriting `provider`, a Ken Burns mp4 would still
+            # be labelled "fal" with a cost row pretending we paid for it.
+            patch = {
                 "attempts": attempts,
                 "fallback_used": provider != primary,
-            }) or result
+            }
+            if provider != primary:
+                patch["provider"] = provider
+            return _update_job(job_id, patch) or result
         except Exception as exc:  # noqa: BLE001
             log.exception(
                 "[video] job %s attempt %s (provider=%s) failed",
@@ -1053,9 +1107,9 @@ async def _tick_once() -> None:
     in_flight = sum(1 for j in list_jobs() if j.get("status") == "running")
     capacity = max(0, 3 - in_flight)
     for job in queued[:capacity]:
-        # Mark queued → running immediately so the worker tick doesn't
-        # double-fire on the same job.
-        _update_job(job["id"], {"status": "running", "started_at": time.time()})
+        # run_job performs an atomic queued → running CAS at entry, so
+        # the worker tick can't double-fire on the same job and a
+        # concurrent sync caller (media_generation) can't race us.
         asyncio.create_task(run_job(job["id"]))
 
 

@@ -81,7 +81,12 @@ export default function Sidebar() {
         left: 0, top: 0,
         height: "100vh",
         zIndex: 50,
-        width: collapsed ? "var(--sidebar-collapsed)" : "var(--sidebar-width)",
+        width: collapsed
+          ? "var(--sidebar-collapsed)"
+          : isMobile
+            ? "min(var(--sidebar-width), 85vw)"
+            : "var(--sidebar-width)",
+        maxWidth: "100vw",
         display: "flex",
         flexDirection: "column",
         transition: "width 0.25s cubic-bezier(0.4,0,0.2,1)",

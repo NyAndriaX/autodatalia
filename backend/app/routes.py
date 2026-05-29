@@ -126,7 +126,7 @@ async def get_stats() -> dict[str, Any]:
         "approved": 0,
         "published": 0,
         "error": 0,
-        "awaiting": 0,
+        "awaiting_validation": 0,
         "rejected": 0,
     }
     for post in all_posts:
@@ -373,7 +373,7 @@ async def settings_keys_patch(
 # ── Publishing — fan post out to real social networks ────────────────
 
 
-@router.post("/publish", response_model=PublishResponse)
+@router.post("/publish", response_model=PublishResponse, dependencies=[auth_required])
 async def publish(body: PublishRequest) -> PublishResponse:
     """Publish `content` to every selected target.
 

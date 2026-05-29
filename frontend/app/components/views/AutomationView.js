@@ -145,7 +145,7 @@ function CarteRegle({ rule, active, onClick }) {
       </div>
       <div className="mt-1 flex items-center gap-1.5 text-[11px]" style={{ color:"var(--text-muted)" }}>
         <ListChecks size={10} />
-        {rule.content_type} · {nbMedia}
+        {rule.content_type ? t(rule.content_type) : "—"} · {nbMedia}
       </div>
     </button>
   );
@@ -280,7 +280,7 @@ export default function AutomationView() {
 
   return (
     <div className="h-full overflow-y-auto" style={{ background:"var(--bg-primary)" }}>
-      <div style={{ padding:"24px" }}>
+      <div className="p-4 md:p-6">
 
         {/* ═ EN-TÊTE ═════════════════════════════════════════════════════ */}
         <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
@@ -305,10 +305,10 @@ export default function AutomationView() {
         </div>
 
         {/* ═ CORPS ════════════════════════════════════════════════════════ */}
-        <div className="flex gap-4" style={{ minHeight: 560 }}>
+        <div className="flex flex-col md:flex-row gap-4" style={{ minHeight: 560 }}>
 
           {/* ── Liste des règles ─────────────────────────────────────── */}
-          <aside style={{ width: 300, flexShrink: 0 }}>
+          <aside className="w-full md:w-[300px] md:shrink-0">
             <div className="rounded-2xl p-4 h-full"
               style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
               <p className="mb-3 text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
@@ -341,7 +341,7 @@ export default function AutomationView() {
             ) : (
               <>
                 {/* en-tête éditeur */}
-                <div className="flex items-center justify-between px-6 py-4"
+                <div className="flex flex-wrap items-center justify-between gap-2 px-4 md:px-6 py-4"
                   style={{ borderBottom:"1px solid var(--border-default)" }}>
                   <div className="flex items-center gap-3 min-w-0">
                     <Settings2 size={18} style={{ color:"var(--accent-primary)", flexShrink:0 }} />
@@ -384,7 +384,7 @@ export default function AutomationView() {
                 </div>
 
                 {/* onglets */}
-                <div className="flex gap-0 px-6 pt-4"
+                <div className="flex gap-0 px-4 md:px-6 pt-4 overflow-x-auto"
                   style={{ borderBottom:"1px solid var(--border-default)" }}>
                   {ONGLETS.map(({ id, label, icon: Icon }) => (
                     <button key={id} type="button" onClick={() => setOnglet(id)}
@@ -403,7 +403,7 @@ export default function AutomationView() {
                 </div>
 
                 {/* contenu de l'onglet */}
-                <div className="flex-1 overflow-y-auto px-6 py-5">
+                <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5">
 
                   {/* ── CONTENU ─────────────────────────────────────── */}
                   {onglet === "contenu" && (
@@ -627,7 +627,7 @@ export default function AutomationView() {
                 </div>
 
                 {/* pied de page */}
-                <div className="flex items-center justify-between gap-3 px-6 py-4"
+                <div className="flex flex-wrap items-center justify-between gap-3 px-4 md:px-6 py-4"
                   style={{ borderTop:"1px solid var(--border-default)" }}>
                   <div className="flex gap-1">
                     {ONGLETS.map(({ id }) => (

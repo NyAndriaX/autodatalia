@@ -3,6 +3,7 @@ import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useTranslations } from "next-intl";
 import { Clock } from "lucide-react";
 import { getScheduleTimezone } from "../../lib/timezone";
 
@@ -33,20 +34,24 @@ const POPOVER_WIDTH = 260;
 // Real height self-measures via the popover ref after first paint.
 const POPOVER_HEIGHT_APPROX = 320;
 
-// Common posting times — picked over months of "what did users actually
-// schedule" feedback; surfaces them as one-tap chips so the columns are
-// rarely needed at all.
-const PRESETS = [
-  { label: "Morning", time: "09:00" },
-  { label: "Noon", time: "12:00" },
-  { label: "Afternoon", time: "15:00" },
-  { label: "Evening", time: "18:00" },
-  { label: "Night", time: "21:00" },
-];
-
 const pad = (n) => String(n).padStart(2, "0");
 
 export default function TimePicker({ value = "09:00", onChange, minuteStep = 5 }) {
+  const t = useTranslations("timePicker");
+  // Common posting times — picked over months of "what did users actually
+  // schedule" feedback; surfaces them as one-tap chips so the columns are
+  // rarely needed at all. Memoized on the translator so labels update with
+  // locale changes without rebuilding on every render.
+  const PRESETS = useMemo(
+    () => [
+      { label: t("morning"), time: "09:00" },
+      { label: t("noon"), time: "12:00" },
+      { label: t("afternoon"), time: "15:00" },
+      { label: t("evening"), time: "18:00" },
+      { label: t("night"), time: "21:00" },
+    ],
+    [t]
+  );
   const [open, setOpen] = useState(false);
   const [popoverPos, setPopoverPos] = useState(null); // { top, left }
   const triggerRef = useRef(null);
@@ -145,7 +150,7 @@ export default function TimePicker({ value = "09:00", onChange, minuteStep = 5 }
     <div
       ref={popoverRef}
       role="dialog"
-      aria-label="Choose a time"
+      aria-label={t("chooseTime")}
       className={`rounded-xl p-3 shadow-lg ${fadeIn}`}
       style={{
         position: "fixed",
@@ -164,6 +169,12 @@ export default function TimePicker({ value = "09:00", onChange, minuteStep = 5 }
         minutes={minutes}
         commit={commit}
         close={() => setOpen(false)}
+        presets={PRESETS}
+        timezoneTooltip={t("scheduleTimezoneTooltip")}
+        hourLabel={t("hour")}
+        minuteLabel={t("minute")}
+        nowLabel={t("now")}
+        doneLabel={t("done")}
       />
     </div>
   );
@@ -201,7 +212,19 @@ export default function TimePicker({ value = "09:00", onChange, minuteStep = 5 }
 /* The popover body is its own component so the markup stays readable above.
    The behavioral nuance — portal, reposition, click-away — lives in the
    parent so this can focus purely on what the user sees. */
-function PopoverBody({ selectedH, snappedM, minutes, commit, close }) {
+function PopoverBody({
+  selectedH,
+  snappedM,
+  minutes,
+  commit,
+  close,
+  presets,
+  timezoneTooltip,
+  hourLabel,
+  minuteLabel,
+  nowLabel,
+  doneLabel,
+}) {
   return (
     <>
       {/* Big readout — tall enough that the picker reads as "I'm a clock",
@@ -225,7 +248,7 @@ function PopoverBody({ selectedH, snappedM, minutes, commit, close }) {
       <div
         className="text-center text-[10px] mb-3"
         style={{ color: "var(--text-muted)" }}
-        title="Set this in Settings → Scheduling timezone"
+        title={timezoneTooltip}
       >
         {getScheduleTimezone()}
       </div>
@@ -247,13 +270,13 @@ function PopoverBody({ selectedH, snappedM, minutes, commit, close }) {
           }}
         />
         <WheelColumn
-          ariaLabel="Hour"
+          ariaLabel={hourLabel}
           items={HOURS}
           selected={selectedH}
           onSelect={(h) => commit(h, snappedM)}
         />
         <WheelColumn
-          ariaLabel="Minute"
+          ariaLabel={minuteLabel}
           items={minutes}
           selected={snappedM}
           onSelect={(m) => commit(selectedH, m)}
@@ -262,7 +285,7 @@ function PopoverBody({ selectedH, snappedM, minutes, commit, close }) {
 
       {/* Quick presets — what 9 in 10 picks actually look like. */}
       <div className="flex flex-wrap gap-1 mb-2">
-        {PRESETS.map((p) => {
+        {presets.map((p) => {
           const isSel = `${pad(selectedH)}:${pad(snappedM)}` === p.time;
           return (
             <button
@@ -312,7 +335,7 @@ function PopoverBody({ selectedH, snappedM, minutes, commit, close }) {
           className="text-xs font-medium"
           style={{ color: "var(--accent-primary)" }}
         >
-          Now
+          {nowLabel}
         </button>
         <button
           type="button"
@@ -320,7 +343,7 @@ function PopoverBody({ selectedH, snappedM, minutes, commit, close }) {
           className="text-xs"
           style={{ color: "var(--text-muted)" }}
         >
-          Done
+          {doneLabel}
         </button>
       </div>
     </>

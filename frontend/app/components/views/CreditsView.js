@@ -1,5 +1,5 @@
 "use client";
-import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn, badgeDraft } from "../../lib/uiClasses";
+import { card, fadeIn } from "../../lib/uiClasses";
 
 import { useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
@@ -120,10 +120,10 @@ export default function CreditsView() {
   const byModèle = useMemo(() => summary?.by_model || [], [summary]);
 
   return (
-    <div className={`h-full overflow-y-auto ${fadeIn}`} style={{ padding: 24 }}>
+    <div className={`h-full overflow-y-auto p-4 md:p-6 ${fadeIn}`}>
         {/* Header */}
-        <div className="flex items-end justify-between mb-6 gap-4 flex-wrap">
-          <div>
+        <div className="flex flex-col md:flex-row md:items-end md:justify-between mb-6 gap-4 flex-wrap">
+          <div className="min-w-0">
             <h1 className="text-2xl font-bold mb-1" style={{ color: "var(--text-primary)" }}>
               {t("title")}
             </h1>
@@ -137,7 +137,7 @@ export default function CreditsView() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {PERIODS.map((p) => (
               <button
                 key={p.id}
@@ -179,7 +179,7 @@ export default function CreditsView() {
         {/* Headline KPIs */}
         <div
           className="grid gap-3 mb-6"
-          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(200px, 100%), 1fr))" }}
         >
           <KpiCard
             icon={DollarSign}
@@ -218,7 +218,7 @@ export default function CreditsView() {
         {/* Par flux + by tier side by side */}
         <div
           className="grid gap-4 mb-6"
-          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))" }}
+          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(320px, 100%), 1fr))" }}
         >
           <BreakdownCard
             icon={Wallet}
@@ -263,30 +263,32 @@ export default function CreditsView() {
               {t("noModels")}
             </p>
           ) : (
-            <table className="w-full text-sm" style={{ color: "var(--text-secondary)" }}>
-              <thead>
-                <tr style={{ color: "var(--text-muted)" }} className="text-left text-xs uppercase tracking-wider">
-                  <th className="pb-2 font-semibold">{t("tableModel")}</th>
-                  <th className="pb-2 font-semibold text-right">{t("tableCalls")}</th>
-                  <th className="pb-2 font-semibold text-right">{t("tableTokens")}</th>
-                  <th className="pb-2 font-semibold text-right">{t("tableCost")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {byModèle.slice(0, 12).map((r) => (
-                  <tr key={r.key} style={{ borderTop: "1px solid var(--border-default)" }}>
-                    <td className="py-2 font-medium" style={{ color: "var(--text-primary)" }}>
-                      {r.key}
-                    </td>
-                    <td className="py-2 text-right">{r.calls}</td>
-                    <td className="py-2 text-right">{formatTokens(r.tokens)}</td>
-                    <td className="py-2 text-right font-semibold">
-                      ${r.cost_usd.toFixed(4)}
-                    </td>
+            <div className="overflow-x-auto -mx-2 px-2">
+              <table className="w-full min-w-[420px] text-sm" style={{ color: "var(--text-secondary)" }}>
+                <thead>
+                  <tr style={{ color: "var(--text-muted)" }} className="text-left text-xs uppercase tracking-wider">
+                    <th className="pb-2 font-semibold">{t("tableModel")}</th>
+                    <th className="pb-2 font-semibold text-right">{t("tableCalls")}</th>
+                    <th className="pb-2 font-semibold text-right">{t("tableTokens")}</th>
+                    <th className="pb-2 font-semibold text-right">{t("tableCost")}</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {byModèle.slice(0, 12).map((r) => (
+                    <tr key={r.key} style={{ borderTop: "1px solid var(--border-default)" }}>
+                      <td className="py-2 font-medium break-all" style={{ color: "var(--text-primary)" }}>
+                        {r.key}
+                      </td>
+                      <td className="py-2 text-right whitespace-nowrap">{r.calls}</td>
+                      <td className="py-2 text-right whitespace-nowrap">{formatTokens(r.tokens)}</td>
+                      <td className="py-2 text-right font-semibold whitespace-nowrap">
+                        ${r.cost_usd.toFixed(4)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
     </div>
@@ -349,12 +351,12 @@ function BreakdownCard({ icon: Icon, title, rows, totalCoût, labelFor, empty })
                 }}
               >
                 <div className="flex items-center gap-3 mb-1.5">
-                  <RowIcon size={14} style={{ color: "var(--accent-primary)" }} />
-                  <span className="text-sm flex-1" style={{ color: "var(--text-primary)" }}>
+                  <RowIcon size={14} style={{ color: "var(--accent-primary)", flexShrink: 0 }} />
+                  <span className="text-sm flex-1 min-w-0 truncate" style={{ color: "var(--text-primary)" }}>
                     {meta.label}
                   </span>
                   <span
-                    className="text-sm font-semibold"
+                    className="text-sm font-semibold whitespace-nowrap"
                     style={{ color: "var(--text-primary)" }}
                   >
                     ${row.cost_usd.toFixed(4)}

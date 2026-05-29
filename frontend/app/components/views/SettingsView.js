@@ -3,6 +3,7 @@
 import { btnPrimary, btnSecondary, btnGhost, inputField } from "../../lib/uiClasses";
 import { useCallback, useEffect, useState } from "react";
 import { useDispatch } from "react-redux";
+import { useTranslations } from "next-intl";
 import { PLATFORMS } from "../../lib/platforms";
 import { loadSettings, saveSettings } from "../../lib/settingsStorage";
 import { addNotification } from "../../store/uiSlice";
@@ -51,7 +52,7 @@ function Champ({ label, name, value, onChange, placeholder, type = "text", hint 
 function Section({ icon: Icon, title, badge, children }) {
   return (
     <div className="overflow-hidden rounded-2xl" style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
-      <div className="flex items-center gap-3 px-5 py-4"
+      <div className="flex flex-wrap items-center gap-3 px-5 py-4"
         style={{ borderBottom:"1px solid var(--border-default)" }}>
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl"
           style={{ background:"rgba(29,63,190,.1)", color:"var(--accent-primary)" }}>
@@ -67,6 +68,7 @@ function Section({ icon: Icon, title, badge, children }) {
 
 /* ─── Sélecteur de fuseau horaire ────────────────────────────────────────*/
 function FuseauHoraire({ value, onChange }) {
+  const t        = useTranslations("settings");
   const browser  = getBrowserTimezone();
   const options  = value && !COMMON_TIMEZONES.includes(value) ? [value, ...COMMON_TIMEZONES] : COMMON_TIMEZONES;
   return (
@@ -74,24 +76,24 @@ function FuseauHoraire({ value, onChange }) {
       <label className="block">
         <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest"
           style={{ color:"var(--text-muted)" }}>
-          Sélectionner le fuseau
+          {t("timezoneSelectLabel")}
         </span>
         <select className={inputField} value={value||""} onChange={(e) => onChange(e.target.value)}>
-          <option value="">Auto — navigateur ({browser})</option>
+          <option value="">{t("timezoneAutoBrowser", { browser })}</option>
           {options.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
         </select>
       </label>
       <label className="block">
         <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest"
           style={{ color:"var(--text-muted)" }}>
-          Ou saisir une zone IANA
+          {t("timezoneIanaLabel")}
         </span>
         <input className={inputField} type="text" value={value||""}
           onChange={(e) => onChange(e.target.value)}
           placeholder="Europe/Paris, America/Toronto" autoComplete="off" />
       </label>
       <p className="col-span-full text-[11px]" style={{ color:"var(--text-muted)" }}>
-        Laisser vide pour suivre l'horloge de votre appareil. Les modifications s'appliquent après enregistrement.
+        {t("timezoneHint")}
       </p>
     </div>
   );
@@ -99,6 +101,7 @@ function FuseauHoraire({ value, onChange }) {
 
 /* ─── Carte de plateforme ────────────────────────────────────────────────*/
 function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconnect }) {
+  const t           = useTranslations("settings");
   const Icon        = p.icon;
   const providerId  = PLATFORM_TO_PROVIDER[p.id];
   const provider    = connections?.[providerId];
@@ -117,7 +120,7 @@ function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconn
         background: connected ? p.color + "06" : "var(--bg-tertiary)",
       }}>
       {/* ligne principale */}
-      <div className="flex items-center gap-3 px-4 py-3.5">
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3.5">
         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white text-sm font-black"
           style={{ background: p.color, boxShadow:`0 4px 12px ${p.color}50` }}>
           {p.label[0]}
@@ -126,33 +129,33 @@ function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconn
           <p className="text-sm font-bold leading-tight" style={{ color:"var(--text-primary)" }}>{p.label}</p>
           {!configured && connections !== null && (
             <p className="mt-0.5 text-[11px]" style={{ color:"var(--status-error)" }}>
-              Non configuré — ajoutez les clés env au serveur
+              {t("platformNotConfigured")}
             </p>
           )}
           {connected && targets.length > 0 && (
             <p className="mt-0.5 text-[11px]" style={{ color:"var(--text-muted)" }}>
-              {targets.length} compte{targets.length !== 1 ? "s" : ""} · {targets.map(t => t.label).join(", ")}
+              {t("platformAccountsCount", { count: targets.length })} · {targets.map(tgt => tgt.label).join(", ")}
             </p>
           )}
           {!connected && configured && (
-            <p className="mt-0.5 text-[11px]" style={{ color:"var(--text-muted)" }}>Non connecté</p>
+            <p className="mt-0.5 text-[11px]" style={{ color:"var(--text-muted)" }}>{t("platformNotConnected")}</p>
           )}
         </div>
         {!configured ? (
           <span className="shrink-0 rounded-lg px-2.5 py-1 text-[11px] font-semibold"
             style={{ background:"rgba(239,68,68,.1)", color:"var(--status-error)" }}>
-            Configuration requise
+            {t("platformConfigRequired")}
           </span>
         ) : connected ? (
           <div className="flex items-center gap-2 shrink-0">
             <span className="flex items-center gap-1.5 text-xs font-semibold"
               style={{ color:"var(--status-approved)" }}>
-              <Check size={13} /> Connecté
+              <Check size={13} /> {t("platformConnected")}
             </span>
             <button type="button" onClick={() => onDisconnect(p.id)}
               className="flex h-7 w-7 items-center justify-center rounded-lg transition-all hover:scale-110"
               style={{ background:"rgba(239,68,68,.1)", border:"none", cursor:"pointer", color:"var(--status-error)" }}
-              title="Déconnecter">
+              title={t("platformDisconnect")}>
               <Trash2 size={12} />
             </button>
           </div>
@@ -161,7 +164,7 @@ function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconn
             className="shrink-0 inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold text-white transition-all hover:-translate-y-px disabled:opacity-60"
             style={{ background: p.color, border:"none", cursor: isPending ? "default" : "pointer",
               boxShadow:`0 4px 10px ${p.color}40` }}>
-            {isPending ? <><Loader2 size={11} className="animate-spin"/> Connexion…</> : "Connecter"}
+            {isPending ? <><Loader2 size={11} className="animate-spin"/> {t("platformConnecting")}</> : t("platformConnect")}
           </button>
         )}
       </div>
@@ -170,7 +173,7 @@ function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconn
       {connected && targets.length > 0 && (
         <div className="px-4 py-3" style={{ borderTop:`1px solid ${p.color}20` }}>
           <p className="mb-2 text-[10px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
-            Comptes de publication
+            {t("platformPublishingAccounts")}
           </p>
           <div className="flex flex-col gap-1.5">
             {targets.map((t) => (
@@ -200,10 +203,10 @@ function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconn
       {connected && targets.length === 0 && (
         <div className="px-4 py-3 text-xs" style={{ borderTop:`1px solid ${p.color}20`, color:"var(--text-muted)" }}>
           {p.id === "facebook"
-            ? "Aucune Page trouvée. Assurez-vous d'administrer au moins une Page FB, puis reconnectez."
+            ? t("platformNoFacebookPages")
             : p.id === "instagram"
-            ? "Aucun compte IG Pro trouvé. Liez un compte IG Pro à une Page FB que vous gérez, puis reconnectez."
-            : "Connecté, mais aucun compte publiable détecté."}
+            ? t("platformNoInstagramAccounts")
+            : t("platformNoTargets")}
         </div>
       )}
     </div>
@@ -217,6 +220,7 @@ function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconn
    so the env default kicks back in. PATCH only sends fields the user
    touched so an empty-but-untouched secret doesn't clobber a set key. */
 function BackendKeysSection() {
+  const t        = useTranslations("settings");
   const dispatch = useDispatch();
   const [keys, setKeys] = useState({});
   const [edits, setEdits] = useState({});
@@ -225,15 +229,15 @@ function BackendKeysSection() {
 
   const GROUPS = [
     {
-      title: "LLM (text generation)",
+      title: t("backendKeysGroupLLM"),
       ids: ["AI_API_KEY", "AI_MODEL", "AI_MODEL_FAST", "AI_MODEL_PREMIUM"],
     },
     {
-      title: "AI image generation",
+      title: t("backendKeysGroupImage"),
       ids: ["AI_IMAGE_API_KEY", "AI_IMAGE_API_BASE_URL", "AI_IMAGE_MODEL"],
     },
     {
-      title: "AI video generation",
+      title: t("backendKeysGroupVideo"),
       ids: [
         "FAL_API_KEY",
         "FAL_VIDEO_MODEL",
@@ -245,7 +249,7 @@ function BackendKeysSection() {
       ],
     },
     {
-      title: "Telegram",
+      title: t("backendKeysGroupTelegram"),
       ids: ["TELEGRAM_BOT_TOKEN", "TELEGRAM_DEFAULT_CHAT_ID"],
     },
   ];
@@ -273,12 +277,12 @@ function BackendKeysSection() {
       setKeys(data?.keys || {});
       setEdits({});
       dispatch(addNotification({
-        message: "Backend keys updated. Active immediately for new calls.",
+        message: t("backendKeysSaved"),
         type: "success",
       }));
     } catch (err) {
       dispatch(addNotification({
-        message: `Couldn't save keys: ${err.message || err}`,
+        message: t("backendKeysSaveFailed", { error: err.message || String(err) }),
         type: "error",
       }));
     } finally {
@@ -289,16 +293,14 @@ function BackendKeysSection() {
   const dirty = Object.keys(edits).length > 0;
 
   if (loading) {
-    return <p className="text-xs" style={{ color: "var(--text-muted)" }}>Loading…</p>;
+    return <p className="text-xs" style={{ color: "var(--text-muted)" }}>{t("backendKeysLoading")}</p>;
   }
 
   return (
     <div>
       <div className="mb-4 rounded-xl p-3.5 text-xs leading-relaxed"
         style={{ background:"rgba(29,63,190,.07)", border:"1px solid rgba(29,63,190,.2)", color:"var(--text-secondary)" }}>
-        <strong style={{ color:"var(--text-primary)" }}>Saved to the backend.</strong>{" "}
-        Overrides infra/.env at runtime — no container restart needed. Empty an
-        override to fall back to whatever's in env. Secrets are masked.
+        {t("backendKeysBanner")}
       </div>
       {GROUPS.map((group) => (
         <div key={group.title} className="mb-4">
@@ -319,7 +321,7 @@ function BackendKeysSection() {
                     <span className="inline-flex items-center gap-1 text-[10px] font-normal"
                       style={{ color: "var(--status-approved)" }}>
                       <Check size={10} />
-                      {isSecret ? entry.masked : "set"}
+                      {isSecret ? entry.masked : t("backendKeysSet")}
                     </span>
                   )}
                 </span>
@@ -330,8 +332,8 @@ function BackendKeysSection() {
                   onChange={(e) => setEdits((prev) => ({ ...prev, [id]: e.target.value }))}
                   placeholder={
                     isSecret
-                      ? (entry.set ? "Type a new value to replace…" : "Not set")
-                      : "Empty = use env default"
+                      ? (entry.set ? t("backendKeysReplacePlaceholder") : t("backendKeysNotSet"))
+                      : t("backendKeysEnvDefault")
                   }
                   autoComplete="off"
                 />
@@ -340,7 +342,7 @@ function BackendKeysSection() {
           })}
         </div>
       ))}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
           onClick={handleSave}
@@ -348,12 +350,12 @@ function BackendKeysSection() {
           className={`${btnPrimary} inline-flex items-center gap-2`}
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-          Save changes
+          {t("backendKeysSave")}
           {dirty && <span className="text-[10px] opacity-80">({Object.keys(edits).length})</span>}
         </button>
         {dirty && (
           <button type="button" onClick={() => setEdits({})} className={`${btnGhost} text-xs`}>
-            Discard
+            {t("backendKeysDiscard")}
           </button>
         )}
         <button
@@ -362,7 +364,7 @@ function BackendKeysSection() {
           disabled={loading}
           className={`${btnGhost} text-xs inline-flex items-center gap-1 ml-auto`}
         >
-          <RefreshCw size={12} /> Reload
+          <RefreshCw size={12} /> {t("backendKeysReload")}
         </button>
       </div>
     </div>
@@ -371,6 +373,7 @@ function BackendKeysSection() {
 
 /* ─── Composant principal ────────────────────────────────────────────────*/
 export default function SettingsView() {
+  const t        = useTranslations("settings");
   const dispatch = useDispatch();
   const [s,               setS]               = useState(null);
   const [connections,     setConnections]     = useState(null);
@@ -416,11 +419,11 @@ export default function SettingsView() {
     setPendingProvider(providerId);
     try {
       await startConnect(providerId);
-      dispatch(addNotification({ message:`${platformId} connecté.`, type:"success" }));
+      dispatch(addNotification({ message: t("platformConnectedNotification", { platform: platformId }), type:"success" }));
       invalidateConnectionsCache();
       await actualiserConnexions({ force: true });
     } catch (err) {
-      dispatch(addNotification({ message:`Connexion échouée : ${err.message||"erreur inconnue"}`, type:"error" }));
+      dispatch(addNotification({ message: t("platformConnectFailed", { error: err.message || t("unknownError") }), type:"error" }));
     } finally {
       setPendingProvider(null);
     }
@@ -429,45 +432,45 @@ export default function SettingsView() {
   const handleDisconnect = async (platformId) => {
     const providerId = PLATFORM_TO_PROVIDER[platformId];
     if (!providerId) return;
-    if (!confirm(`Déconnecter ${platformId} ? Les tokens enregistrés seront supprimés.`)) return;
+    if (!confirm(t("platformDisconnectConfirm", { platform: platformId }))) return;
     try {
       await oauthDisconnect(providerId);
-      dispatch(addNotification({ message:`${platformId} déconnecté.`, type:"info" }));
+      dispatch(addNotification({ message: t("platformDisconnectedNotification", { platform: platformId }), type:"info" }));
       await actualiserConnexions({ force: true });
     } catch (err) {
-      dispatch(addNotification({ message:`Déconnexion échouée : ${err.message||"inconnu"}`, type:"error" }));
+      dispatch(addNotification({ message: t("platformDisconnectFailed", { error: err.message || t("unknownError") }), type:"error" }));
     }
   };
 
   const handleSave = () => {
     saveSettings(s);
-    dispatch(addNotification({ message:"Paramètres enregistrés sur cet appareil.", type:"success" }));
+    dispatch(addNotification({ message: t("saved"), type:"success" }));
   };
 
   const handlePairTelegram = () => {
     if (!telegramStatus?.configured) {
-      dispatch(addNotification({ message:"Le token du bot Telegram n'est pas encore configuré.", type:"error" }));
+      dispatch(addNotification({ message: t("telegramBotNotConfigured"), type:"error" }));
       return;
     }
     if (!s.telegramChatId) {
-      dispatch(addNotification({ message:"Entrez votre ID de chat Telegram.", type:"error" }));
+      dispatch(addNotification({ message: t("telegramChatIdRequired"), type:"error" }));
       return;
     }
     saveSettings(s);
-    dispatch(addNotification({ message:"ID de chat Telegram enregistré pour les validations.", type:"info" }));
+    dispatch(addNotification({ message: t("telegramChatIdSaved"), type:"info" }));
   };
 
   const handleTestTelegram = async () => {
     if (!telegramStatus?.configured) {
-      dispatch(addNotification({ message:"Le token du bot Telegram n'est pas configuré.", type:"error" }));
+      dispatch(addNotification({ message: t("telegramBotTokenMissing"), type:"error" }));
       return;
     }
     setTestingTelegram(true);
     try {
       const result = await sendTelegramTest(s.telegramChatId || null);
-      dispatch(addNotification({ message:`Message test envoyé au chat ${result.chat_id}.`, type:"success" }));
+      dispatch(addNotification({ message: t("telegramTestSent", { chatId: result.chat_id }), type:"success" }));
     } catch (err) {
-      dispatch(addNotification({ message:`Test échoué : ${err.message}`, type:"error" }));
+      dispatch(addNotification({ message: t("telegramTestFailed", { error: err.message }), type:"error" }));
     } finally {
       setTestingTelegram(false);
     }
@@ -477,27 +480,27 @@ export default function SettingsView() {
   const totalProviders = Object.keys(connections || {}).length;
 
   const ONGLETS = [
-    { id:"plateformes", label:"Plateformes",    icon:Plug,     badge: connectéCount > 0 ? `${connectéCount}/${totalProviders}` : null },
-    { id:"fuseau",      label:"Fuseau horaire", icon:Clock                                                                             },
-    { id:"ia",          label:"Clés IA",        icon:KeyRound                                                                          },
-    { id:"telegram",    label:"Telegram",       icon:Send,     badge: telegramStatus?.configured ? "ok" : null                        },
-    { id:"marque",      label:"Kit Marque",     icon:Palette                                                                           },
+    { id:"plateformes", label:t("tabPlatforms"), icon:Plug,     badge: connectéCount > 0 ? `${connectéCount}/${totalProviders}` : null },
+    { id:"fuseau",      label:t("tabTimezone"),  icon:Clock                                                                             },
+    { id:"ia",          label:t("tabAiKeys"),    icon:KeyRound                                                                          },
+    { id:"telegram",    label:t("tabTelegram"),  icon:Send,     badge: telegramStatus?.configured ? "ok" : null                        },
+    { id:"marque",      label:t("tabBrandKit"),  icon:Palette                                                                           },
   ];
 
   return (
-    <div className="h-full overflow-y-auto" style={{ background:"var(--bg-primary)", padding:"24px" }}>
+    <div className="h-full overflow-y-auto p-4 md:p-6" style={{ background:"var(--bg-primary)" }}>
 
       {/* ═ EN-TÊTE ══════════════════════════════════════════════════════ */}
-      <div className="mb-6 flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-extrabold" style={{ color:"var(--text-primary)" }}>Paramètres</h1>
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-xl font-extrabold" style={{ color:"var(--text-primary)" }}>{t("title")}</h1>
           <p className="mt-0.5 text-xs" style={{ color:"var(--text-muted)" }}>
-            Gérez les plateformes, les clés API, le fuseau horaire et l'identité de marque.
+            {t("subtitle")}
           </p>
         </div>
         <button type="button" onClick={handleSave}
           className={`${btnPrimary} inline-flex items-center gap-2`}>
-          <Settings size={14} /> Tout enregistrer
+          <Settings size={14} /> {t("saveAll")}
         </button>
       </div>
 
@@ -532,20 +535,20 @@ export default function SettingsView() {
       {onglet === "plateformes" && (
         <Section
           icon={Plug}
-          title="Plateformes connectées"
+          title={t("platformsTitle")}
           badge={
             <div className="flex items-center gap-2">
               <span className="text-xs" style={{ color:"var(--text-muted)" }}>
                 {connections === null
-                  ? "Chargement…"
-                  : `${connectéCount} / ${totalProviders} connectée${connectéCount!==1?"s":""}`}
+                  ? t("platformsLoading")
+                  : t("platformsConnectedCount", { connected: connectéCount, total: totalProviders })}
               </span>
               <button type="button" onClick={() => actualiserConnexions({ force: true })}
                 disabled={refreshing}
                 className={`${btnGhost} inline-flex items-center gap-1 text-[11px]`}
                 style={{ padding:"3px 8px" }}>
                 <RefreshCw size={11} className={refreshing ? "animate-spin" : ""} />
-                Actualiser
+                {t("platformsRefresh")}
               </button>
             </div>
           }
@@ -566,11 +569,9 @@ export default function SettingsView() {
 
       {/* ═ FUSEAU HORAIRE ═══════════════════════════════════════════════ */}
       {onglet === "fuseau" && (
-        <Section icon={Clock} title="Fuseau horaire de planification">
+        <Section icon={Clock} title={t("timezoneTitle")}>
           <p className="mb-5 text-xs leading-relaxed" style={{ color:"var(--text-muted)" }}>
-            Définit ce que signifie «&nbsp;09h00&nbsp;» lorsque vous planifiez un post.
-            Configurez-le sur le fuseau de l'audience cible de la marque, pour qu'un collaborateur
-            en déplacement ou derrière un VPN ne publie pas accidentellement à 03h00.
+            {t("timezoneHelp")}
           </p>
           <FuseauHoraire value={s.scheduleTimezone} onChange={(v) => update("scheduleTimezone", v)} />
         </Section>
@@ -578,20 +579,20 @@ export default function SettingsView() {
 
       {/* ═ CLÉS IA ══════════════════════════════════════════════════════ */}
       {onglet === "ia" && (
-        <Section icon={KeyRound} title="Backend API keys">
+        <Section icon={KeyRound} title={t("backendKeysTitle")}>
           <BackendKeysSection />
         </Section>
       )}
 
       {/* ═ TELEGRAM ═════════════════════════════════════════════════════ */}
       {onglet === "telegram" && (
-        <Section icon={Send} title="Bot de validation Telegram">
+        <Section icon={Send} title={t("telegramSectionTitle")}>
           {/* indicateurs de statut */}
-          <div className="mb-5 grid grid-cols-3 gap-3">
+          <div className="mb-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
             {[
-              { label:"Token du bot",      on: telegramStatus?.configured },
-              { label:"Chat par défaut",   on: telegramStatus?.default_chat_configured },
-              { label:"Secret webhook",    on: telegramStatus?.webhook_secret_configured },
+              { label: t("telegramStatusBotToken"),      on: telegramStatus?.configured },
+              { label: t("telegramStatusDefaultChat"),   on: telegramStatus?.default_chat_configured },
+              { label: t("telegramStatusWebhookSecret"), on: telegramStatus?.webhook_secret_configured },
             ].map(({ label, on }) => (
               <div key={label} className="rounded-xl px-3 py-3 text-center"
                 style={{
@@ -606,29 +607,29 @@ export default function SettingsView() {
                 </p>
                 <p className="text-[10px] font-black"
                   style={{ color: on ? "var(--status-approved)" : "var(--status-error)" }}>
-                  {on ? "OK" : "MANQUANT"}
+                  {on ? t("telegramStatusOk") : t("telegramStatusMissing")}
                 </p>
               </div>
             ))}
           </div>
 
-          <Champ label="Note sur le token du bot" name="telegramBotToken" value={s.telegramBotToken}
+          <Champ label={t("telegramBotTokenLabel")} name="telegramBotToken" value={s.telegramBotToken}
             onChange={update} placeholder="123456:ABC-DEF…" type="password"
-            hint="Note uniquement — le vrai token est sur le serveur et ne transite pas par le navigateur." />
-          <Champ label="Votre ID de chat Telegram" name="telegramChatId" value={s.telegramChatId}
-            onChange={update} placeholder="ex. 84217734" />
+            hint={t("telegramBotTokenHint")} />
+          <Champ label={t("telegramChatIdLabel")} name="telegramChatId" value={s.telegramChatId}
+            onChange={update} placeholder={t("telegramChatIdPlaceholder")} />
 
           <div className="flex flex-wrap gap-2 mt-2">
             <button type="button" onClick={handlePairTelegram}
               className={`${btnPrimary} text-sm`}>
-              Associer le bot
+              {t("telegramPairBot")}
             </button>
             <button type="button" onClick={handleTestTelegram}
               disabled={testingTelegram || !telegramStatus?.configured}
               className={`${btnSecondary} text-sm inline-flex items-center gap-2`}>
               {testingTelegram
-                ? <><Loader2 size={13} className="animate-spin"/> Envoi…</>
-                : "Envoyer un message test"}
+                ? <><Loader2 size={13} className="animate-spin"/> {t("telegramSending")}</>
+                : t("telegramTest")}
             </button>
           </div>
         </Section>
@@ -636,16 +637,16 @@ export default function SettingsView() {
 
       {/* ═ KIT MARQUE ═══════════════════════════════════════════════════ */}
       {onglet === "marque" && (
-        <Section icon={Palette} title="Kit Marque">
+        <Section icon={Palette} title={t("brandKitTitle")}>
           <p className="mb-5 text-xs leading-relaxed" style={{ color:"var(--text-muted)" }}>
-            Ces valeurs sont injectées dans chaque prompt IA pour que le contenu généré corresponde à l'identité de votre marque.
+            {t("brandKitHelp")}
           </p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
-            <Champ label="Nom de la marque" name="brandName" value={s.brandName}
-              onChange={update} placeholder="DATALIA" />
+            <Champ label={t("brandName")} name="brandName" value={s.brandName}
+              onChange={update} placeholder={t("brandNamePlaceholder")} />
             <div className="mb-4">
               <p className="mb-1.5 text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
-                Couleur principale
+                {t("brandPrimaryColor")}
               </p>
               <div className="flex items-center gap-3">
                 <input type="color" value={s.brandPrimaryColor || "#3b82f6"}
@@ -658,9 +659,9 @@ export default function SettingsView() {
               </div>
             </div>
             <div className="col-span-full">
-              <Champ label="Ton de communication" name="brandToneOfVoice" value={s.brandToneOfVoice}
-                onChange={update} placeholder="Confiant, bienveillant, concis"
-                hint="Décrivez comment la marque s'exprime — injecté tel quel dans les prompts de génération." />
+              <Champ label={t("brandTone")} name="brandToneOfVoice" value={s.brandToneOfVoice}
+                onChange={update} placeholder={t("brandTonePlaceholder")}
+                hint={t("brandToneHint")} />
             </div>
           </div>
         </Section>
@@ -670,7 +671,7 @@ export default function SettingsView() {
       <div className="mt-6 flex justify-end">
         <button type="button" onClick={handleSave}
           className={`${btnPrimary} inline-flex items-center gap-2`}>
-          <Settings size={14} /> Enregistrer tous les paramètres
+          <Settings size={14} /> {t("saveAllBottom")}
         </button>
       </div>
 

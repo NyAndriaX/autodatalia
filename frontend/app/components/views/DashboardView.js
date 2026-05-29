@@ -2,11 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSelector, useDispatch } from "react-redux";
-import { useTranslations } from "next-intl";
+import { useTranslations, useFormatter } from "next-intl";
 import { fetchConnections } from "../../lib/oauthService";
 import { setActiveView } from "../../store/uiSlice";
 import { PLATFORMS, STATUS_META, activePlatformIds } from "../../lib/platforms";
-import { startOfToday, isoDateKey, addDays } from "../../lib/dateUtils";
+import { startOfToday, isoDateKey, addDays, parseDateKey } from "../../lib/dateUtils";
 import { useIsMobile } from "../../lib/useIsMobile";
 import {
   TrendingUp, Calendar, Users, Zap, ArrowRight, ExternalLink,
@@ -16,10 +16,6 @@ import {
 
 /* ─── constantes ─────────────────────────────────────────────────────────*/
 const PLATFORM_COLORS = { facebook:"#1877F2", instagram:"#e1306c", tiktok:"#181818", linkedin:"#0A66C2" };
-
-const WEEKDAY_SHORT = ["Dim","Lun","Mar","Mer","Jeu","Ven","Sam"];
-const WEEKDAY_LONG  = ["Dimanche","Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi"];
-const MONTH_LONG    = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
 
 const PLATFORM_TO_PROVIDER    = { facebook:"meta", instagram:"meta", tiktok:"tiktok", linkedin:"linkedin" };
 const PLATFORM_TO_TARGET_KIND = { facebook:"facebook_page", instagram:"instagram_business", tiktok:"tiktok_account", linkedin:"linkedin_member" };
@@ -33,7 +29,7 @@ const STATUS_COLORS = {
   pending   : { bg:"rgba(245,158,11,.12)", text:"var(--status-pending)",   dot:"#f59e0b" },
   error     : { bg:"rgba(239,68,68,.12)",  text:"var(--status-error)",     dot:"#ef4444" },
   approved  : { bg:"rgba(34,197,94,.12)",  text:"var(--status-approved)",  dot:"#22c55e" },
-  awaiting  : { bg:"rgba(168,85,247,.12)", text:"var(--status-awaiting)",  dot:"#a855f7" },
+  awaiting_validation: { bg:"rgba(168,85,247,.12)", text:"var(--status-awaiting)",  dot:"#a855f7" },
   rejected  : { bg:"rgba(148,163,184,.15)",text:"var(--status-rejected)",  dot:"#94a3b8" },
 };
 
@@ -103,6 +99,7 @@ function PipelineBar({ stats }) {
 
 function WeekStrip({ week, todayKey, onCalendar }) {
   const t = useTranslations("dashboard");
+  const format = useFormatter();
   return (
     <div className="rounded-2xl p-5" style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
       <div className="mb-3 flex items-center justify-between">
@@ -121,7 +118,7 @@ function WeekStrip({ week, todayKey, onCalendar }) {
           const hasPost = day.length > 0;
           return (
             <button key={key} type="button" onClick={onCalendar}
-              className="flex flex-col items-center gap-1 rounded-xl py-3 transition-all duration-150 hover:scale-105"
+              className="flex flex-col items-center gap-1 rounded-xl py-2 sm:py-3 transition-all duration-150 hover:scale-105 min-w-0"
               style={{
                 background: isToday ? "var(--accent-primary)" : hasPost ? "var(--bg-secondary)" : "var(--bg-tertiary)",
                 border: `1px solid ${isToday ? "transparent" : "var(--border-default)"}`,
@@ -129,9 +126,9 @@ function WeekStrip({ week, todayKey, onCalendar }) {
               }}>
               <span className="text-[9px] font-bold uppercase tracking-wider"
                 style={{ color: isToday ? "rgba(255,255,255,.7)" : "var(--text-muted)" }}>
-                {WEEKDAY_SHORT[date.getDay()]}
+                {format.dateTime(date, { weekday: "short" }).toUpperCase()}
               </span>
-              <span className="text-base font-extrabold leading-none"
+              <span className="text-sm sm:text-base font-extrabold leading-none"
                 style={{ color: isToday ? "#fff" : "var(--text-primary)" }}>
                 {date.getDate()}
               </span>
@@ -227,7 +224,7 @@ function RecentPost({ post }) {
     pending:   t("statusPending"),
     error:     t("statusError"),
     approved:  t("statusApproved"),
-    awaiting:  t("statusAwaiting"),
+    awaiting_validation: t("statusAwaiting"),
     rejected:  t("statusRejected"),
   };
   const ids = activePlatformIds(post.platforms);
@@ -290,14 +287,17 @@ function ActionCard({ icon: Icon, title, description, color, onClick }) {
 export default function DashboardView() {
   const t              = useTranslations("dashboard");
   const tSidebar       = useTranslations("sidebar");
+  const format         = useFormatter();
   const dispatch       = useDispatch();
   const scheduledPosts = useSelector((s) => s.calendar.scheduledPosts);
   const aiUsage        = useSelector((s) => s.ui.aiUsage);
   const user           = useSelector((s) => s.auth.user);
   const isMobile       = useIsMobile();
 
-  const today    = startOfToday();
-  const todayKey = isoDateKey(today);
+  const todayKey = isoDateKey(startOfToday());
+  // Stable across renders within the same day — flips at midnight when
+  // todayKey changes. Keeps stats/week useMemo from invalidating every render.
+  const today    = useMemo(() => parseDateKey(todayKey), [todayKey]);
 
   const [oauthState, setOauthState] = useState(null);
   useEffect(() => {
@@ -306,7 +306,7 @@ export default function DashboardView() {
     return () => { alive = false; };
   }, []);
 
-  const dateLabel = `${WEEKDAY_LONG[today.getDay()]} ${today.getDate()} ${MONTH_LONG[today.getMonth()]}`;
+  const dateLabel = format.dateTime(today, { weekday: "long", day: "numeric", month: "long" });
 
   const isConnected = (pid) => !!oauthState?.[PLATFORM_TO_PROVIDER[pid]]?.connected;
 
@@ -377,7 +377,7 @@ export default function DashboardView() {
             {t("subtitleMarketing")}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={() => dispatch(setActiveView("calendar"))}
             className="flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 hover:-translate-y-px hover:shadow-md"
             style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)", color:"var(--text-primary)", cursor:"pointer" }}>
@@ -393,7 +393,7 @@ export default function DashboardView() {
 
       {/* ══ ALERTES ═══════════════════════════════════════════════════════ */}
       {connectedCount === 0 && (
-        <div className="mb-5 flex items-start gap-3 rounded-2xl p-4"
+        <div className="mb-5 flex flex-wrap items-start gap-3 rounded-2xl p-4"
           style={{ background:"rgba(29,63,190,.08)", border:"1px solid rgba(29,63,190,.25)" }}>
           <Sparkles size={18} style={{ color:"var(--accent-primary)", flexShrink:0, marginTop:1 }} />
           <div className="flex-1">
@@ -410,7 +410,7 @@ export default function DashboardView() {
         </div>
       )}
       {stats.byStatus.error > 0 && (
-        <div className="mb-5 flex items-start gap-3 rounded-2xl p-4"
+        <div className="mb-5 flex flex-wrap items-start gap-3 rounded-2xl p-4"
           style={{ background:"rgba(239,68,68,.08)", border:"1px solid rgba(239,68,68,.25)" }}>
           <AlertCircle size={18} style={{ color:"var(--status-error)", flexShrink:0, marginTop:1 }} />
           <div className="flex-1">
@@ -430,7 +430,7 @@ export default function DashboardView() {
       )}
 
       {/* ══ KPI ══════════════════════════════════════════════════════════ */}
-      <div className="mb-5 grid gap-3" style={{ gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4,1fr)" }}>
+      <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-2 lg:grid-cols-4">
         <KpiCard icon={Zap}          label={t("creditsSpent")}  value={fmt(creditsSpent)}         sub={t("approxThisSession", { eur: eurSpent })}         color="#1d3fbe"  onClick={() => dispatch(setActiveView("credits"))} />
         <KpiCard icon={Users}        label={t("totalAudience")}   value={fmt(totalAudience)}         sub={t("platformsConnectedCount", { count: connectedCount })} color="#22c55e" onClick={() => dispatch(setActiveView("settings"))} />
         <KpiCard icon={Calendar}     label={t("scheduled7d")}   value={stats.thisWeek}             sub={t("postsTotal", { count: stats.total })}                     color="#6366f1"  onClick={() => dispatch(setActiveView("calendar"))} />
@@ -438,7 +438,7 @@ export default function DashboardView() {
       </div>
 
       {/* ══ PIPELINE + CALENDRIER + AUDIENCE ════════════════════════════ */}
-      <div className="mb-5 grid gap-4" style={{ gridTemplateColumns: isMobile ? "1fr" : "2fr 1fr" }}>
+      <div className="mb-5 grid grid-cols-1 gap-4 lg:[grid-template-columns:2fr_1fr]">
         <div className="flex flex-col gap-4">
           <PipelineBar stats={stats} />
           <WeekStrip week={week} todayKey={todayKey} onCalendar={() => dispatch(setActiveView("calendar"))} />
@@ -485,7 +485,7 @@ export default function DashboardView() {
         <p className="mb-3 text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
           {t("quickActions")}
         </p>
-        <div className="grid gap-3" style={{ gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4,1fr)" }}>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <ActionCard icon={PlusCircle} title={t("createPost")}       description={t("actionCreateDesc")}  color="#1d3fbe" onClick={() => dispatch(setActiveView("creation"))} />
           <ActionCard icon={Bot}        title={tSidebar("automation")}     description={t("actionAutomationDesc")}    color="#7c3aed" onClick={() => dispatch(setActiveView("automation"))} />
           <ActionCard icon={Image}      title={tSidebar("library")}         description={t("actionLibraryDesc")}            color="#0891b2" onClick={() => dispatch(setActiveView("library"))} />

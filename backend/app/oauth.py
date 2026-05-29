@@ -140,6 +140,13 @@ def _provider_creds(p: ProviderSpec) -> tuple[str | None, str | None]:
 
 
 def _redirect_uri(provider_id: str) -> str:
+    # NOTE: OAUTH_REDIRECT_BASE and the *_CLIENT_ID/SECRET pairs are read
+    # directly from os.environ on purpose — they are deliberately NOT in
+    # runtime_config.EDITABLE_KEYS. Hot-applying them mid-flight is unsafe
+    # because (a) the value must match what's registered in each provider's
+    # developer portal, and (b) a change between /start and /callback would
+    # break the state round-trip. A container restart is required when these
+    # rotate.
     base = os.environ.get("OAUTH_REDIRECT_BASE", "http://localhost:8000").rstrip("/")
     return f"{base}/oauth/{provider_id}/callback"
 
@@ -181,9 +188,10 @@ def _load_tokens(user_id: int | None = None) -> dict[str, Any]:
 
 
 def _save_tokens(data: dict[str, Any], user_id: int | None = None) -> None:
-    _token_store_path(user_id).write_text(
-        json.dumps(data, indent=2), encoding="utf-8"
-    )
+    # Lazy import to avoid any circular-import risk with services.py.
+    from .services import atomic_write_text
+
+    atomic_write_text(_token_store_path(user_id), json.dumps(data, indent=2))
 
 
 # ── Routes ─────────────────────────────────────────────────────────────
@@ -211,7 +219,7 @@ async def oauth_status(user_id: int = Depends(require_token)) -> dict[str, Any]:
 
 
 @router.get("/{provider_id}/start")
-async def oauth_start(provider_id: str) -> dict[str, str]:
+async def oauth_start(provider_id: str, user_id: int = Depends(require_token)) -> dict[str, str]:
     """Return the authorize URL to redirect the browser to.
 
     The frontend pops a new window pointing at this URL. The provider
@@ -241,7 +249,11 @@ async def oauth_start(provider_id: str) -> dict[str, str]:
     # We will encode the user_id in the state object if a token is provided in the query.
     # For now, let's keep pending state global.
     tokens = _load_tokens(None)
-    tokens.setdefault("_pending_state", {})[state] = {"provider": provider_id}
+    tokens.setdefault("_pending_state", {})[state] = {
+        "provider": provider_id,
+        "created_at": time.time(),
+        "user_id": user_id,
+    }
     _save_tokens(tokens, None)
 
     # TikTok diverges from the OAuth2 norm in two ways: the authorize URL
@@ -576,7 +588,15 @@ async def oauth_callback(
         )
 
     global_tokens = _load_tokens(None)
-    pending = global_tokens.get("_pending_state", {})
+    # Sweep expired pending-state entries (older than 10 minutes) so an
+    # unauthenticated /start spammer can't pollute the store indefinitely.
+    pending = {
+        k: v
+        for k, v in (global_tokens.get("_pending_state") or {}).items()
+        if isinstance(v, dict)
+        and (time.time() - (v.get("created_at") or 0)) < 600
+    }
+    global_tokens["_pending_state"] = pending
     pending_data = pending.get(state)
     if not pending_data or pending_data.get("provider") != provider_id:
         return HTMLResponse(

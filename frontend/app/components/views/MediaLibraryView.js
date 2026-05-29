@@ -18,7 +18,6 @@ import {
   Check,
   CheckCheck,
   Grid3X3,
-  LayoutGrid,
   HardDrive,
   Loader2,
 } from "lucide-react";
@@ -609,8 +608,7 @@ export default function MediaLibraryView() {
 
   return (
     <div
-      className={`h-full overflow-y-auto ${fadeIn}`}
-      style={{ padding: 24 }}
+      className={`h-full overflow-y-auto p-4 sm:p-6 ${fadeIn}`}
       onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
       onDragLeave={() => setDragging(false)}
       onDrop={(e) => {
@@ -646,7 +644,7 @@ export default function MediaLibraryView() {
 
       {/* ── KPIs ─────────────────────────────────────────────────── */}
       {tab === "uploads" && (
-        <div className="mb-6 grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))" }}>
+        <div className="mb-6 grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(140px, 100%), 1fr))" }}>
           {[
             { icon: HardDrive, label: t("statTotal"), value: stats.total, color: "var(--accent-primary)" },
             { icon: ImageIcon, label: t("statImages"), value: stats.images, color: "#E1306C" },
@@ -707,7 +705,7 @@ export default function MediaLibraryView() {
               <X size={13} /> {tCommon("clear")}
             </button>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
               onClick={onBulkUseInPost}
@@ -729,7 +727,7 @@ export default function MediaLibraryView() {
 
       {/* ── Onglets ──────────────────────────────────────────────── */}
       <div
-        className="mb-5 flex gap-1 p-1 rounded-2xl w-fit"
+        className="mb-5 flex gap-1 p-1 rounded-2xl w-fit max-w-full overflow-x-auto"
         style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-default)" }}
       >
         {TABS.map((tab_) => {
@@ -775,7 +773,7 @@ export default function MediaLibraryView() {
               ))}
             </div>
             <div
-              className="inline-flex items-center gap-2 rounded-xl px-3.5 py-2"
+              className="inline-flex items-center gap-2 rounded-xl px-3.5 py-2 w-full sm:w-auto"
               style={{ background: "var(--bg-card)", border: "1px solid var(--border-default)" }}
             >
               <Search size={14} style={{ color: "var(--text-muted)" }} />
@@ -783,8 +781,8 @@ export default function MediaLibraryView() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={t("searchPlaceholder")}
-                className="bg-transparent outline-none text-sm"
-                style={{ color: "var(--text-primary)", width: 180 }}
+                className="bg-transparent outline-none text-sm min-w-0 flex-1 sm:flex-none"
+                style={{ color: "var(--text-primary)", width: "min(180px, 100%)" }}
               />
               {query && (
                 <button type="button" onClick={() => setQuery("")} className={btnGhost} style={{ padding: 2 }}>
@@ -811,7 +809,7 @@ export default function MediaLibraryView() {
           {filteredItems.length > 0 ? (
             <div
               className="grid gap-3"
-              style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}
+              style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(140px, 100%), 1fr))" }}
             >
               {filteredItems.map((it) => (
                 <MediaTile

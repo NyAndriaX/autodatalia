@@ -6,7 +6,3 @@ export async function fetchCostSummary(period = "30d") {
   return apiFetch(`/costs/summary?period=${encodeURIComponent(period)}`);
 }
 
-// Recent per-call log entries (for the Analytics detail view).
-export async function fetchCostLog(limit = 200) {
-  return apiFetch(`/costs/log?limit=${encodeURIComponent(limit)}`);
-}

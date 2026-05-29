@@ -44,6 +44,56 @@ DUPLICATE_WINDOW_SECONDS = 5 * 60
 _RECENT_POSTS: dict[str, list[tuple[str, float]]] = {}
 
 
+def _local_path_for_content_url(url: str) -> Path | None:
+    """If `url` points at one of our own /content/<filename> URLs, return
+    the matching path on disk. Returns None for foreign URLs (e.g. user
+    pasted a third-party image) or anything outside the content dir.
+
+    Used by the publish pre-flight to detect "URL exists in the draft
+    but the file is gone from disk" — surfaces a clear error instead of
+    letting Meta/TikTok complain about a fetch failure 30s later.
+    """
+    if not url:
+        return None
+    marker = "/content/"
+    idx = url.find(marker)
+    if idx < 0:
+        return None
+    rel = url[idx + len(marker):]
+    # Strip any query string / fragment.
+    for sep in ("?", "#"):
+        cut = rel.find(sep)
+        if cut >= 0:
+            rel = rel[:cut]
+    if not rel:
+        return None
+    try:
+        candidate = (settings.content_dir / rel).resolve()
+        # Prevent path traversal — must stay under content_dir.
+        candidate.relative_to(settings.content_dir.resolve())
+    except (ValueError, OSError):
+        return None
+    return candidate
+
+
+def _missing_media_for_target(t: dict[str, Any]) -> str | None:
+    """Return the first content-served media URL on the target whose
+    backing file is missing on disk, else None.
+
+    Skips foreign URLs — only our own /content/ URLs are checked, since
+    we can't reason about whether arbitrary third-party hosts are up.
+    """
+    urls: list[str] = []
+    if t.get("media_url"):
+        urls.append(t["media_url"])
+    urls.extend(t.get("media_urls") or [])
+    for url in urls:
+        path = _local_path_for_content_url(url)
+        if path is not None and not path.exists():
+            return url
+    return None
+
+
 def _content_hash(content: str, media_url: str | None) -> str:
     h = hashlib.sha256()
     h.update((content or "").encode("utf-8"))
@@ -1227,34 +1277,6 @@ async def publish_linkedin(
     content: str,
     media_url: str | None = None,
 ) -> PublishResult:
-    """LinkedIn UGC posts — stub until LinkedIn creds land.
-
-    Personal post path (no review needed):
-      POST /v2/ugcPosts
-        author = "urn:li:person:{id}"
-        lifecycleState = "PUBLISHED"
-        specificContent."com.linkedin.ugc.ShareContent" with shareCommentary + media
-
-    Organization (Page) post requires Community Management API approval;
-    same endpoint, different author URN ("urn:li:organization:{id}").
-    """
-    return PublishResult(
-        target_id=member_or_org_urn,
-        target_label=label,
-        platform="linkedin",
-        ok=False,
-        error="linkedin_publish_not_implemented",
-    )
-
-
-async def publish_linkedin(
-    member_or_org_urn: str,
-    access_token: str,
-    *,
-    label: str,
-    content: str,
-    media_url: str | None = None,
-) -> PublishResult:
     """Publish a LinkedIn member post through the REST Posts API."""
     if not access_token:
         return PublishResult(
@@ -1555,6 +1577,19 @@ async def publish_to_targets(
     async def _dispatch(t: dict[str, Any]) -> PublishResult:
         try:
             platform = t.get("platform")
+            # Pre-flight: any /content/-served URL whose file is gone from
+            # disk would surface as `Meta 9004` / `tiktok photo_pull_failed`
+            # ~30s later. Catch it here so the user sees "Media file no
+            # longer on disk — re-upload or pick from Library" instead.
+            missing = _missing_media_for_target(t)
+            if missing:
+                return PublishResult(
+                    target_id=t["id"],
+                    target_label=t.get("label") or t["id"],
+                    platform=platform or "unknown",
+                    ok=False,
+                    error=f"media_missing_on_disk: {missing.rsplit('/', 1)[-1]} — re-upload from the Media Library.",
+                )
             # Spam guard: cooldown + duplicate-content check per target. Runs
             # before any upstream call so a flood never reaches the platform.
             guard = check_spam_guard(t["id"], content, t.get("media_url"))

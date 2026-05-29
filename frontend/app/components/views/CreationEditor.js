@@ -45,7 +45,6 @@ import {
   Bookmark,
   ChevronDown,
   Frame,
-  MoreHorizontal,
   Film,
 } from "lucide-react";
 import { useState, useMemo, useRef, useCallback, useEffect } from "react";
@@ -59,7 +58,6 @@ import {
 } from "../../lib/oauthService";
 import {
   generateImageAsset,
-  generateVideoAsset,
 } from "../../lib/mediaGenerationService";
 import {
   PLATFORMS,
@@ -84,22 +82,22 @@ const SUGGESTED_HASHTAGS = [
 ];
 
 const MODES = [
-  { id: "free", label: "Free Prompt", icon: PenLine, description: "Write freely with AI assistance" },
-  { id: "template", label: "From Template", icon: FileText, description: "Use a brand template" },
-  { id: "scratch", label: "From Scratch", icon: Type, description: "Start with a blank canvas" },
+  { id: "free", icon: PenLine },
+  { id: "template", icon: FileText },
+  { id: "scratch", icon: Type },
 ];
 
 /* Compact transforms — the tone selector handles tone separately, so this
    list is now just the two length actions. */
 const QUICK_ACTIONS = [
-  { id: "shorten", label: "Shorten", icon: ArrowDownToLine },
-  { id: "expand", label: "Expand", icon: ArrowUpFromLine },
+  { id: "shorten", icon: ArrowDownToLine },
+  { id: "expand", icon: ArrowUpFromLine },
 ];
 
 const TEMPLATES = [
-  { id: "promo", label: "Summer Promo Template (Default)" },
-  { id: "edu", label: 'Educational "Did you know?"' },
-  { id: "news", label: "Company News & Updates" },
+  { id: "promo" },
+  { id: "edu" },
+  { id: "news" },
 ];
 
 /* Resolve "ratio for this platform on this post" using the user's pick
@@ -133,7 +131,7 @@ export default function CreationEditor() {
     if (!prompt) {
       dispatch(
         addNotification({
-          message: t("enterPromptBeforeGenerating", { kind }),
+          message: t(kind === "video" ? "enterPromptBeforeVideo" : "enterPromptBeforeImage"),
           type: "error",
         })
       );
@@ -341,12 +339,13 @@ export default function CreationEditor() {
             completedIds={workflow.completedIds}
             onStepClick={scrollToStep}
             compact={isMobile}
+            ariaLabel={t("creationWorkflow")}
           />
         </div>
 
         {/* Mode Selector */}
-        <div className="px-6 py-4 shrink-0" style={{ borderBottom: "1px solid var(--border-default)" }}>
-          <div className="flex gap-2" role="tablist" aria-label={t("creationModeAria")}>
+        <div className="px-4 sm:px-6 py-4 shrink-0" style={{ borderBottom: "1px solid var(--border-default)" }}>
+          <div className="flex gap-2 flex-wrap" role="tablist" aria-label={t("creationModeAria")}>
             {MODES.map((mode) => {
               const isActive = currentPost.mode === mode.id;
               const Icon = mode.icon;
@@ -379,7 +378,7 @@ export default function CreationEditor() {
         </div>
 
         {/* Platform Toggles */}
-        <div className="px-6 py-4 shrink-0" style={{ borderBottom: "1px solid var(--border-default)" }}>
+        <div className="px-4 sm:px-6 py-4 shrink-0" style={{ borderBottom: "1px solid var(--border-default)" }}>
           <p
             className="text-xs font-semibold uppercase tracking-wider mb-3"
             style={{ color: "var(--text-tertiary)" }}
@@ -415,7 +414,7 @@ export default function CreationEditor() {
 
         {/* Content Editor Area */}
         <div
-          className={`px-6 py-5 ${
+          className={`px-4 sm:px-6 py-5 ${
             isMobile ? "" : "flex-1 min-h-0 overflow-y-auto"
           }`}
         >
@@ -472,7 +471,7 @@ export default function CreationEditor() {
 
             {/* Character & hashtag counters */}
             <div
-              className="flex items-center gap-4 mt-3"
+              className="flex items-center gap-x-4 gap-y-1 flex-wrap mt-3"
               style={{ color: "var(--text-muted)" }}
               aria-live="polite"
               aria-atomic="true"
@@ -524,7 +523,9 @@ export default function CreationEditor() {
                       onClick={() => dispatch(selectVariant(i))}
                       className="text-left rounded-lg p-3 transition-all"
                       style={{
-                        width: 168,
+                        width: "min(168px, 100%)",
+                        flex: "1 1 140px",
+                        maxWidth: 168,
                         background: active ? "rgba(99,102,241,0.10)" : "var(--bg-tertiary)",
                         border: `1px solid ${active ? "var(--border-active)" : "var(--border-default)"}`,
                       }}
@@ -763,7 +764,7 @@ export default function CreationEditor() {
             (primary CTA + popover of alternative submit paths) so the
             visual hierarchy points the user at the action they came for. */}
         <div
-          className="px-6 py-4 shrink-0 flex flex-wrap items-center gap-3"
+          className="px-4 sm:px-6 py-4 shrink-0 flex flex-wrap items-center gap-3"
           style={{ borderTop: "1px solid var(--border-default)", background: "var(--bg-secondary)" }}
         >
           <button
@@ -788,7 +789,7 @@ export default function CreationEditor() {
       {/* ═══ RIGHT PANEL — Live Multi-Platform Preview ═══ */}
       <div
         className={`relative z-10 flex shrink-0 flex-col overflow-hidden ${
-          isMobile ? "w-full" : "w-[430px] min-w-[390px]"
+          isMobile ? "w-full" : "w-[clamp(340px,38vw,430px)] min-w-[340px]"
         }`}
         style={{
           background: "var(--bg-elevated)",
@@ -834,7 +835,7 @@ export default function CreationEditor() {
         )}
 
         <div
-          className="flex-1 min-h-0 overflow-y-auto px-5 py-5 relative"
+          className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-5 py-5 relative"
           onTouchStart={onPreviewTouchStart}
           onTouchEnd={onPreviewTouchEnd}
         >
@@ -1015,7 +1016,8 @@ function RatioPicker({ platform, value, onChange, media }) {
             background: "var(--bg-card)",
             border: "1px solid var(--border-default)",
             boxShadow: "var(--shadow-dropdown)",
-            minWidth: 220,
+            minWidth: "min(220px, 80vw)",
+            maxWidth: "92vw",
           }}
         >
           {options.map((opt) => {
@@ -1137,7 +1139,8 @@ function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
             background: "var(--bg-card)",
             border: "1px solid var(--border-default)",
             boxShadow: "var(--shadow-dropdown)",
-            minWidth: 220,
+            minWidth: "min(220px, 80vw)",
+            maxWidth: "92vw",
           }}
         >
           <MenuItem

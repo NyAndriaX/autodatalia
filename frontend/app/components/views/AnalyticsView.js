@@ -14,7 +14,6 @@ import {
   Space,
   Typography,
   Tooltip,
-  Badge,
 } from "antd";
 import {
   ThunderboltOutlined,
@@ -166,8 +165,8 @@ export default function AnalyticsView() {
 
   return (
     <div
-      className="h-full overflow-y-auto"
-      style={{ padding: 24, background: "var(--bg-primary)" }}
+      className="h-full overflow-y-auto p-4 md:p-6"
+      style={{ background: "var(--bg-primary)" }}
     >
 
         {/* Header */}
@@ -207,17 +206,17 @@ export default function AnalyticsView() {
         {/* Live KPI row */}
         <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
           <Col xs={12} sm={12} md={6}>
-            <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: "20px 24px" }}>
+            <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: "clamp(12px, 3vw, 20px) clamp(14px, 3.5vw, 24px)" }}>
               <Statistic
                 title={
-                  <Space size={6}>
+                  <Space size={6} wrap>
                     <ThunderboltOutlined style={{ color: "#1d3fbe" }} />
                     <span>{t("tokensSession")}</span>
                     <Tag color="blue" style={{ fontSize: 9, lineHeight: "16px", padding: "0 4px" }}>{t("liveBadge")}</Tag>
                   </Space>
                 }
                 value={formatTokens(sessionTokens)}
-                valueStyle={{ fontSize: 26, fontWeight: 800, color: "#1d3fbe" }}
+                valueStyle={{ fontSize: "clamp(18px, 4.5vw, 26px)", fontWeight: 800, color: "#1d3fbe" }}
               />
               <Text type="secondary" style={{ fontSize: 12 }}>
                 {t("realCalls", { n: sessionCalls })}
@@ -226,16 +225,16 @@ export default function AnalyticsView() {
           </Col>
 
           <Col xs={12} sm={12} md={6}>
-            <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: "20px 24px" }}>
+            <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: "clamp(12px, 3vw, 20px) clamp(14px, 3.5vw, 24px)" }}>
               <Statistic
                 title={
-                  <Space size={6}>
+                  <Space size={6} wrap>
                     <RiseOutlined style={{ color: "#22c55e" }} />
                     <span>{t("avgPerCall")}</span>
                   </Space>
                 }
                 value={avgPerCall ? formatTokens(avgPerCall) : "—"}
-                valueStyle={{ fontSize: 26, fontWeight: 800, color: "#22c55e" }}
+                valueStyle={{ fontSize: "clamp(18px, 4.5vw, 26px)", fontWeight: 800, color: "#22c55e" }}
               />
               <Text type="secondary" style={{ fontSize: 12 }}>
                 {hasRealData ? t("sessionAvg") : t("noCallsYet")}
@@ -244,16 +243,16 @@ export default function AnalyticsView() {
           </Col>
 
           <Col xs={12} sm={12} md={6}>
-            <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: "20px 24px" }}>
+            <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: "clamp(12px, 3vw, 20px) clamp(14px, 3.5vw, 24px)" }}>
               <Statistic
                 title={
-                  <Space size={6}>
+                  <Space size={6} wrap>
                     <DatabaseOutlined style={{ color: "#7c3aed" }} />
                     <span>{t("modelsUsed")}</span>
                   </Space>
                 }
                 value={byModel.length || "—"}
-                valueStyle={{ fontSize: 26, fontWeight: 800, color: "#7c3aed" }}
+                valueStyle={{ fontSize: "clamp(18px, 4.5vw, 26px)", fontWeight: 800, color: "#7c3aed" }}
               />
               <Text type="secondary" style={{ fontSize: 12 }}>
                 {byModel[0]?.model || t("noCallsYet")}
@@ -262,10 +261,10 @@ export default function AnalyticsView() {
           </Col>
 
           <Col xs={12} sm={12} md={6}>
-            <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: "20px 24px" }}>
+            <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: "clamp(12px, 3vw, 20px) clamp(14px, 3.5vw, 24px)" }}>
               <Statistic
                 title={
-                  <Space size={6}>
+                  <Space size={6} wrap>
                     <DollarOutlined style={{ color: "#f59e0b" }} />
                     <span>{t("cacheHitRate")}</span>
                     <Tooltip title={t("cacheHitTooltip")}>
@@ -274,7 +273,7 @@ export default function AnalyticsView() {
                   </Space>
                 }
                 value={totalRequests ? `${cacheHitRate}%` : "—"}
-                valueStyle={{ fontSize: 26, fontWeight: 800, color: "#f59e0b" }}
+                valueStyle={{ fontSize: "clamp(18px, 4.5vw, 26px)", fontWeight: 800, color: "#f59e0b" }}
               />
               <Text type="secondary" style={{ fontSize: 12 }}>
                 {t("hitsPaid", { hits: cacheHits, paid: sessionCalls })}
@@ -296,7 +295,7 @@ export default function AnalyticsView() {
                 </Space>
               }
               style={{ borderRadius: 12 }}
-              bodyStyle={{ padding: "20px 24px" }}
+              bodyStyle={{ padding: "clamp(12px, 3vw, 20px) clamp(14px, 3.5vw, 24px)" }}
             >
               {hasRealData ? (
                 <div>
@@ -420,11 +419,11 @@ export default function AnalyticsView() {
             },
           ].map((item) => (
             <Col xs={12} sm={12} md={6} key={item.label}>
-              <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: "18px 20px" }}>
+              <Card style={{ borderRadius: 12 }} bodyStyle={{ padding: "clamp(12px, 3vw, 18px) clamp(12px, 3vw, 20px)" }}>
                 <Statistic
                   title={item.label}
                   value={item.value}
-                  valueStyle={{ fontSize: 22, fontWeight: 800, color: item.color }}
+                  valueStyle={{ fontSize: "clamp(16px, 4vw, 22px)", fontWeight: 800, color: item.color }}
                 />
                 <Text type="secondary" style={{ fontSize: 12 }}>{item.sub}</Text>
               </Card>
@@ -447,12 +446,12 @@ export default function AnalyticsView() {
             <Col xs={12} sm={12} md={6} key={k.label}>
               <Card
                 style={{ borderRadius: 12, opacity: 0.85 }}
-                bodyStyle={{ padding: "20px 24px" }}
+                bodyStyle={{ padding: "clamp(12px, 3vw, 20px) clamp(14px, 3.5vw, 24px)" }}
               >
                 <Statistic
                   title={k.label}
                   value={k.value}
-                  valueStyle={{ fontSize: 24, fontWeight: 800 }}
+                  valueStyle={{ fontSize: "clamp(16px, 4vw, 24px)", fontWeight: 800 }}
                 />
                 <Tag
                   color={k.positive ? "green" : "red"}

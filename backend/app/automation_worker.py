@@ -286,15 +286,11 @@ async def generate_candidate(rule: dict[str, Any], fire_epoch: float) -> dict[st
     if chat_id and settings.telegram_bot_token:
         try:
             message_id = await _send_validation_card(post, chat_id)
-            post = (
-                {
-                    **post,
-                    "telegram_chat_id": chat_id,
-                    "telegram_message_id": message_id,
-                }
-                if message_id is None
-                else post
-            )
+            post = {
+                **post,
+                "telegram_chat_id": chat_id,
+                "telegram_message_id": message_id,
+            }
             from .services import posts_update as _posts_update
             _posts_update(post["id"], {
                 "telegram_chat_id": chat_id,

@@ -290,22 +290,6 @@ export function publishNowThunk() {
       }
     }
 
-    // Diagnostic — when publish gets media_url=MISSING despite a media
-    // preview showing in the editor, this tells us exactly what's in the
-    // store: which items, what status, what remoteUrl.
-    console.log(
-      "[publish-thunk] media state:",
-      (currentPost.media || []).map((m) => ({
-        id: m.id,
-        kind: m.kind,
-        status: m.status,
-        remoteUrl: m.remoteUrl ? `${m.remoteUrl.slice(0, 60)}…` : null,
-        filename: m.filename,
-      })),
-      "→ picked mediaUrl:",
-      mediaUrl
-    );
-
     // If the user has media in the post but NONE of it actually uploaded
     // successfully, refuse to publish. The previous behaviour silently
     // posted text-only to platforms that accept it (FB) and reported

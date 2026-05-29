@@ -1,5 +1,5 @@
 "use client";
-import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn, badgeDraft } from "../../lib/uiClasses";
+import { btnPrimary, btnSecondary, btnGhost, inputField, glassCard, fadeIn } from "../../lib/uiClasses";
 
 import { useState, useRef, useEffect } from "react";
 import { useDispatch } from "react-redux";
@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { PLATFORMS } from "../../lib/platforms";
 import { isoDateKey, startOfToday, parseDateKey } from "../../lib/dateUtils";
-import { addNotification, addTokenUsage, recordCacheHit } from "../../store/uiSlice";
+import { addNotification, addTokenUsage, recordCacheHit, setActiveView } from "../../store/uiSlice";
 import {
   ACCEPTED_TYPES,
   toMediaItem,
@@ -25,10 +25,7 @@ import {
   revokeMediaItem,
 } from "../../lib/uploadService";
 import { generateContent } from "../../lib/aiService";
-import {
-  generateImageAsset,
-  generateVideoAsset,
-} from "../../lib/mediaGenerationService";
+import { generateImageAsset } from "../../lib/mediaGenerationService";
 import TikTokOptionsPanel from "./TikTokOptionsPanel";
 import { getScheduleTimezone } from "../../lib/timezone";
 import DatePicker from "./DatePicker";
@@ -91,24 +88,25 @@ export default function ScheduleModal({
   // Track which previewUrls *this modal* created so closing the modal can
   // revoke them. Items pulled in via initialMedia (created by MediaUploader)
   // stay alive — that uploader owns its own cleanup on unmount.
-  const ownedPreviewIds = useRef(new Set());
+  // Keyed by id → media item so cleanup never has to read the latest
+  // `media` state (which a stale-closure useEffect could miss).
+  const ownedItems = useRef(new Map());
 
   useEffect(() => {
-    const owned = ownedPreviewIds.current;
+    const owned = ownedItems.current;
     return () => {
-      for (const m of media) {
-        if (owned.has(m.id)) revokeMediaItem(m);
+      for (const m of owned.values()) {
+        revokeMediaItem(m);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggle = (id) => setPlatforms((p) => ({ ...p, [id]: !p[id] }));
   const removeMedia = (id) => {
     setMedia((list) => {
       const target = list.find((m) => m.id === id);
-      if (target && ownedPreviewIds.current.has(id)) revokeMediaItem(target);
-      ownedPreviewIds.current.delete(id);
+      if (target && ownedItems.current.has(id)) revokeMediaItem(target);
+      ownedItems.current.delete(id);
       return list.filter((m) => m.id !== id);
     });
   };
@@ -133,7 +131,7 @@ export default function ScheduleModal({
         })
       );
     }
-    ownedPreviewIds.current.add(item.id);
+    ownedItems.current.set(item.id, item);
     setMedia((list) => [...list, item]);
     updateMedia(item.id, { status: "uploading" });
     const result = await uploadToBackend(file);
@@ -231,25 +229,53 @@ export default function ScheduleModal({
       );
       return;
     }
+    const ratio =
+      Object.values(ratios || {})[0] || (kind === "video" ? "9:16" : "1:1");
+
+    if (kind === "video") {
+      // Video generation is async on the backend (60s+ render). Hand off
+      // to VideoJobsView which already polls /video-jobs/{id} until done —
+      // the suggested `async_mode: false` shortcut would just time out
+      // behind ngrok/Cloudflare's ~60s edge timeout. Same pattern as
+      // CreationEditor.
+      const uploadedImage = media.find(
+        (m) => m.kind === "image" && m.status === "uploaded" && m.remoteUrl
+      );
+      const prefill = {
+        prompt,
+        ratio,
+        mode: uploadedImage ? "image" : "text",
+        referenceImage: uploadedImage
+          ? { filename: uploadedImage.filename, url: uploadedImage.remoteUrl }
+          : null,
+      };
+      try {
+        sessionStorage.setItem(
+          "datalia.videoJobs.prefill",
+          JSON.stringify(prefill)
+        );
+      } catch {
+        /* private mode — proceed without prefill */
+      }
+      onClose?.();
+      dispatch(setActiveView("videos"));
+      return;
+    }
+
     setGeneratingMediaKind(kind);
     try {
-      const ratio =
-        Object.values(ratios || {})[0] || (kind === "video" ? "9:16" : "1:1");
-      const result =
-        kind === "video"
-          ? await generateVideoAsset({ prompt, ratio })
-          : await generateImageAsset({ prompt, ratio });
+      const result = await generateImageAsset({ prompt, ratio });
       setMedia((list) => [...list, result.mediaItem]);
       dispatch(
         addNotification({
-          message: `${kind === "video" ? "Video" : "Image"} generated via ${result.data?.provider || "backend"}.`,
+          message: `Image generated via ${result.data?.provider || "backend"}.`,
           type: "success",
         })
       );
     } catch (err) {
       dispatch(
         addNotification({
-          message: `${kind === "video" ? "Video" : "Image"} generation failed: ${err.message || "unknown error"}`,
+          message: `Image generation failed: ${err.message || "unknown error"}`,
           type: "error",
         })
       );
@@ -265,11 +291,12 @@ export default function ScheduleModal({
       onClick={onClose}
     >
       <div
-        className={`${glassCard} w-full max-w-md p-5`}
+        className={`${glassCard} w-full max-w-md p-4 sm:p-5`}
         style={{
           background: "var(--bg-card)",
           border: "1px solid var(--border-default)",
           maxHeight: "90vh",
+          maxWidth: "min(28rem, 95vw)",
           overflowY: "auto",
         }}
         onClick={(e) => e.stopPropagation()}
@@ -338,14 +365,14 @@ export default function ScheduleModal({
         <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--text-tertiary)" }}>
           {t("media")}
         </p>
-        <div className="grid grid-cols-2 gap-2 mb-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
           {MEDIA_SOURCES.map((s) => {
             const Icon = s.icon;
             return (
               <button
                 key={s.id}
                 onClick={() => onChooseSource(s)}
-                className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all"
+                className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all min-w-0"
                 style={{
                   background: "var(--bg-tertiary)",
                   border: "1px solid var(--border-default)",
@@ -353,10 +380,10 @@ export default function ScheduleModal({
                 }}
                 title={s.source === "ai" ? t("generateWithAi") : t("pickFromDevice")}
               >
-                <Icon size={14} style={{ color: "var(--accent-primary)" }} />
-                {t(s.labelKey)}
+                <Icon size={14} style={{ color: "var(--accent-primary)", flexShrink: 0 }} />
+                <span className="truncate">{t(s.labelKey)}</span>
                 {s.source === "ai" && (
-                  <Sparkles size={11} style={{ color: "var(--status-pending)", marginLeft: "auto" }} />
+                  <Sparkles size={11} style={{ color: "var(--status-pending)", marginLeft: "auto", flexShrink: 0 }} />
                 )}
               </button>
             );
@@ -514,7 +541,7 @@ export default function ScheduleModal({
           <TimePicker value={time} onChange={setTime} />
         </div>
 
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           <button className={`${btnSecondary}`} onClick={onClose}>
             {tCommon("cancel")}
           </button>

@@ -7,6 +7,7 @@ import base64
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import time
@@ -33,6 +34,8 @@ try:
     from imageio_ffmpeg import get_ffmpeg_exe as _get_ffmpeg_exe
 except Exception:  # pragma: no cover - environmental
     _get_ffmpeg_exe = None  # type: ignore[assignment]
+
+log = logging.getLogger("datalia.media_generation")
 
 router = APIRouter(tags=["media-generation"])
 
@@ -349,8 +352,8 @@ def _log_image_cost(prompt: str, user_id: str | int | None) -> None:
             user_id=user_id,
             metadata={"prompt_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]},
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("[cost] record_media_job failed: %s", exc)
 
 
 def _write_bytes(prompt: str, suffix: str, payload: bytes) -> Path:
@@ -481,6 +484,9 @@ async def generate_video(
         image_filename=body.image_filename,
         provider=body.provider,
         user_id=user_id,
+        fal_model=body.fal_model,
+        quality=body.quality,
+        mode=body.mode,
     )
     finished = await run_job(job["id"])
     if not finished or finished.get("status") != "succeeded":

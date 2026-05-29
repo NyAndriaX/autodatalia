@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useCallback, useEffect } from "react";
+import { useRef, useState, useCallback } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useTranslations } from "next-intl";
 import { addMedia, updateMedia, removeMedia } from "../../store/editorSlice";
@@ -22,11 +22,11 @@ export default function MediaUploader() {
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef(null);
 
-  // Revoke any remaining object URLs on unmount to avoid leaks.
-  useEffect(() => {
-    return () => media.forEach(revokeMediaItem);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Note: previewUrls outlive the component mount because `media` lives in
+  // Redux and the editor view can unmount/remount while items remain in
+  // state. Per-item revocation happens in `handleRemove`; bulk revocation
+  // for `clearMedia` / `resetEditor` should be done at the action lifecycle
+  // (middleware) rather than in this component's unmount.
 
   const ingest = useCallback(
     (fileList) => {
@@ -77,7 +77,7 @@ export default function MediaUploader() {
         style={{ color: "var(--text-tertiary)" }}
         id="media-uploader-label"
       >
-        Media
+        {t("media")}
       </p>
 
       {/* Dropzone */}
@@ -130,7 +130,7 @@ export default function MediaUploader() {
 
       {/* Thumbnails */}
       {media.length > 0 && (
-        <ul className="grid grid-cols-4 gap-2 mt-3" aria-label="Uploaded media">
+        <ul className="grid grid-cols-4 gap-2 mt-3" aria-label={t("uploadedMediaListAria")}>
           {media.map((item) => (
             <li
               key={item.id}
@@ -174,7 +174,7 @@ export default function MediaUploader() {
                   className="absolute inset-0 flex items-center justify-center text-[10px] font-semibold px-2 text-center pointer-events-none"
                   style={{ background: "rgba(220,38,38,0.65)", color: "#fff" }}
                 >
-                  {item.error || "Upload failed — re-add this file"}
+                  {item.error || t("uploadFailedReadd")}
                 </div>
               )}
               <span
@@ -191,9 +191,9 @@ export default function MediaUploader() {
                       ? tCommon("uploadingOptimizing")
                       : tCommon("uploading")
                     : item.status === "uploaded"
-                    ? "Uploaded — ready to publish"
+                    ? t("uploadedReady")
                     : item.status === "error" || item.status === "local"
-                    ? `Upload failed: ${item.error || "unknown error"}`
+                    ? t("uploadFailedDetail", { error: item.error || tCommon("unknownError") })
                     : item.status
                 }
               >
@@ -214,7 +214,7 @@ export default function MediaUploader() {
                 onClick={() => handleRemove(item)}
                 className="absolute top-1 right-1 flex items-center justify-center w-5 h-5 rounded-full opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
                 style={{ background: "var(--status-error)" }}
-                aria-label={`Remove ${item.name}`}
+                aria-label={t("removeMediaAria", { name: item.name })}
               >
                 <X size={11} className="text-white" />
               </button>

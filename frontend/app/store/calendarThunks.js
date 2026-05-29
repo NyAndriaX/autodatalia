@@ -51,8 +51,8 @@ export function loadScheduledPostsThunk({ refresh = false } = {}) {
  */
 export function schedulePostThunk({ post, date }) {
   return async (dispatch) => {
-    // Local import keeps the thunk SSR-safe (settingsStorage touches
-    // window.localStorage; importing it at module top would break tests).
+    // Dynamic import: timezone.js calls getSetting() (from settingsStorage)
+    // which touches window.localStorage; a top-level import would break SSR / Jest.
     const { getScheduleTimezone } = await import("../lib/timezone");
     const scheduled = {
       ...post,

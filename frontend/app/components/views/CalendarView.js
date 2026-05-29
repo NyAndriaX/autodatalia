@@ -37,6 +37,7 @@ import {
   PLATFORM_MAP,
   STATUSES,
   STATUS_META,
+  STATUS_LABEL_KEYS,
   activePlatformIds,
 } from "../../lib/platforms";
 import {
@@ -300,7 +301,7 @@ function FilterChip({ active, color, label, onClick }) {
 export default function CalendarView() {
   const dispatch = useDispatch();
   const t = useTranslations("calendar");
-  const tCommon = useTranslations("common");
+  const tDashboard = useTranslations("dashboard");
   const { scheduledPosts, view, cursor, filters, seeded } = useSelector(
     (s) => s.calendar
   );
@@ -385,7 +386,7 @@ export default function CalendarView() {
           arrows + view toggle don't end up squeezed against each other. */}
       {isMobile ? (
         <div className="shrink-0 mb-3 flex flex-col gap-2">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <button
               className="btn-secondary text-sm"
               style={{ padding: "6px 12px" }}
@@ -457,7 +458,7 @@ export default function CalendarView() {
               className="btn-ghost"
               style={{ padding: 8 }}
               onClick={() => navigate(-1)}
-              aria-label="Previous"
+              aria-label={t("previous")}
             >
               <ChevronLeft size={18} />
             </button>
@@ -465,7 +466,7 @@ export default function CalendarView() {
               className="btn-ghost"
               style={{ padding: 8 }}
               onClick={() => navigate(1)}
-              aria-label="Next"
+              aria-label={t("next")}
             >
               <ChevronRight size={18} />
             </button>
@@ -546,7 +547,7 @@ export default function CalendarView() {
                 key={s}
                 active={filters.statuses[s]}
                 color={STATUS_META[s].colorVar}
-                label={STATUS_META[s].label}
+                label={tDashboard(STATUS_LABEL_KEYS[s] ?? "statusDraft")}
                 onClick={() => dispatch(toggleStatusFilter(s))}
               />
             ))}
@@ -580,7 +581,7 @@ export default function CalendarView() {
               key={s}
               active={filters.statuses[s]}
               color={STATUS_META[s].colorVar}
-              label={STATUS_META[s].label}
+              label={tDashboard(STATUS_LABEL_KEYS[s] ?? "statusDraft")}
               onClick={() => dispatch(toggleStatusFilter(s))}
             />
           ))}

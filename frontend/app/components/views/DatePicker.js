@@ -2,6 +2,7 @@
 import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn, badgeDraft } from "../../lib/uiClasses";
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslations, useLocale } from "next-intl";
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
 import {
   addMonths,
@@ -25,6 +26,9 @@ import {
  *   minKey    — optional YYYY-MM-DD lower bound (past dates are disabled)
  */
 export default function DatePicker({ value, onChange, minKey = null }) {
+  const t = useTranslations("datePicker");
+  const tCommon = useTranslations("common");
+  const locale = useLocale();
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(() =>
     value ? parseDateKey(value) : startOfToday()
@@ -52,13 +56,13 @@ export default function DatePicker({ value, onChange, minKey = null }) {
   const weekdays = weekdayHeaders();
 
   const label = selectedKey
-    ? parseDateKey(selectedKey).toLocaleDateString(undefined, {
+    ? parseDateKey(selectedKey).toLocaleDateString(locale, {
         weekday: "short",
         month: "short",
         day: "numeric",
         year: "numeric",
       })
-    : "Pick a date";
+    : t("pickDate");
 
   return (
     <div className="relative" ref={wrapRef}>
@@ -82,7 +86,7 @@ export default function DatePicker({ value, onChange, minKey = null }) {
       {open && (
         <div
           role="dialog"
-          aria-label="Choose a date"
+          aria-label={t("chooseDate")}
           className={`absolute z-[110] mt-1 rounded-xl p-3 shadow-lg ${fadeIn}`}
           style={{
             background: "var(--bg-card)",
@@ -97,7 +101,7 @@ export default function DatePicker({ value, onChange, minKey = null }) {
               onClick={() => setCursor((c) => addMonths(c, -1))}
               className={`${btnGhost}`}
               style={{ padding: 6 }}
-              aria-label="Previous month"
+              aria-label={t("previousMonth")}
             >
               <ChevronLeft size={14} />
             </button>
@@ -112,7 +116,7 @@ export default function DatePicker({ value, onChange, minKey = null }) {
               onClick={() => setCursor((c) => addMonths(c, 1))}
               className={`${btnGhost}`}
               style={{ padding: 6 }}
-              aria-label="Next month"
+              aria-label={t("nextMonth")}
             >
               <ChevronRight size={14} />
             </button>
@@ -195,7 +199,7 @@ export default function DatePicker({ value, onChange, minKey = null }) {
               className="text-xs font-medium"
               style={{ color: "var(--accent-primary)" }}
             >
-              Today
+              {tCommon("today")}
             </button>
             <button
               type="button"
@@ -203,7 +207,7 @@ export default function DatePicker({ value, onChange, minKey = null }) {
               className="text-xs"
               style={{ color: "var(--text-muted)" }}
             >
-              Close
+              {tCommon("close")}
             </button>
           </div>
         </div>

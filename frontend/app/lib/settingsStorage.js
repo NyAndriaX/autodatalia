@@ -6,10 +6,6 @@
 const KEY = "datalia.settings";
 
 const EMPTY = Object.freeze({
-  // AI keys (CG-T01)
-  openrouterKey: "",
-  anthropicKey: "",
-  defaultModel: "",
   // Telegram pairing (TG-T01)
   telegramBotToken: "",
   telegramChatId: "",

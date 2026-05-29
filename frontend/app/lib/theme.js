@@ -4,13 +4,21 @@ export const THEME_STORAGE_KEY = "datalia-theme";
 
 export function getStoredThemePref() {
   if (typeof window === "undefined") return "system";
-  const v = window.localStorage.getItem(THEME_STORAGE_KEY);
-  return v === "light" || v === "dark" || v === "system" ? v : "system";
+  try {
+    const v = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return v === "light" || v === "dark" || v === "system" ? v : "system";
+  } catch {
+    return "system";
+  }
 }
 
 export function storeThemePref(pref) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(THEME_STORAGE_KEY, pref);
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, pref);
+  } catch {
+    /* storage disabled / quota — theme reverts to default on reload */
+  }
 }
 
 export function systemPrefersDark() {
