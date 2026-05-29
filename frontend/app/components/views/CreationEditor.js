@@ -1,7 +1,7 @@
 "use client";
 
 import { useSelector, useDispatch } from "react-redux";
-import { useTranslations } from "next-intl";
+import { btnPrimary, btnSecondary, btnGhost, inputField, fadeIn } from "../../lib/uiClasses";
 import TikTokOptionsPanel from "./TikTokOptionsPanel";
 import {
   setContent,
@@ -20,7 +20,7 @@ import {
   submitForValidationThunk,
   publishNowThunk,
 } from "../../store/editorThunks";
-import { addNotification, setActiveView } from "../../store/uiSlice";
+import { addNotification } from "../../store/uiSlice";
 import { schedulePostThunk } from "../../store/calendarThunks";
 import {
   Sparkles,
@@ -68,6 +68,11 @@ import {
   previewFrameWidth,
 } from "../../lib/platforms";
 import { useIsMobile } from "../../lib/useIsMobile";
+import WorkflowSteps from "../ui/WorkflowSteps";
+import {
+  CREATION_STEPS,
+  deriveCreationWorkflow,
+} from "../../lib/creationWorkflow";
 
 /* Suggested hashtags (skeleton — a contextual AI suggester wires here later,
    plan task HT-T01). */
@@ -78,16 +83,16 @@ const SUGGESTED_HASHTAGS = [
 ];
 
 const MODES = [
-  { id: "free", label: "freePrompt", icon: PenLine, description: "freePromptDesc" },
-  { id: "template", label: "fromTemplate", icon: FileText, description: "fromTemplateDesc" },
-  { id: "scratch", label: "fromScratch", icon: Type, description: "fromScratchDesc" },
+  { id: "free", label: "Free Prompt", icon: PenLine, description: "Write freely with AI assistance" },
+  { id: "template", label: "From Template", icon: FileText, description: "Use a brand template" },
+  { id: "scratch", label: "From Scratch", icon: Type, description: "Start with a blank canvas" },
 ];
 
 /* Compact transforms — the tone selector handles tone separately, so this
    list is now just the two length actions. */
 const QUICK_ACTIONS = [
-  { id: "shorten", label: "shorten", icon: ArrowDownToLine },
-  { id: "expand", label: "expand", icon: ArrowUpFromLine },
+  { id: "shorten", label: "Shorten", icon: ArrowDownToLine },
+  { id: "expand", label: "Expand", icon: ArrowUpFromLine },
 ];
 
 const TEMPLATES = [
@@ -106,8 +111,6 @@ function effectiveRatio(platformId, ratios) {
 
 export default function CreationEditor() {
   const dispatch = useDispatch();
-  const t = useTranslations("creation");
-  const tCommon = useTranslations("common");
   const { currentPost, aiGeneration } = useSelector((state) => state.editor);
   const recentPublishes = useSelector((s) => s.ui.recentPublishes);
   const [currentPreviewIdx, setCurrentPreviewIdx] = useState(0);
@@ -117,12 +120,9 @@ export default function CreationEditor() {
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
   const [generatingMediaKind, setGeneratingMediaKind] = useState(null);
 
-  // ─── AI media generation ──────────────────────────────────────────
-  // Image gen still runs inline (it's fast, single call). Video gen
-  // now hands off to the AI Video page so the user can pick the
-  // model, mode (text/image/UGC) and reference image — the CEO's spec.
-  // The handoff stashes the prompt + the first uploaded image (if any)
-  // into sessionStorage; VideoJobsView pops it on mount.
+  // ─── AI media generation (image / video) ──────────────────────────
+  // Same backend endpoints the PostEditorPopup and ScheduleModal use;
+  // previously missing from the main editor surface.
   const handleGenerateMedia = async (kind) => {
     const prompt = currentPost.content.trim();
     if (!prompt) {
@@ -134,48 +134,25 @@ export default function CreationEditor() {
       );
       return;
     }
-    const ratio =
-      Object.values(currentPost.ratios || {})[0] || (kind === "video" ? "9:16" : "1:1");
-
-    if (kind === "video") {
-      // Stash prefill — VideoJobsView reads & clears it on mount.
-      const uploadedImage = (currentPost.media || []).find(
-        (m) => m.kind === "image" && m.status === "uploaded" && m.remoteUrl
-      );
-      const prefill = {
-        prompt,
-        ratio,
-        mode: uploadedImage ? "image" : "text",
-        referenceImage: uploadedImage
-          ? { filename: uploadedImage.filename, url: uploadedImage.remoteUrl }
-          : null,
-      };
-      try {
-        sessionStorage.setItem(
-          "datalia.videoJobs.prefill",
-          JSON.stringify(prefill)
-        );
-      } catch {
-        /* private mode — proceed without prefill */
-      }
-      dispatch(setActiveView("videos"));
-      return;
-    }
-
     setGeneratingMediaKind(kind);
     try {
-      const result = await generateImageAsset({ prompt, ratio });
+      const ratio =
+        Object.values(currentPost.ratios || {})[0] || (kind === "video" ? "9:16" : "1:1");
+      const result =
+        kind === "video"
+          ? await generateVideoAsset({ prompt, ratio })
+          : await generateImageAsset({ prompt, ratio });
       dispatch(addMedia([result.mediaItem]));
       dispatch(
         addNotification({
-          message: `Image generated via ${result.data?.provider || "backend"}.`,
+          message: `${kind === "video" ? "Video" : "Image"} generated via ${result.data?.provider || "backend"}.`,
           type: "success",
         })
       );
     } catch (err) {
       dispatch(
         addNotification({
-          message: `Image generation failed: ${err.message || "unknown error"}`,
+          message: `${kind === "video" ? "Video" : "Image"} generation failed: ${err.message || "unknown error"}`,
           type: "error",
         })
       );
@@ -266,9 +243,26 @@ export default function CreationEditor() {
 
   const isBusy = aiGeneration.isGenerating || aiGeneration.isApplyingAction;
 
+  const workflow = useMemo(
+    () => deriveCreationWorkflow(currentPost),
+    [currentPost]
+  );
+
+  const scrollToStep = useCallback((stepId) => {
+    const targets = {
+      setup: "mode-free",
+      platforms: "platform-label",
+      content: "content-editor",
+      media: "media-uploader-section",
+      publish: "save-draft-btn",
+    };
+    const el = document.getElementById(targets[stepId]);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, []);
+
   return (
     <div
-      className={`flex h-full min-h-0 animate-fade-in ${
+      className={`flex h-full min-h-0 ${fadeIn} ${
         isMobile ? "flex-col overflow-y-auto" : ""
       }`}
       style={{ gap: "1px", background: "var(--border-default)" }}
@@ -280,6 +274,44 @@ export default function CreationEditor() {
         }`}
         style={{ background: "var(--bg-primary)" }}
       >
+        {/* Workflow stepper + progress */}
+        <div
+          className="px-4 py-3 shrink-0"
+          style={{
+            borderBottom: "1px solid var(--border-default)",
+            background: "var(--bg-card)",
+          }}
+        >
+          <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+            <p
+              className="text-xs font-bold uppercase tracking-wider m-0"
+              style={{ color: "var(--text-tertiary)" }}
+            >
+              Creation workflow
+            </p>
+            <span
+              className="text-xs font-semibold px-2.5 py-1 rounded-full"
+              style={{
+                background: workflow.readyToPublish
+                  ? "rgba(34, 197, 94, 0.15)"
+                  : "rgba(29, 63, 190, 0.1)",
+                color: workflow.readyToPublish
+                  ? "var(--status-approved)"
+                  : "var(--accent-primary)",
+              }}
+            >
+              {workflow.progressPct}% ready
+            </span>
+          </div>
+          <WorkflowSteps
+            steps={CREATION_STEPS}
+            currentId={workflow.currentId}
+            completedIds={workflow.completedIds}
+            onStepClick={scrollToStep}
+            compact={isMobile}
+          />
+        </div>
+
         {/* Mode Selector */}
         <div className="px-6 py-4 shrink-0" style={{ borderBottom: "1px solid var(--border-default)" }}>
           <div className="flex gap-2" role="tablist" aria-label="Creation mode">
@@ -301,7 +333,7 @@ export default function CreationEditor() {
                   }}
                 >
                   <Icon size={16} aria-hidden="true" />
-                  {t(mode.label)}
+                  {mode.label}
                 </button>
               );
             })}
@@ -315,7 +347,7 @@ export default function CreationEditor() {
             style={{ color: "var(--text-tertiary)" }}
             id="platform-label"
           >
-            {t("targetPlatforms")}
+            Target Platforms
           </p>
           <div className="flex gap-2 flex-wrap" role="group" aria-labelledby="platform-label">
             {PLATFORMS.map((platform) => {
@@ -352,7 +384,7 @@ export default function CreationEditor() {
 
           {/* Template selector — only visible in template mode */}
           {currentPost.mode === "template" && (
-            <div className="mb-4 animate-fade-in">
+            <div className={`mb-4 ${fadeIn}`}>
               <label
                 htmlFor="template-select"
                 className="text-xs font-semibold uppercase tracking-wider mb-2 block"
@@ -362,7 +394,7 @@ export default function CreationEditor() {
               </label>
               <select
                 id="template-select"
-                className="input-field cursor-pointer"
+                className={`${inputField} cursor-pointer`}
                 value={currentPost.template}
                 onChange={(e) => dispatch(setTemplate(e.target.value))}
               >
@@ -378,7 +410,7 @@ export default function CreationEditor() {
 
           {/* Text editor */}
           <div className="relative">
-            <label htmlFor="content-editor" className="sr-only">{tCommon("loading") && ""}{/* hidden */}Post content</label>
+            <label htmlFor="content-editor" className="sr-only">Post content</label>
             <textarea
               id="content-editor"
               value={currentPost.content}
@@ -434,7 +466,7 @@ export default function CreationEditor() {
           {/* AI Variants — pick between the alternatives the LLM Router
               returned (Redux already holds them; CR-T05 in the plan). */}
           {aiGeneration.variants.length > 0 && (
-            <div className="mt-5 animate-fade-in">
+            <div className={`mt-5 ${fadeIn}`}>
               <p
                 className="text-xs font-semibold uppercase tracking-wider mb-2"
                 style={{ color: "var(--text-tertiary)" }}
@@ -493,7 +525,7 @@ export default function CreationEditor() {
                 aria-labelledby="tone-label"
                 value={currentPost.tone || ""}
                 onChange={(e) => dispatch(setTone(e.target.value || null))}
-                className="input-field cursor-pointer"
+                className={`${inputField} cursor-pointer`}
                 title="Sent to the AI on the next Generate"
               >
                 <option value="">Auto — let the model choose</option>
@@ -512,7 +544,7 @@ export default function CreationEditor() {
                   <button
                     key={action.id}
                     id={`quick-action-${action.id}`}
-                    className="btn-secondary flex items-center gap-2 text-xs h-9"
+                    className={`${btnSecondary} flex items-center gap-2 text-xs h-9`}
                     disabled={isBusy || !currentPost.content.trim()}
                     onClick={() => dispatch(applyQuickActionThunk(action.id))}
                     aria-label={`${action.label} — transform content`}
@@ -523,7 +555,7 @@ export default function CreationEditor() {
                     ) : (
                       <Icon size={14} aria-hidden="true" />
                     )}
-                    {t(action.label)}
+                    {action.label}
                   </button>
                 );
               })}
@@ -534,7 +566,7 @@ export default function CreationEditor() {
           <div className="mt-4">
             <button
               onClick={() => setShowHashtags((v) => !v)}
-              className="btn-secondary inline-flex items-center gap-2 text-xs"
+              className={`${btnSecondary} inline-flex items-center gap-2 text-xs`}
               aria-expanded={showHashtags}
             >
               <Hash size={14} aria-hidden="true" />
@@ -549,7 +581,7 @@ export default function CreationEditor() {
               />
             </button>
             {showHashtags && (
-              <div className="flex gap-2 flex-wrap mt-3 animate-fade-in">
+              <div className={`flex gap-2 flex-wrap mt-3 ${fadeIn}`}>
                 {SUGGESTED_HASHTAGS.map((tag) => (
                   <button
                     key={tag}
@@ -573,7 +605,7 @@ export default function CreationEditor() {
           </div>
 
           {/* Media upload + AI generation */}
-          <div className="mt-5">
+          <div className="mt-5" id="media-uploader-section">
             <MediaUploader />
             {/* AI image / video generation — same backend the popup uses */}
             <div className="flex gap-2 mt-3">
@@ -581,29 +613,29 @@ export default function CreationEditor() {
                 id="generate-ai-image-btn"
                 onClick={() => handleGenerateMedia("image")}
                 disabled={!!generatingMediaKind}
-                className="btn-secondary text-xs inline-flex items-center gap-1.5"
-                title={t("aiImage")}
+                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
+                title="Generate an image from the current prompt"
               >
                 {generatingMediaKind === "image" ? (
                   <Loader2 size={13} className="animate-spin" />
                 ) : (
                   <Sparkles size={13} />
                 )}{" "}
-                {t("aiImageBtn")}
+                AI image
               </button>
               <button
                 id="generate-ai-video-btn"
                 onClick={() => handleGenerateMedia("video")}
                 disabled={!!generatingMediaKind}
-                className="btn-secondary text-xs inline-flex items-center gap-1.5"
-                title={t("aiVideo")}
+                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
+                title="Generate a motion video from the current prompt"
               >
                 {generatingMediaKind === "video" ? (
                   <Loader2 size={13} className="animate-spin" />
                 ) : (
                   <Film size={13} />
                 )}{" "}
-                {t("aiVideoBtn")}
+                AI video
               </button>
             </div>
           </div>
@@ -623,7 +655,7 @@ export default function CreationEditor() {
               onClick={() => dispatch(generateContentThunk())}
               disabled={aiGeneration.isGenerating}
               aria-busy={aiGeneration.isGenerating}
-              className="btn-primary flex items-center justify-center gap-2 w-full py-3 text-base"
+              className={`${btnPrimary} flex items-center justify-center gap-2 w-full py-3 text-base`}
               style={{
                 opacity: aiGeneration.isGenerating ? 0.7 : 1,
                 cursor: aiGeneration.isGenerating ? "not-allowed" : "pointer",
@@ -637,12 +669,12 @@ export default function CreationEditor() {
               ) : (
                 <>
                   <Sparkles size={20} aria-hidden="true" />
-                  {t("generate")}{currentPost.tone ? ` (${TONES.find((tn) => tn.id === currentPost.tone)?.label || "tone"})` : ""}
+                  Generate{currentPost.tone ? ` (${TONES.find((t) => t.id === currentPost.tone)?.label || "tone"})` : ""}
                 </>
               )}
             </button>
             <p className="text-[11px] text-center mt-2" style={{ color: "var(--text-muted)" }}>
-              {t("unchangedReuses")}
+              Unchanged prompt reuses the last result — no tokens spent.
             </p>
             {aiGeneration.variants.length > 0 && (
               <div className="flex items-center justify-center gap-4 mt-2">
@@ -693,13 +725,13 @@ export default function CreationEditor() {
         >
           <button
             id="save-draft-btn"
-            className="btn-ghost inline-flex items-center gap-2 text-sm"
+            className={`${btnGhost} inline-flex items-center gap-2 text-sm`}
             onClick={() => dispatch(saveDraftThunk())}
             aria-label="Save post as draft"
             style={{ color: "var(--text-secondary)" }}
           >
             <Save size={14} aria-hidden="true" />
-            {t("saveDraft")}
+            Save draft
           </button>
           <div className="flex-1" />
           <SplitPublishButton
@@ -799,8 +831,8 @@ export default function CreationEditor() {
               style={{ color: "var(--text-muted)" }}
             >
               <Zap size={40} className="mb-3 opacity-30" aria-hidden="true" />
-              <p className="text-sm">{t("noPlatformsSelected")}</p>
-              <p className="text-xs mt-1">{t("togglePlatformsHint")}</p>
+              <p className="text-sm">No platforms selected</p>
+              <p className="text-xs mt-1">Toggle platforms on the left to preview</p>
             </div>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col items-center">
@@ -811,7 +843,7 @@ export default function CreationEditor() {
                 return (
                   <div
                     key={platform.id}
-                    className="mx-auto my-auto animate-fade-in"
+                    className={`mx-auto my-auto ${fadeIn}`}
                     style={{ width: frameWidth, maxWidth: "100%" }}
                   >
                     <PlatformPreview
@@ -934,7 +966,7 @@ function RatioPicker({ platform, value, onChange, media }) {
       {open && (
         <div
           role="listbox"
-          className="absolute right-0 z-30 mt-1 rounded-xl p-1.5 shadow-lg animate-fade-in"
+          className={`absolute right-0 z-30 mt-1 rounded-xl p-1.5 shadow-lg ${fadeIn}`}
           style={{
             background: "var(--bg-card)",
             border: "1px solid var(--border-default)",
@@ -1009,7 +1041,6 @@ function RatioPicker({ platform, value, onChange, media }) {
    and one ghost (Save draft) — every other path lives in the dropdown.
    Closes on outside click / Escape, mirrors RatioPicker. */
 function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
-  const t = useTranslations("creation");
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -1029,18 +1060,18 @@ function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
     <div className="relative inline-flex" ref={ref}>
       <button
         id="publish-now-btn"
-        className="btn-primary flex items-center gap-2"
+        className={`${btnPrimary} flex items-center gap-2`}
         onClick={onPublish}
         aria-label="Publish post now"
         style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
       >
         <Send size={16} aria-hidden="true" />
-        {t("publishNow")}
+        Publish now
       </button>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="btn-primary"
+        className={`${btnPrimary}`}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="More publish options"
@@ -1056,7 +1087,7 @@ function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
       {open && (
         <div
           role="menu"
-          className="absolute right-0 bottom-full mb-1 z-30 rounded-xl p-1.5 shadow-lg animate-fade-in"
+          className={`absolute right-0 bottom-full mb-1 z-30 rounded-xl p-1.5 shadow-lg ${fadeIn}`}
           style={{
             background: "var(--bg-card)",
             border: "1px solid var(--border-default)",
@@ -1066,7 +1097,7 @@ function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
         >
           <MenuItem
             icon={CalendarClock}
-            label={t("scheduleFor")}
+            label="Schedule for later…"
             onClick={() => {
               setOpen(false);
               onSchedule();
@@ -1074,7 +1105,7 @@ function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
           />
           <MenuItem
             icon={MessageSquare}
-            label={t("submitForValidation")}
+            label="Submit for validation"
             sub="Telegram approval flow"
             onClick={() => {
               setOpen(false);
@@ -1122,7 +1153,6 @@ function PlatformPreview({
   media = [],
   creator = null,
 }) {
-  const t = useTranslations("creation");
   const [mediaIdx, setMediaIdx] = useState(0);
   const Icon = platform.icon;
   const charPercent = Math.min((content.length / platform.maxChars) * 100, 100);
@@ -1155,7 +1185,7 @@ function PlatformPreview({
 
   return (
     <article
-      className="overflow-hidden rounded-[28px] transition-all duration-200 animate-fade-in"
+      className={`overflow-hidden rounded-[28px] transition-all duration-200 ${fadeIn}`}
       style={{
         background: "var(--bg-card)",
         border: "1px solid var(--border-default)",
@@ -1175,7 +1205,7 @@ function PlatformPreview({
           {platform.label}
         </span>
         <div className="flex-1" />
-        <span className={`platform-tag ${platform.className}`}>{t("previewBadge")}</span>
+        <span className={`platform-tag ${platform.className}`}>Preview</span>
       </div>
 
       {/* Media — real uploads, or an empty-state placeholder */}
@@ -1252,9 +1282,9 @@ function PlatformPreview({
             <Icon size={32} className="mx-auto mb-2 opacity-30" style={{ color: platform.color }} aria-hidden="true" />
             <p className="text-xs">
               {ratio}{" "}
-              {isVertical ? t("vertical") : isSquare ? t("square") : t("landscape")}
+              {isVertical ? "Vertical" : isSquare ? "Square" : "Landscape"}
             </p>
-            <p className="text-xs mt-0.5 opacity-60">{t("uploadHint")}</p>
+            <p className="text-xs mt-0.5 opacity-60">Upload media on the left to preview</p>
           </div>
         )}
       </div>
@@ -1282,7 +1312,7 @@ function PlatformPreview({
           )}
           <div>
             <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>{creatorHandle}</p>
-            <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>{t("justNow")}</p>
+            <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>Just now</p>
           </div>
         </div>
         <p
@@ -1297,7 +1327,7 @@ function PlatformPreview({
             WebkitLineClamp: 5,
           }}
         >
-          {content || t("postContentPlaceholder")}
+          {content || "Your post content will appear here…"}
         </p>
       </div>
 

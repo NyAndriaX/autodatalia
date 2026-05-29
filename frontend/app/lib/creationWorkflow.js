@@ -1,0 +1,37 @@
+import { PenLine, Share2, FileText, Image, Send } from "lucide-react";
+
+export const CREATION_STEPS = [
+  { id: "setup", label: "Setup", hint: "Mode & tone", icon: PenLine },
+  { id: "platforms", label: "Platforms", hint: "Pick targets", icon: Share2 },
+  { id: "content", label: "Content", hint: "Write caption", icon: FileText },
+  { id: "media", label: "Media", hint: "Add visuals", icon: Image },
+  { id: "publish", label: "Publish", hint: "Go live", icon: Send },
+];
+
+/**
+ * Derive workflow step state from the current editor post.
+ */
+export function deriveCreationWorkflow(post) {
+  const hasPlatforms = Object.values(post.platforms || {}).some(Boolean);
+  const hasContent = Boolean((post.content || "").trim());
+  const hasMedia = (post.media || []).some(
+    (m) => m.status === "uploaded" || m.previewUrl || m.remoteUrl
+  );
+  const readyToPublish = hasPlatforms && hasContent;
+
+  const completedIds = ["setup"];
+  if (hasPlatforms) completedIds.push("platforms");
+  if (hasContent) completedIds.push("content");
+  if (hasMedia) completedIds.push("media");
+  if (readyToPublish) completedIds.push("publish");
+
+  let currentId = "setup";
+  if (!hasPlatforms) currentId = "platforms";
+  else if (!hasContent) currentId = "content";
+  else if (!hasMedia) currentId = "media";
+  else currentId = "publish";
+
+  const progressPct = Math.round((completedIds.length / CREATION_STEPS.length) * 100);
+
+  return { completedIds, currentId, progressPct, readyToPublish, hasMedia };
+}

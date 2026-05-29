@@ -1,4 +1,5 @@
 "use client";
+import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn, badgeDraft } from "../../lib/uiClasses";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch } from "react-redux";
@@ -280,7 +281,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-fade-in"
+      className={`fixed inset-0 z-[100] flex items-center justify-center p-4 ${fadeIn}`}
       style={{ background: "rgba(15, 23, 42, 0.5)" }}
       onClick={onClose}
     >
@@ -312,7 +313,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
               Edit post
             </h3>
             <span
-              className={STATUS_META[status]?.badgeClass || "badge-draft"}
+              className={STATUS_META[status]?.badgeClass || badgeDraft}
               style={{ fontSize: 10 }}
             >
               {STATUS_META[status]?.label || status}
@@ -320,7 +321,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
           </div>
           <button
             onClick={onClose}
-            className="btn-ghost"
+            className={`${btnGhost}`}
             style={{ padding: 6 }}
             aria-label="Close"
           >
@@ -391,7 +392,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
               value={content}
               onChange={(e) => setContent(e.target.value)}
               rows={5}
-              className="input-field"
+              className={`${inputField}`}
               style={{ resize: "vertical", marginBottom: 16 }}
               placeholder="What do you want to post? Or click Generate with AI."
             />
@@ -405,13 +406,13 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
             <div className="flex flex-wrap gap-2 mb-2">
               <button
                 onClick={() => imageInputRef.current?.click()}
-                className="btn-secondary text-xs inline-flex items-center gap-1.5"
+                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
               >
                 <Upload size={13} /> Image
               </button>
               <button
                 onClick={() => videoInputRef.current?.click()}
-                className="btn-secondary text-xs inline-flex items-center gap-1.5"
+                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
               >
                 <Film size={13} /> Video
               </button>
@@ -420,7 +421,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
               <button
                 onClick={() => handleGenerateMedia("image")}
                 disabled={!!generatingMediaKind}
-                className="btn-secondary text-xs inline-flex items-center gap-1.5"
+                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
                 title="Generate an image from the current prompt"
               >
                 {generatingMediaKind === "image" ? (
@@ -433,7 +434,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
               <button
                 onClick={() => handleGenerateMedia("video")}
                 disabled={!!generatingMediaKind}
-                className="btn-secondary text-xs inline-flex items-center gap-1.5"
+                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
                 title="Generate a motion video from the current prompt"
               >
                 {generatingMediaKind === "video" ? (
@@ -623,7 +624,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
             >
               <span style={{ color: "var(--text-muted)" }}>Saving as</span>
               <span
-                className={STATUS_META[status]?.badgeClass || "badge-draft"}
+                className={STATUS_META[status]?.badgeClass || badgeDraft}
                 style={{ fontSize: 10 }}
               >
                 {STATUS_META[status]?.label || status}
@@ -808,11 +809,11 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
             <Trash2 size={13} /> Delete
           </button>
           <div className="flex items-center gap-2">
-            <button className="btn-secondary text-sm" onClick={onClose}>
+            <button className={`${btnSecondary} text-sm`} onClick={onClose}>
               Cancel
             </button>
             <button
-              className="btn-primary text-sm"
+              className={`${btnPrimary} text-sm`}
               onClick={handleSave}
               disabled={hasPending}
               title={

@@ -83,3 +83,13 @@ export async function apiHealthCheck() {
     return "offline";
   }
 }
+
+/** GET /stats — quick aggregated post counts for the KPI strip. */
+export async function apiGetStats() {
+  return apiFetch("/stats");
+}
+
+/** GET /dashboard-summary — rich dashboard payload (posts + connections + media). */
+export async function apiGetDashboardSummary() {
+  return apiFetch("/dashboard-summary");
+}

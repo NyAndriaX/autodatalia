@@ -1,4 +1,5 @@
 "use client";
+import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn, badgeDraft } from "../../lib/uiClasses";
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -145,7 +146,7 @@ export default function TimePicker({ value = "09:00", onChange, minuteStep = 5 }
       ref={popoverRef}
       role="dialog"
       aria-label="Choose a time"
-      className="rounded-xl p-3 shadow-lg animate-fade-in"
+      className={`rounded-xl p-3 shadow-lg ${fadeIn}`}
       style={{
         position: "fixed",
         top: popoverPos.top,

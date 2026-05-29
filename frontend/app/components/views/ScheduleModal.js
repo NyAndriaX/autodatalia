@@ -1,4 +1,5 @@
 "use client";
+import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn, badgeDraft } from "../../lib/uiClasses";
 
 import { useState, useRef, useEffect } from "react";
 import { useDispatch } from "react-redux";
@@ -253,12 +254,12 @@ export default function ScheduleModal({
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-fade-in"
+      className={`fixed inset-0 z-[100] flex items-center justify-center p-4 ${fadeIn}`}
       style={{ background: "rgba(15, 23, 42, 0.45)" }}
       onClick={onClose}
     >
       <div
-        className="glass-card w-full max-w-md p-5"
+        className={`${glassCard} w-full max-w-md p-5`}
         style={{
           background: "var(--bg-card)",
           border: "1px solid var(--border-default)",
@@ -271,7 +272,7 @@ export default function ScheduleModal({
           <h3 className="text-base font-bold" style={{ color: "var(--text-primary)" }}>
             {title}
           </h3>
-          <button onClick={onClose} className="btn-ghost" style={{ padding: 6 }} aria-label="Close">
+          <button onClick={onClose} className={`${btnGhost}`} style={{ padding: 6 }} aria-label="Close">
             <X size={16} />
           </button>
         </div>
@@ -323,7 +324,7 @@ export default function ScheduleModal({
           onChange={(e) => setContent(e.target.value)}
           placeholder="What do you want to post? Or click Generate with AI."
           rows={3}
-          className="input-field"
+          className={`${inputField}`}
           style={{ resize: "none", marginBottom: 14 }}
         />
 
@@ -360,7 +361,7 @@ export default function ScheduleModal({
             type="button"
             onClick={() => handleGenerateMedia("image")}
             disabled={!!generatingMediaKind}
-            className="btn-secondary text-xs inline-flex items-center gap-1.5"
+            className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
           >
             {generatingMediaKind === "image" ? (
               <Loader2 size={13} className="animate-spin" />
@@ -373,7 +374,7 @@ export default function ScheduleModal({
             type="button"
             onClick={() => handleGenerateMedia("video")}
             disabled={!!generatingMediaKind}
-            className="btn-secondary text-xs inline-flex items-center gap-1.5"
+            className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
           >
             {generatingMediaKind === "video" ? (
               <Loader2 size={13} className="animate-spin" />
@@ -508,11 +509,11 @@ export default function ScheduleModal({
         </div>
 
         <div className="flex justify-end gap-2">
-          <button className="btn-secondary" onClick={onClose}>
+          <button className={`${btnSecondary}`} onClick={onClose}>
             Cancel
           </button>
           <button
-            className="btn-primary"
+            className={`${btnPrimary}`}
             disabled={hasPending}
             title={hasPending ? "Waiting for media to finish uploading…" : undefined}
             onClick={() =>

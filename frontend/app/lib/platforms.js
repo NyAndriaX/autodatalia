@@ -8,6 +8,18 @@
  */
 
 import { Facebook, Instagram, Linkedin, Video } from "lucide-react";
+import {
+  platformFacebook,
+  platformInstagram,
+  platformTiktok,
+  platformLinkedin,
+  badgeDraft,
+  badgePending,
+  badgeApproved,
+  badgeError,
+  badgeAwaiting,
+  badgeRejected,
+} from "./uiClasses";
 
 // `color` values are kept as the raw brand hex (TikTok uses a theme var for
 // readable foreground) so callers that build alpha shades by string-concat
@@ -19,7 +31,7 @@ export const PLATFORMS = [
     label: "Facebook",
     icon: Facebook,
     color: "#1877F2",
-    className: "platform-facebook",
+    className: platformFacebook,
     maxChars: 63206,
     maxHashtags: 30,
   },
@@ -28,7 +40,7 @@ export const PLATFORMS = [
     label: "Instagram",
     icon: Instagram,
     color: "#E1306C",
-    className: "platform-instagram",
+    className: platformInstagram,
     maxChars: 2200,
     maxHashtags: 30,
   },
@@ -37,7 +49,7 @@ export const PLATFORMS = [
     label: "TikTok",
     icon: Video,
     color: "var(--platform-tiktok-fg)",
-    className: "platform-tiktok",
+    className: platformTiktok,
     maxChars: 2200,
     maxHashtags: 5,
   },
@@ -46,7 +58,7 @@ export const PLATFORMS = [
     label: "LinkedIn",
     icon: Linkedin,
     color: "#0A66C2",
-    className: "platform-linkedin",
+    className: platformLinkedin,
     maxChars: 3000,
     maxHashtags: 5,
   },
@@ -151,7 +163,7 @@ export function activePlatformIds(platforms) {
 
 /**
  * Post statuses. `badgeClass` + `colorVar` reuse the existing
- * .badge-* utility classes and --status-* CSS variables in globals.css.
+ * badge classes from uiClasses.js and --status-* tokens in globals.css.
  */
 export const STATUSES = [
   "draft",
@@ -166,13 +178,13 @@ export const STATUSES = [
 ];
 
 export const STATUS_META = {
-  draft: { label: "Draft", badgeClass: "badge-draft", colorVar: "var(--status-draft)" },
-  scheduled: { label: "Scheduled", badgeClass: "badge-pending", colorVar: "var(--status-pending)" },
-  pending: { label: "Pending", badgeClass: "badge-pending", colorVar: "var(--status-pending)" },
-  awaiting_validation: { label: "Awaiting Telegram", badgeClass: "badge-awaiting", colorVar: "var(--status-awaiting)" },
-  approved: { label: "Approved", badgeClass: "badge-approved", colorVar: "var(--status-approved)" },
-  rejected: { label: "Rejected", badgeClass: "badge-rejected", colorVar: "var(--status-rejected)" },
-  cancelled: { label: "Cancelled", badgeClass: "badge-rejected", colorVar: "var(--status-rejected)" },
-  published: { label: "Published", badgeClass: "badge-approved", colorVar: "var(--status-published)" },
-  error: { label: "Error", badgeClass: "badge-error", colorVar: "var(--status-error)" },
+  draft: { label: "Draft", badgeClass: badgeDraft, colorVar: "var(--status-draft)" },
+  scheduled: { label: "Scheduled", badgeClass: badgePending, colorVar: "var(--status-pending)" },
+  pending: { label: "Pending", badgeClass: badgePending, colorVar: "var(--status-pending)" },
+  awaiting_validation: { label: "Awaiting Telegram", badgeClass: badgeAwaiting, colorVar: "var(--status-awaiting)" },
+  approved: { label: "Approved", badgeClass: badgeApproved, colorVar: "var(--status-approved)" },
+  rejected: { label: "Rejected", badgeClass: badgeRejected, colorVar: "var(--status-rejected)" },
+  cancelled: { label: "Cancelled", badgeClass: badgeRejected, colorVar: "var(--status-rejected)" },
+  published: { label: "Published", badgeClass: badgeApproved, colorVar: "var(--status-published)" },
+  error: { label: "Error", badgeClass: badgeError, colorVar: "var(--status-error)" },
 };
