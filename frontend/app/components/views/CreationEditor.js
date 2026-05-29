@@ -1,6 +1,7 @@
 "use client";
 
 import { useSelector, useDispatch } from "react-redux";
+import { btnPrimary, btnSecondary, btnGhost, inputField, fadeIn } from "../../lib/uiClasses";
 import TikTokOptionsPanel from "./TikTokOptionsPanel";
 import {
   setContent,
@@ -67,6 +68,11 @@ import {
   previewFrameWidth,
 } from "../../lib/platforms";
 import { useIsMobile } from "../../lib/useIsMobile";
+import WorkflowSteps from "../ui/WorkflowSteps";
+import {
+  CREATION_STEPS,
+  deriveCreationWorkflow,
+} from "../../lib/creationWorkflow";
 
 /* Suggested hashtags (skeleton — a contextual AI suggester wires here later,
    plan task HT-T01). */
@@ -237,9 +243,26 @@ export default function CreationEditor() {
 
   const isBusy = aiGeneration.isGenerating || aiGeneration.isApplyingAction;
 
+  const workflow = useMemo(
+    () => deriveCreationWorkflow(currentPost),
+    [currentPost]
+  );
+
+  const scrollToStep = useCallback((stepId) => {
+    const targets = {
+      setup: "mode-free",
+      platforms: "platform-label",
+      content: "content-editor",
+      media: "media-uploader-section",
+      publish: "save-draft-btn",
+    };
+    const el = document.getElementById(targets[stepId]);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, []);
+
   return (
     <div
-      className={`flex h-full min-h-0 animate-fade-in ${
+      className={`flex h-full min-h-0 ${fadeIn} ${
         isMobile ? "flex-col overflow-y-auto" : ""
       }`}
       style={{ gap: "1px", background: "var(--border-default)" }}
@@ -251,6 +274,44 @@ export default function CreationEditor() {
         }`}
         style={{ background: "var(--bg-primary)" }}
       >
+        {/* Workflow stepper + progress */}
+        <div
+          className="px-4 py-3 shrink-0"
+          style={{
+            borderBottom: "1px solid var(--border-default)",
+            background: "var(--bg-card)",
+          }}
+        >
+          <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+            <p
+              className="text-xs font-bold uppercase tracking-wider m-0"
+              style={{ color: "var(--text-tertiary)" }}
+            >
+              Creation workflow
+            </p>
+            <span
+              className="text-xs font-semibold px-2.5 py-1 rounded-full"
+              style={{
+                background: workflow.readyToPublish
+                  ? "rgba(34, 197, 94, 0.15)"
+                  : "rgba(29, 63, 190, 0.1)",
+                color: workflow.readyToPublish
+                  ? "var(--status-approved)"
+                  : "var(--accent-primary)",
+              }}
+            >
+              {workflow.progressPct}% ready
+            </span>
+          </div>
+          <WorkflowSteps
+            steps={CREATION_STEPS}
+            currentId={workflow.currentId}
+            completedIds={workflow.completedIds}
+            onStepClick={scrollToStep}
+            compact={isMobile}
+          />
+        </div>
+
         {/* Mode Selector */}
         <div className="px-6 py-4 shrink-0" style={{ borderBottom: "1px solid var(--border-default)" }}>
           <div className="flex gap-2" role="tablist" aria-label="Creation mode">
@@ -323,7 +384,7 @@ export default function CreationEditor() {
 
           {/* Template selector — only visible in template mode */}
           {currentPost.mode === "template" && (
-            <div className="mb-4 animate-fade-in">
+            <div className={`mb-4 ${fadeIn}`}>
               <label
                 htmlFor="template-select"
                 className="text-xs font-semibold uppercase tracking-wider mb-2 block"
@@ -333,7 +394,7 @@ export default function CreationEditor() {
               </label>
               <select
                 id="template-select"
-                className="input-field cursor-pointer"
+                className={`${inputField} cursor-pointer`}
                 value={currentPost.template}
                 onChange={(e) => dispatch(setTemplate(e.target.value))}
               >
@@ -405,7 +466,7 @@ export default function CreationEditor() {
           {/* AI Variants — pick between the alternatives the LLM Router
               returned (Redux already holds them; CR-T05 in the plan). */}
           {aiGeneration.variants.length > 0 && (
-            <div className="mt-5 animate-fade-in">
+            <div className={`mt-5 ${fadeIn}`}>
               <p
                 className="text-xs font-semibold uppercase tracking-wider mb-2"
                 style={{ color: "var(--text-tertiary)" }}
@@ -464,7 +525,7 @@ export default function CreationEditor() {
                 aria-labelledby="tone-label"
                 value={currentPost.tone || ""}
                 onChange={(e) => dispatch(setTone(e.target.value || null))}
-                className="input-field cursor-pointer"
+                className={`${inputField} cursor-pointer`}
                 title="Sent to the AI on the next Generate"
               >
                 <option value="">Auto — let the model choose</option>
@@ -483,7 +544,7 @@ export default function CreationEditor() {
                   <button
                     key={action.id}
                     id={`quick-action-${action.id}`}
-                    className="btn-secondary flex items-center gap-2 text-xs h-9"
+                    className={`${btnSecondary} flex items-center gap-2 text-xs h-9`}
                     disabled={isBusy || !currentPost.content.trim()}
                     onClick={() => dispatch(applyQuickActionThunk(action.id))}
                     aria-label={`${action.label} — transform content`}
@@ -505,7 +566,7 @@ export default function CreationEditor() {
           <div className="mt-4">
             <button
               onClick={() => setShowHashtags((v) => !v)}
-              className="btn-secondary inline-flex items-center gap-2 text-xs"
+              className={`${btnSecondary} inline-flex items-center gap-2 text-xs`}
               aria-expanded={showHashtags}
             >
               <Hash size={14} aria-hidden="true" />
@@ -520,7 +581,7 @@ export default function CreationEditor() {
               />
             </button>
             {showHashtags && (
-              <div className="flex gap-2 flex-wrap mt-3 animate-fade-in">
+              <div className={`flex gap-2 flex-wrap mt-3 ${fadeIn}`}>
                 {SUGGESTED_HASHTAGS.map((tag) => (
                   <button
                     key={tag}
@@ -544,7 +605,7 @@ export default function CreationEditor() {
           </div>
 
           {/* Media upload + AI generation */}
-          <div className="mt-5">
+          <div className="mt-5" id="media-uploader-section">
             <MediaUploader />
             {/* AI image / video generation — same backend the popup uses */}
             <div className="flex gap-2 mt-3">
@@ -552,7 +613,7 @@ export default function CreationEditor() {
                 id="generate-ai-image-btn"
                 onClick={() => handleGenerateMedia("image")}
                 disabled={!!generatingMediaKind}
-                className="btn-secondary text-xs inline-flex items-center gap-1.5"
+                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
                 title="Generate an image from the current prompt"
               >
                 {generatingMediaKind === "image" ? (
@@ -566,7 +627,7 @@ export default function CreationEditor() {
                 id="generate-ai-video-btn"
                 onClick={() => handleGenerateMedia("video")}
                 disabled={!!generatingMediaKind}
-                className="btn-secondary text-xs inline-flex items-center gap-1.5"
+                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
                 title="Generate a motion video from the current prompt"
               >
                 {generatingMediaKind === "video" ? (
@@ -594,7 +655,7 @@ export default function CreationEditor() {
               onClick={() => dispatch(generateContentThunk())}
               disabled={aiGeneration.isGenerating}
               aria-busy={aiGeneration.isGenerating}
-              className="btn-primary flex items-center justify-center gap-2 w-full py-3 text-base"
+              className={`${btnPrimary} flex items-center justify-center gap-2 w-full py-3 text-base`}
               style={{
                 opacity: aiGeneration.isGenerating ? 0.7 : 1,
                 cursor: aiGeneration.isGenerating ? "not-allowed" : "pointer",
@@ -664,7 +725,7 @@ export default function CreationEditor() {
         >
           <button
             id="save-draft-btn"
-            className="btn-ghost inline-flex items-center gap-2 text-sm"
+            className={`${btnGhost} inline-flex items-center gap-2 text-sm`}
             onClick={() => dispatch(saveDraftThunk())}
             aria-label="Save post as draft"
             style={{ color: "var(--text-secondary)" }}
@@ -782,7 +843,7 @@ export default function CreationEditor() {
                 return (
                   <div
                     key={platform.id}
-                    className="mx-auto my-auto animate-fade-in"
+                    className={`mx-auto my-auto ${fadeIn}`}
                     style={{ width: frameWidth, maxWidth: "100%" }}
                   >
                     <PlatformPreview
@@ -905,7 +966,7 @@ function RatioPicker({ platform, value, onChange, media }) {
       {open && (
         <div
           role="listbox"
-          className="absolute right-0 z-30 mt-1 rounded-xl p-1.5 shadow-lg animate-fade-in"
+          className={`absolute right-0 z-30 mt-1 rounded-xl p-1.5 shadow-lg ${fadeIn}`}
           style={{
             background: "var(--bg-card)",
             border: "1px solid var(--border-default)",
@@ -999,7 +1060,7 @@ function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
     <div className="relative inline-flex" ref={ref}>
       <button
         id="publish-now-btn"
-        className="btn-primary flex items-center gap-2"
+        className={`${btnPrimary} flex items-center gap-2`}
         onClick={onPublish}
         aria-label="Publish post now"
         style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
@@ -1010,7 +1071,7 @@ function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="btn-primary"
+        className={`${btnPrimary}`}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="More publish options"
@@ -1026,7 +1087,7 @@ function SplitPublishButton({ onSchedule, onValidate, onPublish }) {
       {open && (
         <div
           role="menu"
-          className="absolute right-0 bottom-full mb-1 z-30 rounded-xl p-1.5 shadow-lg animate-fade-in"
+          className={`absolute right-0 bottom-full mb-1 z-30 rounded-xl p-1.5 shadow-lg ${fadeIn}`}
           style={{
             background: "var(--bg-card)",
             border: "1px solid var(--border-default)",
@@ -1124,7 +1185,7 @@ function PlatformPreview({
 
   return (
     <article
-      className="overflow-hidden rounded-[28px] transition-all duration-200 animate-fade-in"
+      className={`overflow-hidden rounded-[28px] transition-all duration-200 ${fadeIn}`}
       style={{
         background: "var(--bg-card)",
         border: "1px solid var(--border-default)",

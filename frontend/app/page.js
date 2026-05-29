@@ -133,9 +133,8 @@ export default function AuthPage() {
 
   return (
     <div
+      className="flex min-h-screen overflow-auto"
       style={{
-        minHeight: "100vh",
-        display: "flex",
         fontFamily:
           "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
       }}
@@ -169,7 +168,7 @@ function BrandPanel({ isDark }) {
         padding: "48px 56px",
         color: "#fff",
       }}
-      className="auth-brand-panel"
+      className="hidden md:flex"
     >
       {/* Decorative blobs */}
       <div

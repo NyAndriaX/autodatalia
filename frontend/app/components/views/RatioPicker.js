@@ -1,4 +1,5 @@
 "use client";
+import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn, badgeDraft } from "../../lib/uiClasses";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -82,7 +83,7 @@ export default function RatioPicker({ platform, value, onChange, compact = false
     <div
       ref={popoverRef}
       role="listbox"
-      className="rounded-xl p-1.5 shadow-lg animate-fade-in"
+      className={`rounded-xl p-1.5 shadow-lg ${fadeIn}`}
       style={{
         position: "fixed",
         top: popoverPos.top,

@@ -32,10 +32,10 @@ import { fetchCostSummary } from "../../lib/costService";
 const { Title, Text } = Typography;
 
 const MOCK_KPIS = [
-  { label: "Posts published (30d)", value: "128", delta: "+12%", positive: true },
-  { label: "Avg. engagement", value: "4.7%", delta: "+0.6pt", positive: true },
-  { label: "Reach", value: "82.4k", delta: "+9%", positive: true },
-  { label: "LLM cost (30d)", value: "$37.10", delta: "-4%", positive: false },
+  { label: "Posts publiés (30j)", value: "128", delta: "+12%", positive: true },
+  { label: "Engagement moyen", value: "4.7%", delta: "+0.6pt", positive: true },
+  { label: "Portée", value: "82.4k", delta: "+9%", positive: true },
+  { label: "Coût LLM (30j)", value: "$37.10", delta: "-4%", positive: false },
 ];
 
 function buildHourlyBuckets(calls, bucketCount = 7) {
@@ -166,16 +166,15 @@ export default function AnalyticsView() {
       className="h-full overflow-y-auto"
       style={{ padding: 24, background: "var(--bg-primary)" }}
     >
-      <div style={{ maxWidth: 1200, margin: "0 auto" }}>
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
           <div>
             <Title level={3} style={{ margin: 0, letterSpacing: "-0.01em" }}>
-              Analytics & AI Costs
+              Analytiques & Coûts IA
             </Title>
             <Text type="secondary" style={{ fontSize: 13 }}>
-              Live session usage and platform performance overview.
+              Utilisation IA en direct et performances des publications.
             </Text>
           </div>
           {hasRealData && (
@@ -184,7 +183,7 @@ export default function AnalyticsView() {
               onClick={() => dispatch(resetTokenUsage())}
               size="small"
             >
-              Reset session
+              Réinitialiser
             </Button>
           )}
         </div>
@@ -197,8 +196,8 @@ export default function AnalyticsView() {
           message={
             <span>
               <strong>{sessionTokens.toLocaleString()} tokens</strong> across{" "}
-              <strong>{sessionCalls}</strong> real AI call{sessionCalls !== 1 ? "s" : ""} this session.
-              Cache hits cost 0 tokens.
+              <strong>{sessionCalls}</strong> appel IA réel{sessionCalls !== 1 ? "s" : ""} this session.
+              Les hits de cache ne consomment pas de tokens.
             </span>
           }
           style={{ marginBottom: 24, borderRadius: 10 }}
@@ -249,7 +248,7 @@ export default function AnalyticsView() {
                 title={
                   <Space size={6}>
                     <DatabaseOutlined style={{ color: "#7c3aed" }} />
-                    <span>Models used</span>
+                    <span>Modèles utilisés</span>
                   </Space>
                 }
                 value={byModel.length || "—"}
@@ -268,7 +267,7 @@ export default function AnalyticsView() {
                   <Space size={6}>
                     <DollarOutlined style={{ color: "#f59e0b" }} />
                     <span>Cache hit rate</span>
-                    <Tooltip title="Cache hits avoid real AI calls and cost 0 tokens.">
+                    <Tooltip title="Cache hits avoid appel IA réels and cost 0 tokens.">
                       <InfoCircleOutlined style={{ color: "var(--text-muted)", fontSize: 11 }} />
                     </Tooltip>
                   </Space>
@@ -345,13 +344,13 @@ export default function AnalyticsView() {
             </Card>
           </Col>
 
-          {/* Token usage by model */}
+          {/* Tokens utilisés par modèle */}
           <Col xs={24} lg={10}>
             <Card
               title={
                 <Space>
                   <DatabaseOutlined />
-                  <span>Token usage by model</span>
+                  <span>Tokens utilisés par modèle</span>
                   <Tag color="blue" style={{ fontSize: 9, lineHeight: "16px", padding: "0 4px" }}>LIVE</Tag>
                 </Space>
               }
@@ -465,7 +464,6 @@ export default function AnalyticsView() {
           ))}
         </Row>
 
-      </div>
     </div>
   );
 }

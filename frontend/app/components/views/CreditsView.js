@@ -1,4 +1,5 @@
 "use client";
+import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn, badgeDraft } from "../../lib/uiClasses";
 
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -15,7 +16,7 @@ import {
 import { fetchCostSummary } from "../../lib/costService";
 
 /**
- * Credits & spend view.
+ * Crédits & dépenses view.
  *
  * Reads live aggregates from /costs/summary instead of mocking from the
  * Redux session ring. The dashboard is per-workflow + per-tier + per-model
@@ -32,9 +33,9 @@ const CREDIT_TO_EUR = 0.01;
 const EUR_TO_CREDITS = 1 / CREDIT_TO_EUR; // 100 credits per €1
 const PERIODS = [
   { id: "24h", label: "Last 24h" },
-  { id: "7d", label: "Last 7 days" },
-  { id: "30d", label: "Last 30 days" },
-  { id: "all", label: "All time" },
+  { id: "7d", label: "7 derniers jours" },
+  { id: "30d", label: "30 derniers jours" },
+  { id: "all", label: "Depuis le début" },
 ];
 
 const WORKFLOW_LABELS = {
@@ -84,33 +85,32 @@ export default function CreditsView() {
 
   useEffect(() => {
     reload(period);
-    // Refresh every 30s so the credit view tracks live spend.
+    // Actualiser every 30s so the credit view tracks live spend.
     const t = setInterval(() => reload(period), 30_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period]);
 
   const totals = summary?.totals || {};
-  const totalCostUsd = totals.cost_usd || 0;
-  const totalCostEur = totals.cost_eur || totalCostUsd * 0.92;
-  const usedCredits = Math.round(totalCostEur * EUR_TO_CREDITS);
+  const totalCoûtUsd = totals.cost_usd || 0;
+  const totalCoûtEur = totals.cost_eur || totalCoûtUsd * 0.92;
+  const usedCredits = Math.round(totalCoûtEur * EUR_TO_CREDITS);
   const savedUsd = totals.saved_by_cache_usd || 0;
 
-  const byWorkflow = useMemo(() => summary?.by_workflow || [], [summary]);
-  const byTier = useMemo(() => summary?.by_tier || [], [summary]);
-  const byModel = useMemo(() => summary?.by_model || [], [summary]);
+  const byFlux = useMemo(() => summary?.by_workflow || [], [summary]);
+  const byNiveau = useMemo(() => summary?.by_tier || [], [summary]);
+  const byModèle = useMemo(() => summary?.by_model || [], [summary]);
 
   return (
-    <div className="h-full overflow-y-auto animate-fade-in" style={{ padding: 24 }}>
-      <div style={{ maxWidth: 1080, margin: "0 auto" }}>
+    <div className={`h-full overflow-y-auto ${fadeIn}`} style={{ padding: 24 }}>
         {/* Header */}
         <div className="flex items-end justify-between mb-6 gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold mb-1" style={{ color: "var(--text-primary)" }}>
-              Credits &amp; spend
+              Crédits &amp; dépenses
             </h1>
             <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-              Live aggregate of every AI / media call this workspace has made.
+              Agrégat en temps réel de tous les appels IA / média réalisés.
               {savedUsd > 0 && (
                 <span style={{ color: "var(--status-approved)" }}>
                   {" "}· {eur(savedUsd * 0.92)} saved by the cache.
@@ -142,7 +142,7 @@ export default function CreditsView() {
                 color: "var(--text-muted)",
                 border: "1px solid var(--border-default)",
               }}
-              title="Refresh"
+              title="Actualiser"
             >
               <RefreshCcw size={14} />
             </button>
@@ -166,8 +166,8 @@ export default function CreditsView() {
           <KpiCard
             icon={DollarSign}
             label="Spent"
-            primary={eur(totalCostEur)}
-            secondary={`$${totalCostUsd.toFixed(2)} USD`}
+            primary={eur(totalCoûtEur)}
+            secondary={`$${totalCoûtUsd.toFixed(2)} USD`}
             loading={loading}
           />
           <KpiCard
@@ -197,7 +197,7 @@ export default function CreditsView() {
           />
         </div>
 
-        {/* By workflow + by tier side by side */}
+        {/* Par flux + by tier side by side */}
         <div
           className="grid gap-4 mb-6"
           style={{ gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))" }}
@@ -205,16 +205,16 @@ export default function CreditsView() {
           <BreakdownCard
             icon={Wallet}
             title="Where credits went (by workflow)"
-            rows={byWorkflow}
-            totalCost={totalCostUsd}
+            rows={byFlux}
+            totalCoût={totalCoûtUsd}
             labelFor={workflowLabel}
             empty="No spend in this window."
           />
           <BreakdownCard
             icon={DollarSign}
             title="By LLM tier"
-            rows={byTier}
-            totalCost={totalCostUsd}
+            rows={byNiveau}
+            totalCoût={totalCoûtUsd}
             labelFor={(id) => ({
               label:
                 id === "fast"
@@ -224,7 +224,7 @@ export default function CreditsView() {
                   : id === "premium"
                   ? "Premium tier"
                   : id === "media"
-                  ? "Media generation"
+                  ? "Génération média"
                   : id || "Unknown",
               icon: Coins,
             })}
@@ -233,14 +233,14 @@ export default function CreditsView() {
         </div>
 
         {/* Per-model rollup */}
-        <div className="card" style={{ padding: 18 }}>
+        <div className={card} style={{ padding: 18 }}>
           <h2
             className="text-sm font-semibold mb-3 inline-flex items-center gap-2"
             style={{ color: "var(--text-primary)" }}
           >
             <TrendingUp size={14} /> Top models by spend
           </h2>
-          {byModel.length === 0 ? (
+          {byModèle.length === 0 ? (
             <p className="py-6 text-center text-xs" style={{ color: "var(--text-muted)" }}>
               No model usage in this window.
             </p>
@@ -248,14 +248,14 @@ export default function CreditsView() {
             <table className="w-full text-sm" style={{ color: "var(--text-secondary)" }}>
               <thead>
                 <tr style={{ color: "var(--text-muted)" }} className="text-left text-xs uppercase tracking-wider">
-                  <th className="pb-2 font-semibold">Model</th>
-                  <th className="pb-2 font-semibold text-right">Calls</th>
+                  <th className="pb-2 font-semibold">Modèle</th>
+                  <th className="pb-2 font-semibold text-right">Appels</th>
                   <th className="pb-2 font-semibold text-right">Tokens</th>
-                  <th className="pb-2 font-semibold text-right">Cost</th>
+                  <th className="pb-2 font-semibold text-right">Coût</th>
                 </tr>
               </thead>
               <tbody>
-                {byModel.slice(0, 12).map((r) => (
+                {byModèle.slice(0, 12).map((r) => (
                   <tr key={r.key} style={{ borderTop: "1px solid var(--border-default)" }}>
                     <td className="py-2 font-medium" style={{ color: "var(--text-primary)" }}>
                       {r.key}
@@ -271,14 +271,13 @@ export default function CreditsView() {
             </table>
           )}
         </div>
-      </div>
     </div>
   );
 }
 
 function KpiCard({ icon: Icon, label, primary, secondary, loading }) {
   return (
-    <div className="card" style={{ padding: 18 }}>
+    <div className={card} style={{ padding: 18 }}>
       <div className="flex items-center justify-between mb-3">
         <Icon size={18} style={{ color: "var(--accent-primary)" }} />
         {loading && (
@@ -302,9 +301,9 @@ function KpiCard({ icon: Icon, label, primary, secondary, loading }) {
   );
 }
 
-function BreakdownCard({ icon: Icon, title, rows, totalCost, labelFor, empty }) {
+function BreakdownCard({ icon: Icon, title, rows, totalCoût, labelFor, empty }) {
   return (
-    <div className="card" style={{ padding: 18 }}>
+    <div className={card} style={{ padding: 18 }}>
       <h2
         className="text-sm font-semibold mb-3 inline-flex items-center gap-2"
         style={{ color: "var(--text-primary)" }}
@@ -320,7 +319,7 @@ function BreakdownCard({ icon: Icon, title, rows, totalCost, labelFor, empty }) 
           {rows.map((row) => {
             const meta = labelFor(row.key);
             const RowIcon = meta.icon;
-            const pct = totalCost > 0 ? (row.cost_usd / totalCost) * 100 : 0;
+            const pct = totalCoût > 0 ? (row.cost_usd / totalCoût) * 100 : 0;
             return (
               <div
                 key={row.key}

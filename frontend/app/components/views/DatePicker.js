@@ -1,4 +1,5 @@
 "use client";
+import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn, badgeDraft } from "../../lib/uiClasses";
 
 import { useEffect, useRef, useState } from "react";
 import { CalendarDays, ChevronLeft, ChevronRight } from "lucide-react";
@@ -82,7 +83,7 @@ export default function DatePicker({ value, onChange, minKey = null }) {
         <div
           role="dialog"
           aria-label="Choose a date"
-          className="absolute z-[110] mt-1 rounded-xl p-3 shadow-lg animate-fade-in"
+          className={`absolute z-[110] mt-1 rounded-xl p-3 shadow-lg ${fadeIn}`}
           style={{
             background: "var(--bg-card)",
             border: "1px solid var(--border-default)",
@@ -94,7 +95,7 @@ export default function DatePicker({ value, onChange, minKey = null }) {
             <button
               type="button"
               onClick={() => setCursor((c) => addMonths(c, -1))}
-              className="btn-ghost"
+              className={`${btnGhost}`}
               style={{ padding: 6 }}
               aria-label="Previous month"
             >
@@ -109,7 +110,7 @@ export default function DatePicker({ value, onChange, minKey = null }) {
             <button
               type="button"
               onClick={() => setCursor((c) => addMonths(c, 1))}
-              className="btn-ghost"
+              className={`${btnGhost}`}
               style={{ padding: 6 }}
               aria-label="Next month"
             >

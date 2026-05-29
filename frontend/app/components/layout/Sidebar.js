@@ -3,7 +3,7 @@
 import { useSelector, useDispatch } from "react-redux";
 import { toggleSidebar, setActiveView, setMobileNav } from "../../store/uiSlice";
 import { useIsMobile } from "../../lib/useIsMobile";
-import { Menu, Tooltip, Avatar, Badge } from "antd";
+import { Tooltip, Avatar, Badge } from "antd";
 import {
   DashboardOutlined,
   EditOutlined,
@@ -17,266 +17,285 @@ import {
   MenuUnfoldOutlined,
   ThunderboltOutlined,
   VideoCameraOutlined,
+  PlusOutlined,
 } from "@ant-design/icons";
 
-const NAV_ITEMS = [
+const NAV_SECTIONS = [
   {
-    key: "dashboard",
-    icon: <DashboardOutlined />,
-    label: "Dashboard",
-    badge: null,
+    title: "Contenu",
+    items: [
+      { key: "dashboard", icon: <DashboardOutlined />, label: "Tableau de bord" },
+      { key: "creation",  icon: <EditOutlined />,      label: "Créer un post"   },
+      { key: "calendar",  icon: <CalendarOutlined />,  label: "Calendrier"      },
+      { key: "library",   icon: <PictureOutlined />,   label: "Médiathèque"    },
+    ],
   },
   {
-    key: "creation",
-    icon: <EditOutlined />,
-    label: "Creation & Editor",
-    badge: null,
+    title: "Automatisation",
+    items: [
+      { key: "automation", icon: <RobotOutlined />,       label: "Automatisation", badge: "NEW" },
+      { key: "videos",     icon: <VideoCameraOutlined />, label: "Vidéo IA",       badge: "NEW" },
+    ],
   },
   {
-    key: "automation",
-    icon: <RobotOutlined />,
-    label: "Automation",
-    badge: "NEW",
+    title: "Performance",
+    items: [
+      { key: "analytics", icon: <BarChartOutlined />,  label: "Analytiques" },
+      { key: "credits",   icon: <CreditCardOutlined />,label: "Crédits"     },
+    ],
   },
   {
-    key: "calendar",
-    icon: <CalendarOutlined />,
-    label: "Calendar",
-    badge: null,
-  },
-  {
-    key: "library",
-    icon: <PictureOutlined />,
-    label: "Media Library",
-    badge: null,
-  },
-  {
-    key: "videos",
-    icon: <VideoCameraOutlined />,
-    label: "AI Video",
-    badge: "NEW",
-  },
-  {
-    key: "analytics",
-    icon: <BarChartOutlined />,
-    label: "Analytics",
-    badge: null,
-  },
-  {
-    key: "credits",
-    icon: <CreditCardOutlined />,
-    label: "Credits",
-    badge: null,
-  },
-  {
-    key: "settings",
-    icon: <SettingOutlined />,
-    label: "Settings",
-    badge: null,
+    title: "Compte",
+    items: [
+      { key: "settings", icon: <SettingOutlined />, label: "Paramètres" },
+    ],
   },
 ];
 
+const NAV_ITEMS_FLAT = NAV_SECTIONS.flatMap((s) => s.items);
+
 export default function Sidebar() {
   const dispatch = useDispatch();
-  const { sidebarCollapsed, activeView, mobileNavOpen } = useSelector(
-    (state) => state.ui
-  );
-  const user = useSelector((state) => state.auth.user);
+  const { sidebarCollapsed, activeView, mobileNavOpen } = useSelector((s) => s.ui);
+  const user    = useSelector((s) => s.auth.user);
   const isMobile = useIsMobile();
   const collapsed = isMobile ? false : sidebarCollapsed;
 
-  const userInitials = user?.name
+  const initials = user?.name
     ? user.name.split(" ").map((w) => w[0]).join("").toUpperCase().slice(0, 2)
     : "DT";
 
-  const menuItems = NAV_ITEMS.map((item) => ({
-    key: item.key,
-    icon: item.badge ? (
-      <Badge
-        count={item.badge}
-        size="small"
-        style={{ fontSize: 9, lineHeight: "14px", height: 14, minWidth: 28, padding: "0 4px" }}
-      >
-        {item.icon}
-      </Badge>
-    ) : (
-      item.icon
-    ),
-    label: collapsed ? null : item.label,
-  }));
+  const ACCENT = "var(--accent-primary)";
 
   return (
     <aside
       id="sidebar-nav"
       style={{
         position: "fixed",
-        left: 0,
-        top: 0,
+        left: 0, top: 0,
         height: "100vh",
         zIndex: 50,
-        width: collapsed ? 72 : 240,
+        width: collapsed ? "var(--sidebar-collapsed)" : "var(--sidebar-width)",
         display: "flex",
         flexDirection: "column",
         transition: "width 0.25s cubic-bezier(0.4,0,0.2,1)",
-        background: "var(--bg-secondary)",
+        background: "var(--bg-card)",
         borderRight: "1px solid var(--border-default)",
-        transform:
-          isMobile && !mobileNavOpen ? "translateX(-100%)" : "translateX(0)",
-        boxShadow:
-          isMobile && mobileNavOpen
-            ? "4px 0 24px rgba(0,0,0,0.15)"
-            : "none",
+        transform: isMobile && !mobileNavOpen ? "translateX(-100%)" : "translateX(0)",
+        boxShadow: isMobile && mobileNavOpen ? "var(--shadow-lg)" : "none",
       }}
     >
-      {/* Logo */}
-      <div
-        style={{
-          height: 64,
+      {/* ── Logo ──────────────────────────────────────────────────── */}
+      <div style={{
+        height: "var(--topbar-height)",
+        display: "flex",
+        alignItems: "center",
+        padding: collapsed ? "0 14px" : "0 18px",
+        borderBottom: "1px solid var(--border-default)",
+        gap: 11,
+        overflow: "hidden",
+        flexShrink: 0,
+      }}>
+        <div style={{
+          width: 34, height: 34,
+          borderRadius: 10,
+          background: "var(--accent-gradient)",
           display: "flex",
           alignItems: "center",
-          padding: collapsed ? "0 16px" : "0 20px",
-          borderBottom: "1px solid var(--border-default)",
-          gap: 12,
-          overflow: "hidden",
+          justifyContent: "center",
           flexShrink: 0,
-        }}
-      >
-        <div
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: 9,
-            background: "linear-gradient(135deg, #15307f 0%, #1d3fbe 50%, #3b5be3 100%)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            flexShrink: 0,
-            boxShadow: "0 2px 8px rgba(29,63,190,0.4)",
-          }}
-        >
-          <ThunderboltOutlined style={{ color: "#fff", fontSize: 16 }} />
+          boxShadow: "var(--accent-glow)",
+        }}>
+          <ThunderboltOutlined style={{ color: "#fff", fontSize: 15 }} />
         </div>
         {!collapsed && (
           <div style={{ overflow: "hidden" }}>
-            <div
-              style={{
-                fontWeight: 800,
-                fontSize: 14,
-                letterSpacing: "0.08em",
-                color: "var(--text-primary)",
-                lineHeight: 1.2,
-              }}
-            >
+            <div style={{
+              fontFamily: "var(--font-display, 'Plus Jakarta Sans'), sans-serif",
+              fontWeight: 800,
+              fontSize: 13,
+              letterSpacing: "0.10em",
+              color: "var(--text-primary)",
+              lineHeight: 1.2,
+            }}>
               DATALIA
             </div>
-            <div
-              style={{
-                fontSize: 10,
-                color: "var(--text-muted)",
-                letterSpacing: "0.04em",
-              }}
-            >
-              Marketing Automation
+            <div style={{ fontSize: 10, color: "var(--text-muted)", letterSpacing: "0.03em" }}>
+              Automatisation Marketing
             </div>
           </div>
         )}
       </div>
 
-      {/* Navigation menu */}
-      <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "8px 0" }}>
+      {/* ── Bouton Nouveau post ──────────────────────────────────── */}
+      <div style={{ padding: collapsed ? "10px 8px 0" : "10px 10px 0", flexShrink: 0 }}>
+        <button
+          type="button"
+          onClick={() => {
+            dispatch(setActiveView("creation"));
+            if (isMobile) dispatch(setMobileNav(false));
+          }}
+          title="Créer un post"
+          style={{
+            display: "flex",
+            width: "100%",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 7,
+            borderRadius: 10,
+            border: "none",
+            fontSize: 13,
+            fontWeight: 700,
+            color: "#fff",
+            cursor: "pointer",
+            transition: "all 0.2s",
+            background: "var(--accent-gradient)",
+            boxShadow: "var(--accent-glow)",
+            padding: collapsed ? "10px" : "10px 16px 10px",
+            marginBottom: collapsed ? 0 : 4,
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.transform = "translateY(-1px)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.transform = ""; }}
+        >
+          <PlusOutlined style={{ fontSize: 15 }} />
+          {!collapsed && <span>Nouveau post</span>}
+        </button>
+      </div>
+
+      {/* ── Navigation ───────────────────────────────────────────── */}
+      <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "6px 0" }}>
         {collapsed ? (
-          /* Collapsed: icon-only with tooltips */
+          /* Mode réduit : icônes avec tooltips */
           <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "4px 8px" }}>
-            {NAV_ITEMS.map((item) => {
+            {NAV_ITEMS_FLAT.map((item) => {
               const isActive = activeView === item.key;
               return (
                 <Tooltip key={item.key} title={item.label} placement="right">
                   <button
                     onClick={() => dispatch(setActiveView(item.key))}
                     style={{
-                      width: "100%",
-                      height: 40,
+                      width: "100%", height: 38,
                       border: "none",
                       borderRadius: 8,
                       cursor: "pointer",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      background: isActive
-                        ? "rgba(29,63,190,0.12)"
-                        : "transparent",
-                      color: isActive ? "#1d3fbe" : "var(--text-secondary)",
-                      fontSize: 16,
+                      background: isActive ? `rgba(91,91,214,0.12)` : "transparent",
+                      color: isActive ? ACCENT : "var(--text-tertiary)",
+                      fontSize: 15,
                       transition: "all 0.15s",
                       position: "relative",
                     }}
                   >
                     {isActive && (
-                      <span
-                        style={{
-                          position: "absolute",
-                          left: 0,
-                          top: "50%",
-                          transform: "translateY(-50%)",
-                          width: 3,
-                          height: 20,
-                          borderRadius: "0 3px 3px 0",
-                          background: "#1d3fbe",
-                        }}
-                      />
+                      <span style={{
+                        position: "absolute", left: 0,
+                        top: "50%", transform: "translateY(-50%)",
+                        width: 3, height: 18,
+                        borderRadius: "0 3px 3px 0",
+                        background: ACCENT,
+                      }} />
                     )}
                     {item.badge ? (
-                      <Badge
-                        count={item.badge}
-                        size="small"
-                        style={{ fontSize: 9, lineHeight: "14px", height: 14, minWidth: 28, padding: "0 4px" }}
-                      >
+                      <Badge count={item.badge} size="small"
+                        style={{ fontSize: 8, lineHeight: "12px", height: 12, minWidth: 24, padding: "0 3px" }}>
                         {item.icon}
                       </Badge>
-                    ) : (
-                      item.icon
-                    )}
+                    ) : item.icon}
                   </button>
                 </Tooltip>
               );
             })}
           </div>
         ) : (
-          /* Expanded: antd Menu */
-          <Menu
-            mode="inline"
-            selectedKeys={[activeView]}
-            onClick={({ key }) => {
-              dispatch(setActiveView(key));
-              if (isMobile) dispatch(setMobileNav(false));
-            }}
-            items={menuItems}
-            style={{
-              background: "transparent",
-              border: "none",
-              fontSize: 13,
-            }}
-          />
+          /* Mode développé : sections groupées */
+          <nav aria-label="Navigation principale">
+            {NAV_SECTIONS.map((section) => (
+              <div key={section.title} style={{ marginBottom: 4 }}>
+                <p style={{
+                  margin: 0,
+                  padding: "14px 18px 6px",
+                  fontSize: 10,
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.10em",
+                  color: "var(--text-muted)",
+                }}>
+                  {section.title}
+                </p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 1, padding: "0 8px" }}>
+                  {section.items.map((item) => {
+                    const isActive = activeView === item.key;
+                    return (
+                      <button
+                        key={item.key}
+                        onClick={() => {
+                          dispatch(setActiveView(item.key));
+                          if (isMobile) dispatch(setMobileNav(false));
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 9,
+                          width: "100%",
+                          padding: "8px 10px",
+                          borderRadius: 8,
+                          border: "none",
+                          cursor: "pointer",
+                          fontSize: 13.5,
+                          fontWeight: isActive ? 600 : 400,
+                          color: isActive ? ACCENT : "var(--text-secondary)",
+                          background: isActive ? "rgba(91,91,214,0.10)" : "transparent",
+                          transition: "all 0.15s",
+                          textAlign: "left",
+                          position: "relative",
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!isActive) e.currentTarget.style.background = "var(--bg-secondary)";
+                        }}
+                        onMouseLeave={(e) => {
+                          if (!isActive) e.currentTarget.style.background = "transparent";
+                        }}
+                      >
+                        {isActive && (
+                          <span style={{
+                            position: "absolute", left: 0,
+                            top: "50%", transform: "translateY(-50%)",
+                            width: 3, height: 16,
+                            borderRadius: "0 3px 3px 0",
+                            background: ACCENT,
+                          }} />
+                        )}
+                        <span style={{ fontSize: 15, width: 18, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                          {item.badge ? (
+                            <Badge count={item.badge} size="small"
+                              style={{ fontSize: 8, lineHeight: "12px", height: 12, minWidth: 24, padding: "0 3px" }}>
+                              {item.icon}
+                            </Badge>
+                          ) : item.icon}
+                        </span>
+                        {item.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </nav>
         )}
       </div>
 
-      {/* Bottom section */}
-      <div
-        style={{
-          borderTop: "1px solid var(--border-default)",
-          padding: "12px 8px",
-          flexShrink: 0,
-        }}
-      >
-        {/* Collapse toggle — desktop only */}
+      {/* ── Pied de page ─────────────────────────────────────────── */}
+      <div style={{ borderTop: "1px solid var(--border-default)", padding: "10px 8px", flexShrink: 0 }}>
+        {/* Bouton collapse — bureau uniquement */}
         {!isMobile && (
           <button
             id="sidebar-toggle"
             onClick={() => dispatch(toggleSidebar())}
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={collapsed ? "Développer la barre" : "Réduire la barre"}
             style={{
-              width: "100%",
-              height: 36,
+              width: "100%", height: 34,
               border: "1px solid var(--border-default)",
               borderRadius: 8,
               background: "transparent",
@@ -284,87 +303,54 @@ export default function Sidebar() {
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              gap: 8,
-              color: "var(--text-secondary)",
-              fontSize: 14,
+              gap: 7,
+              color: "var(--text-tertiary)",
+              fontSize: 13,
               transition: "all 0.15s",
-              marginBottom: 10,
+              marginBottom: 8,
             }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-secondary)"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
           >
             {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-            {!collapsed && (
-              <span style={{ fontSize: 12, fontWeight: 500 }}>Collapse</span>
-            )}
+            {!collapsed && <span style={{ fontSize: 12, fontWeight: 500 }}>Réduire</span>}
           </button>
         )}
 
-        {/* User info */}
-        {!collapsed && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              padding: "8px 12px",
-              borderRadius: 8,
-              background: "var(--bg-tertiary)",
-            }}
-          >
-            <Avatar
-              size={32}
-              style={{
-                background: "linear-gradient(135deg, #1d3fbe, #3b5be3)",
-                fontWeight: 700,
-                fontSize: 12,
-                flexShrink: 0,
-              }}
-            >
-              {userInitials}
+        {/* Info utilisateur */}
+        {!collapsed ? (
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 9,
+            padding: "8px 10px",
+            borderRadius: 10,
+            background: "var(--bg-secondary)",
+          }}>
+            <Avatar size={30} style={{
+              background: "var(--accent-gradient)",
+              fontWeight: 700, fontSize: 11, flexShrink: 0,
+            }}>
+              {initials}
             </Avatar>
             <div style={{ overflow: "hidden", flex: 1 }}>
-              <div
-                style={{
-                  fontSize: 12,
-                  fontWeight: 600,
-                  color: "var(--text-primary)",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {user?.name || "Datalia Team"}
+              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {user?.name || "Équipe Datalia"}
               </div>
-              <div
-                style={{
-                  fontSize: 11,
-                  color: "var(--text-muted)",
-                }}
-              >
+              <div style={{ fontSize: 10, color: "var(--text-muted)" }}>
                 {user?.email ? user.email.split("@")[0] : "Admin"}
               </div>
             </div>
-            <Badge
-              status="success"
-              style={{ flexShrink: 0 }}
-              title="Online"
-            />
+            <Badge status="success" title="En ligne" />
           </div>
-        )}
-
-        {/* Collapsed avatar */}
-        {collapsed && (
+        ) : (
           <div style={{ display: "flex", justifyContent: "center" }}>
-            <Tooltip title={user?.name || "Datalia Team"} placement="right">
-              <Avatar
-                size={32}
-                style={{
-                  background: "linear-gradient(135deg, #1d3fbe, #3b5be3)",
-                  fontWeight: 700,
-                  fontSize: 12,
-                  cursor: "pointer",
-                }}
-              >
-                {userInitials}
+            <Tooltip title={user?.name || "Équipe Datalia"} placement="right">
+              <Avatar size={30} style={{
+                background: "var(--accent-gradient)",
+                fontWeight: 700, fontSize: 11, cursor: "pointer",
+              }}>
+                {initials}
               </Avatar>
             </Tooltip>
           </div>

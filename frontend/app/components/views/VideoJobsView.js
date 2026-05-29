@@ -1,4 +1,5 @@
 "use client";
+import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn, badgeDraft } from "../../lib/uiClasses";
 
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -20,7 +21,7 @@ import {
 } from "../../lib/videoJobsService";
 
 /**
- * Management interface for AI video generation jobs.
+ * Management interface for Génération vidéo IA jobs.
  *
  * Each job is a queued call against the configured video provider —
  * LTX-Video via Replicate when REPLICATE_API_TOKEN is set, ffmpeg
@@ -33,18 +34,18 @@ import {
 const RATIOS = ["1:1", "4:5", "9:16", "16:9"];
 
 const STATUS_META = {
-  queued: { label: "Queued", icon: Clock, color: "var(--text-muted)" },
-  running: { label: "Running", icon: Loader2, color: "var(--status-pending)", spin: true },
+  queued: { label: "En attente", icon: Clock, color: "var(--text-muted)" },
+  running: { label: "En cours", icon: Loader2, color: "var(--status-pending)", spin: true },
   succeeded: { label: "Ready", icon: CheckCircle2, color: "var(--status-approved)" },
-  failed: { label: "Failed", icon: XCircle, color: "var(--status-error)" },
-  cancelled: { label: "Cancelled", icon: XCircle, color: "var(--text-muted)" },
+  failed: { label: "Échoué", icon: XCircle, color: "var(--status-error)" },
+  cancelled: { label: "Annulerled", icon: XCircle, color: "var(--text-muted)" },
 };
 
 export default function VideoJobsView() {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setDescription] = useState("");
   const [ratio, setRatio] = useState("9:16");
   const [duration, setDuration] = useState(6);
   const [submitting, setSubmitting] = useState(false);
@@ -55,7 +56,7 @@ export default function VideoJobsView() {
       setJobs(data || []);
       setError(null);
     } catch (err) {
-      setError(err.message || "Failed to load video jobs.");
+      setError(err.message || "Échoué to load video jobs.");
     } finally {
       setLoading(false);
     }
@@ -78,16 +79,16 @@ export default function VideoJobsView() {
         ratio,
         durationSeconds: duration,
       });
-      setPrompt("");
+      setDescription("");
       reload();
     } catch (err) {
-      setError(err.message || "Failed to queue job.");
+      setError(err.message || "Échoué to queue job.");
     } finally {
       setSubmitting(false);
     }
   }
 
-  async function handleDelete(jobId) {
+  async function handleSupprimer(jobId) {
     try {
       await deleteVideoJob(jobId);
       setJobs((prev) => prev.filter((j) => j.id !== jobId));
@@ -97,16 +98,14 @@ export default function VideoJobsView() {
   }
 
   return (
-    <div className="h-full overflow-y-auto animate-fade-in" style={{ padding: 24 }}>
-      <div style={{ maxWidth: 1180, margin: "0 auto" }}>
+    <div className={`h-full overflow-y-auto ${fadeIn}`} style={{ padding: 24 }}>
         <div className="flex items-end justify-between mb-6 gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold mb-1 inline-flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
-              <Film size={22} /> AI video generation
+              <Film size={22} /> Génération vidéo IA
             </h1>
             <p className="text-sm" style={{ color: "var(--text-muted)" }}>
-              Queue an LTX-Video job. Real generations take 30–120s depending on
-              duration; cancel from the list while running.
+              Lancez un job LTX-Video. La génération réelle prend 30–120 s selon la durée ; annulez depuis la liste.
             </p>
           </div>
           <button
@@ -137,17 +136,17 @@ export default function VideoJobsView() {
           style={{ gridTemplateColumns: "minmax(320px, 1fr) 2fr" }}
         >
           {/* Create form */}
-          <form onSubmit={handleCreate} className="card" style={{ padding: 18 }}>
+          <form onSubmit={handleCreate} className={card} style={{ padding: 18 }}>
             <h2 className="text-sm font-semibold mb-3 inline-flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
               <Plus size={14} /> New video
             </h2>
 
             <label className="text-[11px] uppercase tracking-wider block mb-1" style={{ color: "var(--text-muted)" }}>
-              Prompt
+              Description
             </label>
             <textarea
               value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
+              onChange={(e) => setDescription(e.target.value)}
               placeholder="A cinematic dolly shot of a coffee being poured into a glass, warm lighting…"
               rows={5}
               className="w-full p-2 rounded-lg text-sm mb-3"
@@ -195,10 +194,10 @@ export default function VideoJobsView() {
             <button
               type="submit"
               disabled={submitting || !prompt.trim()}
-              className="btn-primary w-full inline-flex items-center justify-center gap-2"
+              className={`${btnPrimary} w-full inline-flex items-center justify-center gap-2`}
             >
               {submitting ? <Loader2 size={14} className="animate-spin" /> : <Film size={14} />}
-              {submitting ? "Queueing…" : "Generate video"}
+              {submitting ? "Queueing…" : "Générer une vidéo"}
             </button>
             <p className="text-[11px] mt-3" style={{ color: "var(--text-tertiary)" }}>
               Uses LTX-Video on Replicate when configured. Costs are tracked in
@@ -206,10 +205,10 @@ export default function VideoJobsView() {
             </p>
           </form>
 
-          {/* Jobs list */}
-          <div className="card" style={{ padding: 18 }}>
+          {/* Travaux list */}
+          <div className={card} style={{ padding: 18 }}>
             <h2 className="text-sm font-semibold mb-3 inline-flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
-              <Film size={14} /> Jobs ({jobs.length})
+              <Film size={14} /> Travaux ({jobs.length})
             </h2>
             {loading && jobs.length === 0 ? (
               <p className="py-8 text-center text-xs" style={{ color: "var(--text-muted)" }}>
@@ -217,23 +216,22 @@ export default function VideoJobsView() {
               </p>
             ) : jobs.length === 0 ? (
               <p className="py-8 text-center text-xs" style={{ color: "var(--text-muted)" }}>
-                No jobs yet. Queue one on the left.
+                Aucun job. Queue one on the left.
               </p>
             ) : (
               <div className="flex flex-col gap-2">
                 {jobs.map((job) => (
-                  <JobRow key={job.id} job={job} onDelete={() => handleDelete(job.id)} />
+                  <JobRow key={job.id} job={job} onSupprimer={() => handleSupprimer(job.id)} />
                 ))}
               </div>
             )}
           </div>
         </div>
-      </div>
     </div>
   );
 }
 
-function JobRow({ job, onDelete }) {
+function JobRow({ job, onSupprimer }) {
   const meta = STATUS_META[job.status] || STATUS_META.queued;
   const Icon = meta.icon;
   return (
@@ -280,10 +278,10 @@ function JobRow({ job, onDelete }) {
               {job.prompt.length > 100 ? `${job.prompt.slice(0, 100)}…` : job.prompt}
             </p>
             <button
-              onClick={onDelete}
+              onClick={onSupprimer}
               className="p-1 rounded transition-all"
               style={{ color: "var(--text-muted)" }}
-              title="Delete job"
+              title="Supprimer job"
             >
               <Trash2 size={13} />
             </button>
@@ -351,7 +349,7 @@ function JobRow({ job, onDelete }) {
                 className="text-[11px]"
                 style={{ color: "var(--text-muted)" }}
               >
-                Download
+                Télécharger
               </a>
             </div>
           )}

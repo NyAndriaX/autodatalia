@@ -1,5 +1,6 @@
 "use client";
 
+import { btnPrimary, btnSecondary, btnGhost, inputField } from "../../lib/uiClasses";
 import { useCallback, useEffect, useState } from "react";
 import { useDispatch } from "react-redux";
 import { PLATFORMS } from "../../lib/platforms";
@@ -14,170 +15,214 @@ import {
 } from "../../lib/oauthService";
 import { fetchTelegramStatus, sendTelegramTest } from "../../lib/validationService";
 import {
-  Send,
-  KeyRound,
-  Palette,
-  Plug,
-  Check,
-  BadgeCheck,
-  Loader2,
-  Trash2,
-  RefreshCw,
-  Clock,
-  Users,
+  Send, KeyRound, Palette, Plug, Check, BadgeCheck, Loader2,
+  Trash2, RefreshCw, Clock, Users, Settings,
 } from "lucide-react";
 import { COMMON_TIMEZONES, getBrowserTimezone } from "../../lib/timezone";
 
-// Each visible platform row maps to one backend OAuth provider. Facebook
-// and Instagram share the Meta provider — connecting once gets both.
-const PLATFORM_TO_PROVIDER = {
-  facebook: "meta",
-  instagram: "meta",
-  tiktok: "tiktok",
-  linkedin: "linkedin",
-};
+const PLATFORM_TO_PROVIDER    = { facebook:"meta", instagram:"meta", tiktok:"tiktok", linkedin:"linkedin" };
+const TARGET_KIND_FOR_PLATFORM = { facebook:"facebook_page", instagram:"instagram_business" };
 
-// Which target kinds (from /oauth/connections) belong under which platform
-// row when we display them.
-const TARGET_KIND_FOR_PLATFORM = {
-  facebook: "facebook_page",
-  instagram: "instagram_business",
-};
-
-// Locale-independent compact format (12.3K / 4.5M). Avoids Intl variance
-// between server and browser that would trip Next.js hydration checks.
-function formatCompactCount(n) {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}K`;
-  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
-  return `${(n / 1_000_000_000).toFixed(1)}B`;
+function formatCompact(n) {
+  if (n < 1000)          return String(n);
+  if (n < 1_000_000)     return `${(n/1000).toFixed(n<10_000?1:0)} K`;
+  if (n < 1_000_000_000) return `${(n/1_000_000).toFixed(n<10_000_000?1:0)} M`;
+  return `${(n/1_000_000_000).toFixed(1)} G`;
 }
 
-function Section({ icon: Icon, title, desc, children }) {
+/* ─── Champ générique ────────────────────────────────────────────────────*/
+function Champ({ label, name, value, onChange, placeholder, type = "text", hint }) {
   return (
-    <div className="card" style={{ padding: 20, marginBottom: 16 }}>
-      <div className="flex items-center gap-2 mb-1">
-        <Icon size={17} style={{ color: "var(--accent-primary)" }} />
-        <h3 className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>
-          {title}
-        </h3>
-      </div>
-      <p className="text-xs mb-4" style={{ color: "var(--text-muted)" }}>
-        {desc}
-      </p>
-      {children}
-    </div>
-  );
-}
-
-// Two-line picker: a dropdown of common IANA zones + a free-text override
-// for anything exotic. Empty value (Auto) tells the resolver to fall back
-// to the browser's OS timezone — listed inline so the user sees what
-// "Auto" actually resolves to today.
-function TimezoneField({ value, onChange }) {
-  const browser = getBrowserTimezone();
-  // If the saved value isn't in the common list, surface it as the first
-  // option so the dropdown can still display the user's actual pick.
-  const options = value && !COMMON_TIMEZONES.includes(value)
-    ? [value, ...COMMON_TIMEZONES]
-    : COMMON_TIMEZONES;
-  return (
-    <div>
-      <label className="block mb-3">
-        <span
-          className="text-xs font-semibold uppercase tracking-wider block mb-1.5"
-          style={{ color: "var(--text-tertiary)" }}
-        >
-          Active timezone
-        </span>
-        <select
-          className="input-field"
-          value={value || ""}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="">Auto — use my browser ({browser})</option>
-          {options.map((tz) => (
-            <option key={tz} value={tz}>
-              {tz}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="block">
-        <span
-          className="text-xs font-semibold uppercase tracking-wider block mb-1.5"
-          style={{ color: "var(--text-tertiary)" }}
-        >
-          Or type any IANA zone
-        </span>
-        <input
-          className="input-field"
-          type="text"
-          value={value || ""}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="e.g. Europe/Paris, America/Toronto"
-          autoComplete="off"
-        />
-      </label>
-      <p
-        className="text-[11px] mt-2"
-        style={{ color: "var(--text-muted)" }}
-      >
-        Leave blank to follow your device. Save below to apply.
-      </p>
-    </div>
-  );
-}
-
-function Field({ label, name, value, onChange, placeholder, type = "text" }) {
-  return (
-    <label className="block mb-3">
-      <span
-        className="text-xs font-semibold uppercase tracking-wider block mb-1.5"
-        style={{ color: "var(--text-tertiary)" }}
-      >
+    <label className="block mb-4">
+      <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest"
+        style={{ color:"var(--text-muted)" }}>
         {label}
       </span>
-      <input
-        className="input-field"
-        type={type}
-        name={name}
-        value={value ?? ""}
+      <input className={inputField} type={type} name={name} value={value ?? ""}
         onChange={(e) => onChange(name, e.target.value)}
-        placeholder={placeholder}
-        autoComplete="off"
-      />
+        placeholder={placeholder} autoComplete="off" />
+      {hint && <p className="mt-1 text-[11px]" style={{ color:"var(--text-muted)" }}>{hint}</p>}
     </label>
   );
 }
 
+/* ─── Section container ──────────────────────────────────────────────────*/
+function Section({ icon: Icon, title, badge, children }) {
+  return (
+    <div className="overflow-hidden rounded-2xl" style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
+      <div className="flex items-center gap-3 px-5 py-4"
+        style={{ borderBottom:"1px solid var(--border-default)" }}>
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl"
+          style={{ background:"rgba(29,63,190,.1)", color:"var(--accent-primary)" }}>
+          <Icon size={15} />
+        </span>
+        <h3 className="flex-1 text-sm font-bold" style={{ color:"var(--text-primary)" }}>{title}</h3>
+        {badge}
+      </div>
+      <div className="px-5 py-5">{children}</div>
+    </div>
+  );
+}
+
+/* ─── Sélecteur de fuseau horaire ────────────────────────────────────────*/
+function FuseauHoraire({ value, onChange }) {
+  const browser  = getBrowserTimezone();
+  const options  = value && !COMMON_TIMEZONES.includes(value) ? [value, ...COMMON_TIMEZONES] : COMMON_TIMEZONES;
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <label className="block">
+        <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest"
+          style={{ color:"var(--text-muted)" }}>
+          Sélectionner le fuseau
+        </span>
+        <select className={inputField} value={value||""} onChange={(e) => onChange(e.target.value)}>
+          <option value="">Auto — navigateur ({browser})</option>
+          {options.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
+        </select>
+      </label>
+      <label className="block">
+        <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest"
+          style={{ color:"var(--text-muted)" }}>
+          Ou saisir une zone IANA
+        </span>
+        <input className={inputField} type="text" value={value||""}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Europe/Paris, America/Toronto" autoComplete="off" />
+      </label>
+      <p className="col-span-full text-[11px]" style={{ color:"var(--text-muted)" }}>
+        Laisser vide pour suivre l'horloge de votre appareil. Les modifications s'appliquent après enregistrement.
+      </p>
+    </div>
+  );
+}
+
+/* ─── Carte de plateforme ────────────────────────────────────────────────*/
+function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconnect }) {
+  const Icon        = p.icon;
+  const providerId  = PLATFORM_TO_PROVIDER[p.id];
+  const provider    = connections?.[providerId];
+  const connected   = !!provider?.connected;
+  const configured  = !!provider?.configured;
+  const isPending   = pendingProvider === providerId;
+  const wantedKind  = TARGET_KIND_FOR_PLATFORM[p.id];
+  const targets     = wantedKind
+    ? (provider?.targets || []).filter((t) => t.kind === wantedKind)
+    : provider?.targets || [];
+
+  return (
+    <div className="overflow-hidden rounded-2xl transition-all duration-150"
+      style={{
+        border: `1.5px solid ${connected ? p.color + "40" : "var(--border-default)"}`,
+        background: connected ? p.color + "06" : "var(--bg-tertiary)",
+      }}>
+      {/* ligne principale */}
+      <div className="flex items-center gap-3 px-4 py-3.5">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white text-sm font-black"
+          style={{ background: p.color, boxShadow:`0 4px 12px ${p.color}50` }}>
+          {p.label[0]}
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-bold leading-tight" style={{ color:"var(--text-primary)" }}>{p.label}</p>
+          {!configured && connections !== null && (
+            <p className="mt-0.5 text-[11px]" style={{ color:"var(--status-error)" }}>
+              Non configuré — ajoutez les clés env au serveur
+            </p>
+          )}
+          {connected && targets.length > 0 && (
+            <p className="mt-0.5 text-[11px]" style={{ color:"var(--text-muted)" }}>
+              {targets.length} compte{targets.length !== 1 ? "s" : ""} · {targets.map(t => t.label).join(", ")}
+            </p>
+          )}
+          {!connected && configured && (
+            <p className="mt-0.5 text-[11px]" style={{ color:"var(--text-muted)" }}>Non connecté</p>
+          )}
+        </div>
+        {!configured ? (
+          <span className="shrink-0 rounded-lg px-2.5 py-1 text-[11px] font-semibold"
+            style={{ background:"rgba(239,68,68,.1)", color:"var(--status-error)" }}>
+            Configuration requise
+          </span>
+        ) : connected ? (
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="flex items-center gap-1.5 text-xs font-semibold"
+              style={{ color:"var(--status-approved)" }}>
+              <Check size={13} /> Connecté
+            </span>
+            <button type="button" onClick={() => onDisconnect(p.id)}
+              className="flex h-7 w-7 items-center justify-center rounded-lg transition-all hover:scale-110"
+              style={{ background:"rgba(239,68,68,.1)", border:"none", cursor:"pointer", color:"var(--status-error)" }}
+              title="Déconnecter">
+              <Trash2 size={12} />
+            </button>
+          </div>
+        ) : (
+          <button type="button" onClick={() => onConnect(p.id)} disabled={isPending}
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold text-white transition-all hover:-translate-y-px disabled:opacity-60"
+            style={{ background: p.color, border:"none", cursor: isPending ? "default" : "pointer",
+              boxShadow:`0 4px 10px ${p.color}40` }}>
+            {isPending ? <><Loader2 size={11} className="animate-spin"/> Connexion…</> : "Connecter"}
+          </button>
+        )}
+      </div>
+
+      {/* comptes publiables */}
+      {connected && targets.length > 0 && (
+        <div className="px-4 py-3" style={{ borderTop:`1px solid ${p.color}20` }}>
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
+            Comptes de publication
+          </p>
+          <div className="flex flex-col gap-1.5">
+            {targets.map((t) => (
+              <div key={t.id} className="flex items-center gap-2 text-xs" style={{ color:"var(--text-secondary)" }}>
+                {t.profile_picture_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={t.profile_picture_url} alt="" className="h-5 w-5 rounded-full shrink-0 object-cover"
+                    referrerPolicy="no-referrer" />
+                ) : (
+                  <span className="h-2 w-2 rounded-full shrink-0" style={{ background: p.color }} />
+                )}
+                <span className="truncate font-medium">{t.label}</span>
+                {t.is_verified && <BadgeCheck size={12} className="shrink-0" style={{ color: p.color }} />}
+                {t.category && <span className="text-[10px]" style={{ color:"var(--text-muted)" }}>· {t.category}</span>}
+                {typeof t.audience === "number" && t.audience > 0 && (
+                  <span className="ml-auto inline-flex items-center gap-1 text-[10px] tabular-nums"
+                    style={{ color:"var(--text-muted)" }}>
+                    <Users size={9} /> {formatCompact(t.audience)}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {connected && targets.length === 0 && (
+        <div className="px-4 py-3 text-xs" style={{ borderTop:`1px solid ${p.color}20`, color:"var(--text-muted)" }}>
+          {p.id === "facebook"
+            ? "Aucune Page trouvée. Assurez-vous d'administrer au moins une Page FB, puis reconnectez."
+            : p.id === "instagram"
+            ? "Aucun compte IG Pro trouvé. Liez un compte IG Pro à une Page FB que vous gérez, puis reconnectez."
+            : "Connecté, mais aucun compte publiable détecté."}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Composant principal ────────────────────────────────────────────────*/
 export default function SettingsView() {
   const dispatch = useDispatch();
-  const [s, setS] = useState(null);
-  const [connections, setConnections] = useState(null); // backend-driven OAuth state
-  const [pendingProvider, setPendingProvider] = useState(null); // provider being connected
-  const [refreshing, setRefreshing] = useState(false);
-  const [telegramStatus, setTelegramStatus] = useState(null);
-  // Telegram "Send test message" button busy state. Declared up here with
-  // the other state — it cannot live below the `if (s === null) return null`
-  // early return at line ~210 without violating the Rules of Hooks (the
-  // hook would skip on the first render and run on the second, tripping
-  // React's "different hook order" detector).
+  const [s,               setS]               = useState(null);
+  const [connections,     setConnections]     = useState(null);
+  const [pendingProvider, setPendingProvider] = useState(null);
+  const [refreshing,      setRefreshing]      = useState(false);
+  const [telegramStatus,  setTelegramStatus]  = useState(null);
   const [testingTelegram, setTestingTelegram] = useState(false);
+  const [onglet,          setOnglet]          = useState("plateformes");
 
-  // Hydrate from localStorage on mount. The intentional cascading render is
-  // how we avoid a SSR/client value mismatch on controlled inputs — server
-  // renders nothing, client fills in the saved values.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setS(loadSettings());
-  }, []);
+  useEffect(() => { setS(loadSettings()); }, []);
 
-  // `force: true` bypasses the localStorage cache; the Refresh button
-  // uses this so the user can always trigger an authoritative re-fetch.
-  // Normal mounts pass force: false and fall back to the cache when it's
-  // fresh, so bouncing between views doesn't re-hit Meta every time.
-  const refreshConnections = useCallback(async ({ force = false } = {}) => {
+  const actualiserConnexions = useCallback(async ({ force = false } = {}) => {
     setRefreshing(true);
     try {
       const data = await fetchConnections({ force });
@@ -187,39 +232,23 @@ export default function SettingsView() {
     }
   }, []);
 
-  // Mount: paint instantly from cache if we have one, then validate in the
-  // background. This is the pattern the user asked for — Settings should
-  // remember the signed-in accounts instead of refreshing on every visit.
   useEffect(() => {
     const cached = readCachedConnections();
-    if (cached?.providers) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setConnections(cached.providers);
-    }
-    // Still run a (possibly cache-served) fetch so we refresh anything
-    // older than the TTL without blocking the initial paint.
-    refreshConnections();
-  }, [refreshConnections]);
+    if (cached?.providers) setConnections(cached.providers);
+    actualiserConnexions();
+  }, [actualiserConnexions]);
 
   useEffect(() => {
     fetchTelegramStatus()
-      .then((data) => setTelegramStatus(data))
-      .catch(() =>
-        setTelegramStatus({
-          configured: false,
-          default_chat_configured: false,
-          webhook_secret_configured: false,
-        })
-      );
+      .then((d) => setTelegramStatus(d))
+      .catch(() => setTelegramStatus({
+        configured:false, default_chat_configured:false, webhook_secret_configured:false,
+      }));
   }, []);
 
-  if (s === null) {
-    // First client tick before hydration — render nothing to avoid SSR mismatch.
-    return null;
-  }
+  if (s === null) return null;
 
-  const update = (key, value) =>
-    setS((prev) => ({ ...prev, [key]: value }));
+  const update = (key, value) => setS((p) => ({ ...p, [key]: value }));
 
   const handleConnect = async (platformId) => {
     const providerId = PLATFORM_TO_PROVIDER[platformId];
@@ -227,20 +256,11 @@ export default function SettingsView() {
     setPendingProvider(providerId);
     try {
       await startConnect(providerId);
-      dispatch(
-        addNotification({ message: `${platformId} connected.`, type: "success" })
-      );
-      // Connect just changed the truth on the backend; force a fresh
-      // fetch so the new pages/IGs appear immediately (no stale cache).
+      dispatch(addNotification({ message:`${platformId} connecté.`, type:"success" }));
       invalidateConnectionsCache();
-      await refreshConnections({ force: true });
+      await actualiserConnexions({ force: true });
     } catch (err) {
-      dispatch(
-        addNotification({
-          message: `Connect failed: ${err.message || "unknown error"}`,
-          type: "error",
-        })
-      );
+      dispatch(addNotification({ message:`Connexion échouée : ${err.message||"erreur inconnue"}`, type:"error" }));
     } finally {
       setPendingProvider(null);
     }
@@ -249,448 +269,262 @@ export default function SettingsView() {
   const handleDisconnect = async (platformId) => {
     const providerId = PLATFORM_TO_PROVIDER[platformId];
     if (!providerId) return;
-    if (!confirm(`Disconnect ${platformId}? Stored tokens will be removed.`)) return;
+    if (!confirm(`Déconnecter ${platformId} ? Les tokens enregistrés seront supprimés.`)) return;
     try {
       await oauthDisconnect(providerId);
-      dispatch(
-        addNotification({ message: `${platformId} disconnected.`, type: "info" })
-      );
-      // disconnect() already invalidates the cache server-side; force a
-      // re-fetch so the row updates to "Not connected" immediately.
-      await refreshConnections({ force: true });
+      dispatch(addNotification({ message:`${platformId} déconnecté.`, type:"info" }));
+      await actualiserConnexions({ force: true });
     } catch (err) {
-      dispatch(
-        addNotification({
-          message: `Disconnect failed: ${err.message || "unknown"}`,
-          type: "error",
-        })
-      );
+      dispatch(addNotification({ message:`Déconnexion échouée : ${err.message||"inconnu"}`, type:"error" }));
     }
   };
 
   const handleSave = () => {
     saveSettings(s);
-    dispatch(addNotification({ message: "Settings saved on this device.", type: "success" }));
+    dispatch(addNotification({ message:"Paramètres enregistrés sur cet appareil.", type:"success" }));
   };
 
   const handlePairTelegram = () => {
     if (!telegramStatus?.configured) {
-      dispatch(
-        addNotification({
-          message: "Backend Telegram bot token is not configured yet.",
-          type: "error",
-        })
-      );
+      dispatch(addNotification({ message:"Le token du bot Telegram n'est pas encore configuré.", type:"error" }));
       return;
     }
     if (!s.telegramChatId) {
-      dispatch(
-        addNotification({ message: "Enter your Telegram chat ID.", type: "error" })
-      );
+      dispatch(addNotification({ message:"Entrez votre ID de chat Telegram.", type:"error" }));
       return;
     }
     saveSettings(s);
-    dispatch(
-      addNotification({
-        message: "Telegram chat ID saved for validation requests on this device.",
-        type: "info",
-      })
-    );
+    dispatch(addNotification({ message:"ID de chat Telegram enregistré pour les validations.", type:"info" }));
   };
 
   const handleTestTelegram = async () => {
     if (!telegramStatus?.configured) {
-      dispatch(
-        addNotification({
-          message: "Backend Telegram bot token is not configured.",
-          type: "error",
-        })
-      );
+      dispatch(addNotification({ message:"Le token du bot Telegram n'est pas configuré.", type:"error" }));
       return;
     }
     setTestingTelegram(true);
     try {
       const result = await sendTelegramTest(s.telegramChatId || null);
-      dispatch(
-        addNotification({
-          message: `Test message sent to chat ${result.chat_id}.`,
-          type: "success",
-        })
-      );
+      dispatch(addNotification({ message:`Message test envoyé au chat ${result.chat_id}.`, type:"success" }));
     } catch (err) {
-      dispatch(
-        addNotification({
-          message: `Test failed: ${err.message}`,
-          type: "error",
-        })
-      );
+      dispatch(addNotification({ message:`Test échoué : ${err.message}`, type:"error" }));
     } finally {
       setTestingTelegram(false);
     }
   };
 
+  const connectéCount  = Object.values(connections || {}).filter((c) => c.connected).length;
+  const totalProviders = Object.keys(connections || {}).length;
+
+  const ONGLETS = [
+    { id:"plateformes", label:"Plateformes",    icon:Plug,     badge: connectéCount > 0 ? `${connectéCount}/${totalProviders}` : null },
+    { id:"fuseau",      label:"Fuseau horaire", icon:Clock                                                                             },
+    { id:"ia",          label:"Clés IA",        icon:KeyRound                                                                          },
+    { id:"telegram",    label:"Telegram",       icon:Send,     badge: telegramStatus?.configured ? "ok" : null                        },
+    { id:"marque",      label:"Kit Marque",     icon:Palette                                                                           },
+  ];
+
   return (
-    <div className="h-full overflow-y-auto" style={{ padding: 20 }}>
-      <div style={{ maxWidth: 720, margin: "0 auto" }}>
+    <div className="h-full overflow-y-auto" style={{ background:"var(--bg-primary)", padding:"24px" }}>
+
+      {/* ═ EN-TÊTE ══════════════════════════════════════════════════════ */}
+      <div className="mb-6 flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-extrabold" style={{ color:"var(--text-primary)" }}>Paramètres</h1>
+          <p className="mt-0.5 text-xs" style={{ color:"var(--text-muted)" }}>
+            Gérez les plateformes, les clés API, le fuseau horaire et l'identité de marque.
+          </p>
+        </div>
+        <button type="button" onClick={handleSave}
+          className={`${btnPrimary} inline-flex items-center gap-2`}>
+          <Settings size={14} /> Tout enregistrer
+        </button>
+      </div>
+
+      {/* ═ ONGLETS ══════════════════════════════════════════════════════ */}
+      <div className="mb-6 flex gap-1 overflow-x-auto rounded-2xl p-1"
+        style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
+        {ONGLETS.map(({ id, label, icon: Icon, badge }) => (
+          <button key={id} type="button" onClick={() => setOnglet(id)}
+            className="flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-xs font-semibold transition-all duration-150"
+            style={{
+              background: onglet === id ? "var(--accent-primary)" : "transparent",
+              color:      onglet === id ? "#fff"                  : "var(--text-secondary)",
+              cursor:"pointer",
+              minWidth: 0,
+            }}>
+            <Icon size={13} />
+            <span>{label}</span>
+            {badge && (
+              <span className="rounded-full px-1.5 py-0.5 text-[9px] font-black"
+                style={{
+                  background: onglet === id ? "rgba(255,255,255,.25)" : "rgba(34,197,94,.2)",
+                  color:      onglet === id ? "#fff"                  : "var(--status-approved)",
+                }}>
+                {badge}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* ═ PLATEFORMES ══════════════════════════════════════════════════ */}
+      {onglet === "plateformes" && (
         <Section
           icon={Plug}
-          title="Connected Platforms"
-          desc="OAuth-connected accounts that can publish through Datalia."
-        >
-          <div
-            className="flex items-center justify-between mb-2 text-[11px]"
-            style={{ color: "var(--text-tertiary)" }}
-          >
-            <span>
-              {connections === null
-                ? "Loading…"
-                : `${
-                    Object.values(connections).filter((c) => c.connected).length
-                  } / ${Object.keys(connections).length} providers connected`}
-            </span>
-            <button
-              type="button"
-              onClick={() => refreshConnections({ force: true })}
-              disabled={refreshing}
-              className="btn-ghost text-[11px] inline-flex items-center gap-1"
-              style={{ padding: "2px 6px" }}
-              title="Refresh from backend"
-              aria-label="Refresh connections"
-            >
-              <RefreshCw
-                size={11}
-                className={refreshing ? "animate-spin" : undefined}
-              />
-              Refresh
-            </button>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            {PLATFORMS.map((p) => {
-              const Icon = p.icon;
-              const providerId = PLATFORM_TO_PROVIDER[p.id];
-              const provider = connections?.[providerId];
-              const connected = !!provider?.connected;
-              const configured = !!provider?.configured;
-              const isPending = pendingProvider === providerId;
-
-              // Targets to show under this row. For FB and IG we filter by
-              // kind so each row shows only the relevant accounts even
-              // though both share the meta provider.
-              const wantedKind = TARGET_KIND_FOR_PLATFORM[p.id];
-              const targets = wantedKind
-                ? (provider?.targets || []).filter((t) => t.kind === wantedKind)
-                : provider?.targets || [];
-
-              return (
-                <div
-                  key={p.id}
-                  className="rounded-lg"
-                  style={{
-                    background: "var(--bg-tertiary)",
-                    border: "1px solid var(--border-default)",
-                  }}
-                >
-                  <div className="flex items-center justify-between px-3 py-2.5">
-                    <span
-                      className="inline-flex items-center gap-2 text-sm"
-                      style={{ color: "var(--text-secondary)" }}
-                    >
-                      <Icon size={16} style={{ color: p.color }} />
-                      {p.label}
-                      {!configured && connections !== null && (
-                        <span
-                          className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded"
-                          style={{
-                            background: "rgba(239,68,68,0.08)",
-                            color: "var(--status-error)",
-                          }}
-                          title={
-                            provider?.missing_env?.length
-                              ? `Missing env: ${provider.missing_env.join(", ")}`
-                              : "Provider not configured on the backend"
-                          }
-                        >
-                          not configured
-                        </span>
-                      )}
-                    </span>
-
-                    {!configured ? (
-                      <button
-                        type="button"
-                        className="btn-secondary text-xs"
-                        disabled
-                        title="Add credentials to the backend .env first"
-                      >
-                        Connect
-                      </button>
-                    ) : connected ? (
-                      <div className="flex items-center gap-1">
-                        <span
-                          className="text-xs inline-flex items-center gap-1"
-                          style={{ color: "var(--status-approved)" }}
-                        >
-                          <Check size={12} /> Connected
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => handleDisconnect(p.id)}
-                          className="btn-ghost text-xs inline-flex items-center gap-1"
-                          style={{ padding: "4px 8px" }}
-                          title="Forget the stored token"
-                          aria-label="Disconnect"
-                        >
-                          <Trash2 size={11} />
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handleConnect(p.id)}
-                        disabled={isPending}
-                        className="btn-secondary text-xs inline-flex items-center gap-1"
-                      >
-                        {isPending ? (
-                          <>
-                            <Loader2 size={11} className="animate-spin" />
-                            Connecting…
-                          </>
-                        ) : (
-                          "Connect"
-                        )}
-                      </button>
-                    )}
-                  </div>
-
-                  {connected && targets.length > 0 && (
-                    <div
-                      className="px-3 py-2 flex flex-col gap-1 border-t"
-                      style={{ borderColor: "var(--border-default)" }}
-                    >
-                      <p
-                        className="text-[10px] uppercase tracking-wider"
-                        style={{ color: "var(--text-tertiary)" }}
-                      >
-                        Publishable accounts
-                      </p>
-                      {targets.map((t) => (
-                        <div
-                          key={t.id}
-                          className="flex items-center gap-2 text-xs"
-                          style={{ color: "var(--text-secondary)" }}
-                        >
-                          {t.profile_picture_url ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={t.profile_picture_url}
-                              alt=""
-                              className="w-4 h-4 rounded-full shrink-0 object-cover"
-                              referrerPolicy="no-referrer"
-                            />
-                          ) : (
-                            <span
-                              className="w-1.5 h-1.5 rounded-full shrink-0"
-                              style={{ background: p.color }}
-                              aria-hidden="true"
-                            />
-                          )}
-                          <span className="truncate">{t.label}</span>
-                          {t.is_verified && (
-                            <BadgeCheck
-                              size={12}
-                              className="shrink-0"
-                              style={{ color: p.color }}
-                              aria-label="Verified"
-                            />
-                          )}
-                          {t.category && (
-                            <span
-                              className="text-[10px]"
-                              style={{ color: "var(--text-muted)" }}
-                            >
-                              · {t.category}
-                            </span>
-                          )}
-                          {typeof t.audience === "number" && t.audience > 0 && (
-                            <span
-                              className="ml-auto inline-flex items-center gap-1 text-[10px] tabular-nums"
-                              style={{ color: "var(--text-muted)" }}
-                              title={`${t.audience.toLocaleString("en-US")} followers`}
-                            >
-                              <Users size={10} aria-hidden="true" />
-                              {formatCompactCount(t.audience)}
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {connected && targets.length === 0 && (
-                    <div
-                      className="px-3 py-2 text-xs border-t"
-                      style={{
-                        borderColor: "var(--border-default)",
-                        color: "var(--text-muted)",
-                      }}
-                    >
-                      {p.id === "facebook"
-                        ? "No Pages found for this account. Make sure you admin at least one FB Page, then reconnect."
-                        : p.id === "instagram"
-                        ? "No IG Business account found. Link an IG Business account to a FB Page you admin, then reconnect."
-                        : "Connected, but no publishable accounts surfaced."}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </Section>
-
-        <Section
-          icon={Clock}
-          title="Scheduling timezone"
-          desc="What '09:00' means when you schedule a post. Set this to the brand's posting timezone so a team member traveling, on a non-local clock, or behind a VPN doesn't accidentally publish at 03:00 in your audience's market."
-        >
-          <TimezoneField
-            value={s.scheduleTimezone}
-            onChange={(v) => update("scheduleTimezone", v)}
-          />
-        </Section>
-
-        <Section
-          icon={KeyRound}
-          title="AI API Keys"
-          desc="Provider keys. Stored only on this device."
-        >
-          <Field
-            label="OpenRouter / OpenAI key"
-            name="openrouterKey"
-            value={s.openrouterKey}
-            onChange={update}
-            placeholder="sk-or-v1-…"
-            type="password"
-          />
-          <Field
-            label="Anthropic key"
-            name="anthropicKey"
-            value={s.anthropicKey}
-            onChange={update}
-            placeholder="sk-ant-…"
-            type="password"
-          />
-          <Field
-            label="Default model"
-            name="defaultModel"
-            value={s.defaultModel}
-            onChange={update}
-            placeholder="google/gemini-2.0-flash-lite-001"
-          />
-        </Section>
-
-        <Section
-          icon={Send}
-          title="Telegram Validation Bot"
-          desc="Store the reviewer chat ID locally. The bot token stays on the backend."
-        >
-          <div
-            className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] mb-3"
-            style={{ color: "var(--text-muted)" }}
-          >
-            {[
-              { label: "Bot token", on: telegramStatus?.configured },
-              { label: "Default chat", on: telegramStatus?.default_chat_configured },
-              { label: "Webhook secret", on: telegramStatus?.webhook_secret_configured },
-            ].map((s) => (
-              <span key={s.label} className="inline-flex items-center gap-1">
-                <span
-                  className="w-1.5 h-1.5 rounded-full"
-                  style={{
-                    background: s.on
-                      ? "var(--status-approved)"
-                      : "var(--status-error)",
-                  }}
-                />
-                {s.label}: {s.on ? "ok" : "missing"}
+          title="Plateformes connectées"
+          badge={
+            <div className="flex items-center gap-2">
+              <span className="text-xs" style={{ color:"var(--text-muted)" }}>
+                {connections === null
+                  ? "Chargement…"
+                  : `${connectéCount} / ${totalProviders} connectée${connectéCount!==1?"s":""}`}
               </span>
+              <button type="button" onClick={() => actualiserConnexions({ force: true })}
+                disabled={refreshing}
+                className={`${btnGhost} inline-flex items-center gap-1 text-[11px]`}
+                style={{ padding:"3px 8px" }}>
+                <RefreshCw size={11} className={refreshing ? "animate-spin" : ""} />
+                Actualiser
+              </button>
+            </div>
+          }
+        >
+          <div className="flex flex-col gap-3">
+            {PLATFORMS.map((p) => (
+              <CartePlateforme
+                key={p.id} p={p}
+                connections={connections}
+                pendingProvider={pendingProvider}
+                onConnect={handleConnect}
+                onDisconnect={handleDisconnect}
+              />
             ))}
           </div>
-          <Field
-            label="Bot token note"
-            name="telegramBotToken"
-            value={s.telegramBotToken}
-            onChange={update}
-            placeholder="123456:ABC-DEF…"
-            type="password"
-          />
-          <Field
-            label="Your Telegram chat ID"
-            name="telegramChatId"
-            value={s.telegramChatId}
-            onChange={update}
-            placeholder="e.g. 84217734"
-          />
-          <div className="flex flex-wrap gap-2 mt-1">
-            <button
-              type="button"
-              onClick={handlePairTelegram}
-              className="btn-primary text-sm"
-            >
-              Pair bot
+        </Section>
+      )}
+
+      {/* ═ FUSEAU HORAIRE ═══════════════════════════════════════════════ */}
+      {onglet === "fuseau" && (
+        <Section icon={Clock} title="Fuseau horaire de planification">
+          <p className="mb-5 text-xs leading-relaxed" style={{ color:"var(--text-muted)" }}>
+            Définit ce que signifie «&nbsp;09h00&nbsp;» lorsque vous planifiez un post.
+            Configurez-le sur le fuseau de l'audience cible de la marque, pour qu'un collaborateur
+            en déplacement ou derrière un VPN ne publie pas accidentellement à 03h00.
+          </p>
+          <FuseauHoraire value={s.scheduleTimezone} onChange={(v) => update("scheduleTimezone", v)} />
+        </Section>
+      )}
+
+      {/* ═ CLÉS IA ══════════════════════════════════════════════════════ */}
+      {onglet === "ia" && (
+        <Section icon={KeyRound} title="Clés API d'intelligence artificielle">
+          <div className="mb-5 rounded-xl p-3.5 text-xs leading-relaxed"
+            style={{ background:"rgba(245,158,11,.07)", border:"1px solid rgba(245,158,11,.2)", color:"var(--text-secondary)" }}>
+            <strong style={{ color:"var(--text-primary)" }}>Stockées sur cet appareil uniquement.</strong>{" "}
+            Les clés sont enregistrées dans le localStorage et transmises au serveur dans l'en-tête Authorization. Elles ne quittent pas votre machine.
+          </div>
+          <Champ label="Clé OpenRouter / OpenAI" name="openrouterKey" value={s.openrouterKey}
+            onChange={update} placeholder="sk-or-v1-…" type="password" />
+          <Champ label="Clé Anthropic" name="anthropicKey" value={s.anthropicKey}
+            onChange={update} placeholder="sk-ant-…" type="password" />
+          <Champ label="Modèle par défaut" name="defaultModel" value={s.defaultModel}
+            onChange={update} placeholder="google/gemini-2.0-flash-lite-001"
+            hint="Remplace la variable AI_MODEL du serveur depuis cet appareil." />
+        </Section>
+      )}
+
+      {/* ═ TELEGRAM ═════════════════════════════════════════════════════ */}
+      {onglet === "telegram" && (
+        <Section icon={Send} title="Bot de validation Telegram">
+          {/* indicateurs de statut */}
+          <div className="mb-5 grid grid-cols-3 gap-3">
+            {[
+              { label:"Token du bot",      on: telegramStatus?.configured },
+              { label:"Chat par défaut",   on: telegramStatus?.default_chat_configured },
+              { label:"Secret webhook",    on: telegramStatus?.webhook_secret_configured },
+            ].map(({ label, on }) => (
+              <div key={label} className="rounded-xl px-3 py-3 text-center"
+                style={{
+                  background: on ? "rgba(34,197,94,.08)"  : "rgba(239,68,68,.06)",
+                  border: `1px solid ${on ? "rgba(34,197,94,.2)" : "rgba(239,68,68,.15)"}`,
+                }}>
+                <span className="mx-auto mb-1.5 block h-2 w-2 rounded-full"
+                  style={{ background: on ? "var(--status-approved)" : "var(--status-error)" }} />
+                <p className="text-[11px] font-semibold"
+                  style={{ color: on ? "var(--status-approved)" : "var(--status-error)" }}>
+                  {label}
+                </p>
+                <p className="text-[10px] font-black"
+                  style={{ color: on ? "var(--status-approved)" : "var(--status-error)" }}>
+                  {on ? "OK" : "MANQUANT"}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <Champ label="Note sur le token du bot" name="telegramBotToken" value={s.telegramBotToken}
+            onChange={update} placeholder="123456:ABC-DEF…" type="password"
+            hint="Note uniquement — le vrai token est sur le serveur et ne transite pas par le navigateur." />
+          <Champ label="Votre ID de chat Telegram" name="telegramChatId" value={s.telegramChatId}
+            onChange={update} placeholder="ex. 84217734" />
+
+          <div className="flex flex-wrap gap-2 mt-2">
+            <button type="button" onClick={handlePairTelegram}
+              className={`${btnPrimary} text-sm`}>
+              Associer le bot
             </button>
-            <button
-              type="button"
-              onClick={handleTestTelegram}
+            <button type="button" onClick={handleTestTelegram}
               disabled={testingTelegram || !telegramStatus?.configured}
-              className="btn-secondary text-sm inline-flex items-center gap-2"
-              title="Send a one-shot test message to the chat id below (or the backend default if empty)"
-            >
-              {testingTelegram ? (
-                <>
-                  <Loader2 size={13} className="animate-spin" /> Sending…
-                </>
-              ) : (
-                "Send test message"
-              )}
+              className={`${btnSecondary} text-sm inline-flex items-center gap-2`}>
+              {testingTelegram
+                ? <><Loader2 size={13} className="animate-spin"/> Envoi…</>
+                : "Envoyer un message test"}
             </button>
           </div>
         </Section>
+      )}
 
-        <Section
-          icon={Palette}
-          title="Brand Kit"
-          desc="Logo, palette, fonts & tone of voice used in AI prompts."
-        >
-          <Field
-            label="Brand name"
-            name="brandName"
-            value={s.brandName}
-            onChange={update}
-            placeholder="DATALIA"
-          />
-          <Field
-            label="Primary color"
-            name="brandPrimaryColor"
-            value={s.brandPrimaryColor}
-            onChange={update}
-            placeholder="#3b82f6"
-          />
-          <Field
-            label="Tone of voice"
-            name="brandToneOfVoice"
-            value={s.brandToneOfVoice}
-            onChange={update}
-            placeholder="Confident, friendly, concise"
-          />
+      {/* ═ KIT MARQUE ═══════════════════════════════════════════════════ */}
+      {onglet === "marque" && (
+        <Section icon={Palette} title="Kit Marque">
+          <p className="mb-5 text-xs leading-relaxed" style={{ color:"var(--text-muted)" }}>
+            Ces valeurs sont injectées dans chaque prompt IA pour que le contenu généré corresponde à l'identité de votre marque.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
+            <Champ label="Nom de la marque" name="brandName" value={s.brandName}
+              onChange={update} placeholder="DATALIA" />
+            <div className="mb-4">
+              <p className="mb-1.5 text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
+                Couleur principale
+              </p>
+              <div className="flex items-center gap-3">
+                <input type="color" value={s.brandPrimaryColor || "#3b82f6"}
+                  onChange={(e) => update("brandPrimaryColor", e.target.value)}
+                  className="h-9 w-14 cursor-pointer rounded-lg"
+                  style={{ border:"1px solid var(--border-default)", background:"none", padding:2 }} />
+                <input className={inputField} type="text" value={s.brandPrimaryColor || ""}
+                  onChange={(e) => update("brandPrimaryColor", e.target.value)}
+                  placeholder="#3b82f6" />
+              </div>
+            </div>
+            <div className="col-span-full">
+              <Champ label="Ton de communication" name="brandToneOfVoice" value={s.brandToneOfVoice}
+                onChange={update} placeholder="Confiant, bienveillant, concis"
+                hint="Décrivez comment la marque s'exprime — injecté tel quel dans les prompts de génération." />
+            </div>
+          </div>
         </Section>
+      )}
 
-        <div className="flex items-center justify-end gap-2">
-          <button type="button" onClick={handleSave} className="btn-primary">
-            Save all
-          </button>
-        </div>
+      {/* bouton bas de page */}
+      <div className="mt-6 flex justify-end">
+        <button type="button" onClick={handleSave}
+          className={`${btnPrimary} inline-flex items-center gap-2`}>
+          <Settings size={14} /> Enregistrer tous les paramètres
+        </button>
       </div>
+
     </div>
   );
 }

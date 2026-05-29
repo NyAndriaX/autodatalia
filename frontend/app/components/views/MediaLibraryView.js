@@ -1,5 +1,6 @@
 "use client";
 
+import { btnPrimary, btnSecondary, btnGhost, fadeIn } from "../../lib/uiClasses";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import {
@@ -15,6 +16,10 @@ import {
   X,
   Check,
   CheckCheck,
+  Grid3X3,
+  LayoutGrid,
+  HardDrive,
+  Loader2,
 } from "lucide-react";
 import { listMedia } from "../../lib/searchService";
 import {
@@ -28,20 +33,30 @@ import { addMedia } from "../../store/editorSlice";
 import { addNotification, setActiveView } from "../../store/uiSlice";
 
 const TABS = [
-  { id: "uploads", label: "Uploads", icon: ImageIcon },
-  { id: "ai", label: "AI-Generated", icon: Sparkles },
-  { id: "brand", label: "Brand Kit", icon: Palette },
+  { id: "uploads", label: "Fichiers", icon: ImageIcon, desc: "Images et vidéos importés" },
+  { id: "ai", label: "Générés par IA", icon: Sparkles, desc: "Assets créés automatiquement" },
+  { id: "brand", label: "Brand Kit", icon: Palette, desc: "Logos, couleurs et polices" },
 ];
 
-/* Tile design follows the canonical Google-Photos / Dropbox gallery
-   pattern: a hover gradient overlay reveals a primary action (Use) and
-   secondary actions (delete) appear in the corners. The "Used in N posts"
-   badge top-left tells the team which assets are doing work so cleanup
-   decisions don't accidentally delete an in-use image. */
-function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect, selectionMode }) {
+const TYPE_FILTERS = [
+  { id: "all", label: "Tout" },
+  { id: "image", label: "Images" },
+  { id: "video", label: "Vidéos" },
+];
+
+const MAX_MB = Math.round(MAX_SIZE_BYTES / 1024 / 1024);
+
+/* ─── Tuile média ────────────────────────────────────────────────────── */
+function MediaTile({
+  item,
+  onDelete,
+  onUse,
+  usageCount = 0,
+  selected,
+  onToggleSelect,
+  selectionMode,
+}) {
   const Icon = item.kind === "video" ? Film : ImageIcon;
-  // Prefer the persisted server URL — the local blob: previewUrl can be
-  // revoked or invalidated by a dev HMR reload or after sitting unused.
   const previewSrc = item.remoteUrl || item.previewUrl;
   const isImage = item.kind === "image";
   const isVideo = item.kind === "video";
@@ -50,23 +65,26 @@ function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect,
   const canDelete = !!onDelete && item.status !== "uploading";
   const canUse = !!onUse && item.status === "uploaded" && !!item.remoteUrl;
   const canSelect = item.status === "uploaded" || !!item.remoteUrl;
-  
+
   return (
     <div
-      className={`group relative rounded-xl overflow-hidden flex items-center justify-center ${canSelect ? "cursor-pointer" : ""}`}
+      className={`group relative overflow-hidden flex items-center justify-center transition-all duration-200 ${
+        canSelect ? "cursor-pointer" : ""
+      } ${selected ? "ring-2 ring-[var(--accent-primary)] ring-offset-2 ring-offset-[var(--bg-primary)]" : ""}`}
       style={{
         aspectRatio: "1 / 1",
+        borderRadius: 14,
         background: hasImagePreview
           ? `center / cover no-repeat url(${previewSrc})`
-          : "linear-gradient(135deg, var(--bg-tertiary), var(--bg-elevated))",
-        border: selected ? "2px solid var(--accent-primary)" : "1px solid var(--border-default)",
-        boxShadow: selected ? "0 0 0 2px var(--accent-primary-hover)" : "none",
+          : "var(--bg-secondary)",
+        border: selected
+          ? "2px solid var(--accent-primary)"
+          : "1px solid var(--border-default)",
+        boxShadow: selected ? "var(--accent-glow)" : "var(--shadow-sm)",
       }}
       title={item.name}
       onClick={() => {
-        if (selectionMode && canSelect) {
-          onToggleSelect(item);
-        }
+        if (selectionMode && canSelect) onToggleSelect(item);
       }}
     >
       {hasVideoPreview && (
@@ -79,14 +97,15 @@ function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect,
         />
       )}
       {!hasImagePreview && !hasVideoPreview && (
-        <Icon size={28} style={{ color: "var(--text-muted)", opacity: 0.5 }} />
+        <div className="flex flex-col items-center gap-2 opacity-40">
+          <Icon size={26} style={{ color: "var(--text-muted)" }} />
+          <span className="text-[10px] font-medium uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+            {isVideo ? "Vidéo" : "Image"}
+          </span>
+        </div>
       )}
 
-      {/* Selection toggle — custom styled pill (replaces the native
-          checkbox whose default "unchecked" state rendered as a bare
-          white square on dark thumbnails). Visible when selected, on
-          hover, or whenever any sibling is already selected (so the
-          user can extend the selection easily). */}
+      {/* Checkbox sélection */}
       {canSelect && (
         <button
           type="button"
@@ -94,58 +113,55 @@ function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect,
             e.stopPropagation();
             onToggleSelect(item);
           }}
-          aria-label={selected ? `Deselect ${item.name}` : `Select ${item.name}`}
+          aria-label={selected ? `Désélectionner ${item.name}` : `Sélectionner ${item.name}`}
           aria-pressed={!!selected}
-          className={`absolute top-1.5 left-1.5 z-10 w-6 h-6 inline-flex items-center justify-center rounded-md transition-opacity ${
+          className={`absolute top-2 left-2 z-10 w-6 h-6 inline-flex items-center justify-center rounded-lg transition-all ${
             selected || selectionMode
               ? "opacity-100"
               : "opacity-0 group-hover:opacity-100 focus-within:opacity-100"
           }`}
           style={{
-            background: selected
-              ? "var(--accent-primary)"
-              : "rgba(15, 23, 42, 0.55)",
-            border: selected
-              ? "1.5px solid var(--accent-primary)"
-              : "1.5px solid rgba(255, 255, 255, 0.7)",
-            backdropFilter: selected ? "none" : "blur(2px)",
-            boxShadow: "0 1px 4px rgba(0, 0, 0, 0.4)",
+            background: selected ? "var(--accent-primary)" : "rgba(17, 19, 26, 0.55)",
+            border: selected ? "none" : "1.5px solid rgba(255,255,255,0.6)",
+            backdropFilter: selected ? "none" : "blur(4px)",
           }}
         >
-          {selected && <Check size={14} color="#fff" strokeWidth={3} />}
+          {selected && <Check size={13} color="#fff" strokeWidth={3} />}
         </button>
       )}
 
-      {/* Top-left badges (stacked) — shifted down if checkbox is present. */}
-      <div className={`absolute left-1.5 flex flex-col items-start gap-1 transition-all pointer-events-none ${canSelect ? "top-8" : "top-1.5"}`}>
+      {/* Badges haut-gauche */}
+      <div
+        className={`absolute left-2 flex flex-col items-start gap-1 pointer-events-none ${
+          canSelect ? "top-9" : "top-2"
+        }`}
+      >
         {isVideo && (
           <span
-            className="inline-flex items-center justify-center w-5 h-5 rounded-full"
-            style={{ background: "rgba(0,0,0,0.55)" }}
-            aria-label="Video"
-            title="Video"
+            className="inline-flex items-center justify-center w-5 h-5 rounded-md"
+            style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)" }}
+            title="Vidéo"
           >
             <Film size={11} className="text-white" />
           </span>
         )}
         {usageCount > 0 && (
           <span
-            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold"
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold"
             style={{
-              background: "rgba(99, 102, 241, 0.9)",
+              background: "var(--accent-primary)",
               color: "#fff",
               backdropFilter: "blur(4px)",
             }}
-            title={`Referenced in ${usageCount} scheduled or published post${
-              usageCount === 1 ? "" : "s"
-            }`}
+            title={`Utilisé dans ${usageCount} post${usageCount > 1 ? "s" : ""}`}
           >
-            <CalendarClock size={10} aria-hidden="true" />
+            <CalendarClock size={9} />
             {usageCount}
           </span>
         )}
       </div>
 
+      {/* Supprimer */}
       {canDelete && (
         <button
           type="button"
@@ -153,31 +169,26 @@ function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect,
             e.stopPropagation();
             onDelete(item);
           }}
-          className="absolute top-1.5 right-1.5 inline-flex items-center justify-center w-7 h-7 rounded-full opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+          className="absolute top-2 right-2 inline-flex items-center justify-center w-7 h-7 rounded-lg opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all hover:scale-105"
           style={{
-            background: "rgba(15,23,42,0.7)",
+            background: "rgba(17,19,26,0.65)",
             color: "#fff",
-            border: "1px solid rgba(255,255,255,0.15)",
+            border: "1px solid rgba(255,255,255,0.12)",
+            backdropFilter: "blur(4px)",
           }}
-          aria-label={`Delete ${item.name}`}
-          title="Delete"
+          aria-label={`Supprimer ${item.name}`}
+          title="Supprimer"
         >
           <Trash2 size={13} />
         </button>
       )}
 
-      {/* Hover gradient + primary action — only when the item is actually
-          usable (uploaded + has remoteUrl) AND we're not in selection mode.
-          In selection mode the click target is the tile itself (for
-          toggling), so the floating "Use in new post" button would steal
-          clicks and confuse the multi-select flow — bulk posting lives in
-          the top bar instead. */}
+      {/* Action au survol */}
       {canUse && !selectionMode && (
         <div
           className="absolute inset-0 flex items-end justify-center opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
           style={{
-            background:
-              "linear-gradient(to top, rgba(15,23,42,0.78) 0%, rgba(15,23,42,0.0) 55%)",
+            background: "linear-gradient(to top, rgba(17,19,26,0.82) 0%, transparent 60%)",
           }}
         >
           <button
@@ -186,50 +197,54 @@ function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect,
               e.stopPropagation();
               onUse(item);
             }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 mb-2 rounded-full text-xs font-semibold transition-transform"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 mb-2.5 rounded-full text-xs font-semibold transition-transform hover:scale-105"
             style={{
               background: "var(--accent-primary)",
               color: "#fff",
-              boxShadow: "0 4px 12px rgba(15, 23, 42, 0.35)",
+              boxShadow: "var(--shadow-md)",
             }}
-            title="Add this asset to a new post"
-            onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.97)")}
-            onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
-            onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
+            title="Ajouter à un nouveau post"
           >
-            <Wand2 size={12} aria-hidden="true" />
-            Use in new post
+            <Wand2 size={12} />
+            Utiliser
           </button>
         </div>
       )}
 
+      {/* États de chargement / erreur */}
       {item.status === "uploading" && (
         <div
-          className="absolute inset-0 flex items-center justify-center text-xs"
-          style={{ background: "rgba(15,23,42,0.55)", color: "#fff" }}
+          className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-xs"
+          style={{ background: "rgba(17,19,26,0.6)", color: "#fff" }}
         >
-          Uploading…
+          <Loader2 size={18} className="animate-spin" />
+          Import en cours…
         </div>
       )}
       {item.status === "deleting" && (
         <div
           className="absolute inset-0 flex items-center justify-center text-xs"
-          style={{ background: "rgba(15,23,42,0.55)", color: "#fff" }}
+          style={{ background: "rgba(17,19,26,0.6)", color: "#fff" }}
         >
-          Deleting…
+          Suppression…
         </div>
       )}
       {item.status === "error" && (
         <div
-          className="absolute inset-0 flex items-center justify-center text-xs px-2 text-center"
-          style={{ background: "rgba(220,38,38,0.65)", color: "#fff" }}
+          className="absolute inset-0 flex items-center justify-center text-xs px-3 text-center"
+          style={{ background: "rgba(220,38,38,0.7)", color: "#fff" }}
         >
-          {item.error || "Upload failed"}
+          {item.error || "Échec de l'import"}
         </div>
       )}
+
+      {/* Nom du fichier */}
       <span
-        className="absolute bottom-0 inset-x-0 px-2 py-1 text-[10px] truncate"
-        style={{ background: "rgba(15,23,42,0.45)", color: "#fff" }}
+        className="absolute bottom-0 inset-x-0 px-2.5 py-1.5 text-[10px] font-medium truncate"
+        style={{
+          background: "linear-gradient(to top, rgba(17,19,26,0.75), transparent)",
+          color: "#fff",
+        }}
       >
         {item.name}
       </span>
@@ -237,27 +252,100 @@ function Tile({ item, onDelete, onUse, usageCount = 0, selected, onToggleSelect,
   );
 }
 
+/* ─── Zone de dépôt ────────────────────────────────────────────────────── */
+function DropZone({ onFiles, searching, hasItems, fileInputRef, onFileChange }) {
+  const [dragOver, setDragOver] = useState(false);
+
+  return (
+    <div
+      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => { e.preventDefault(); setDragOver(false); onFiles(Array.from(e.dataTransfer.files || [])); }}
+      onClick={() => fileInputRef.current?.click()}
+      className="flex flex-col items-center justify-center text-center gap-3 py-14 px-6 cursor-pointer transition-all duration-200"
+      style={{
+        borderRadius: 16,
+        background: dragOver ? "rgba(91,91,214,0.06)" : "var(--bg-card)",
+        border: dragOver
+          ? "2px dashed var(--accent-primary)"
+          : "2px dashed var(--border-default)",
+        boxShadow: dragOver ? "var(--accent-glow)" : "none",
+      }}
+    >
+      <div
+        className="flex h-14 w-14 items-center justify-center rounded-2xl"
+        style={{ background: "rgba(91,91,214,0.10)", color: "var(--accent-primary)" }}
+      >
+        {searching ? <Loader2 size={26} className="animate-spin" /> : <UploadCloud size={26} />}
+      </div>
+      <div>
+        <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+          {searching
+            ? "Recherche en cours…"
+            : hasItems
+              ? "Déposez d'autres fichiers ici"
+              : "Déposez vos fichiers ici"}
+        </p>
+        <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+          ou cliquez pour parcourir · max {MAX_MB} Mo par fichier
+        </p>
+      </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={ACCEPTED_TYPES.join(",")}
+        multiple
+        hidden
+        onChange={onFileChange}
+      />
+    </div>
+  );
+}
+
+/* ─── État vide générique ──────────────────────────────────────────────── */
+function EmptyPanel({ icon: Icon, title, subtitle, action }) {
+  return (
+    <div
+      className="flex flex-col items-center justify-center text-center gap-4 py-20 px-6"
+      style={{
+        borderRadius: 16,
+        background: "var(--bg-card)",
+        border: "1px solid var(--border-default)",
+      }}
+    >
+      <div
+        className="flex h-14 w-14 items-center justify-center rounded-2xl"
+        style={{ background: "var(--bg-secondary)", color: "var(--text-muted)" }}
+      >
+        <Icon size={26} />
+      </div>
+      <div>
+        <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{title}</p>
+        {subtitle && (
+          <p className="mt-1 text-xs max-w-xs" style={{ color: "var(--text-muted)" }}>{subtitle}</p>
+        )}
+      </div>
+      {action}
+    </div>
+  );
+}
+
+/* ─── Vue principale ───────────────────────────────────────────────────── */
 export default function MediaLibraryView() {
   const dispatch = useDispatch();
   const scheduledPosts = useSelector((s) => s.calendar.scheduledPosts);
   const [tab, setTab] = useState("uploads");
-  // Locally-known uploads (this session) — backend-persisted hits come from /search.
   const [uploads, setUploads] = useState([]);
   const [remoteHits, setRemoteHits] = useState([]);
   const [query, setQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
   const [searching, setSearching] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
+  const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef(null);
   const seq = useRef(0);
   const useSeq = useRef(0);
 
-  // Normalized item list — same shape the Tile expects. Built ONCE
-  // here so the render path and the bulk handlers (use-in-post,
-  // select-all, delete) all read the same thing. The earlier bug was
-  // that bulk handlers iterated `remoteHits` directly (shape
-  // `{id, title, kind, url}`) and filtered on `remoteUrl`/`previewUrl`
-  // which only exist on the normalized shape — every bulk action
-  // silently no-op'd for backend-listed assets.
   const normalizedItems = useMemo(() => {
     const sessionNames = new Set(uploads.map((u) => u.name));
     return [
@@ -266,9 +354,7 @@ export default function MediaLibraryView() {
         .filter((h) => !sessionNames.has(h.title))
         .map((h) => ({
           id: h.id,
-          kind:
-            h.kind ||
-            (h.subtitle?.toLowerCase().includes("video") ? "video" : "image"),
+          kind: h.kind || (h.subtitle?.toLowerCase().includes("video") ? "video" : "image"),
           name: h.title,
           status: "uploaded",
           remoteUrl: h.url || null,
@@ -276,6 +362,23 @@ export default function MediaLibraryView() {
         })),
     ];
   }, [uploads, remoteHits]);
+
+  const filteredItems = useMemo(() => {
+    let list = normalizedItems;
+    if (typeFilter !== "all") list = list.filter((it) => it.kind === typeFilter);
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      list = list.filter((it) => it.name?.toLowerCase().includes(q));
+    }
+    return list;
+  }, [normalizedItems, typeFilter, query]);
+
+  const stats = useMemo(() => {
+    const images = normalizedItems.filter((it) => it.kind === "image").length;
+    const videos = normalizedItems.filter((it) => it.kind === "video").length;
+    const uploading = normalizedItems.filter((it) => it.status === "uploading").length;
+    return { total: normalizedItems.length, images, videos, uploading };
+  }, [normalizedItems]);
 
   const handleToggleSelect = useCallback((item) => {
     setSelectedIds((prev) => {
@@ -286,30 +389,24 @@ export default function MediaLibraryView() {
     });
   }, []);
 
-  // Select-all / clear-all on the currently visible tile set. Reads
-  // `normalizedItems` (not the raw arrays) so backend-listed assets get
-  // picked up too.
   const selectAllVisible = useCallback(() => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      for (const it of normalizedItems) {
+      for (const it of filteredItems) {
         if (it.status === "uploaded" || it.remoteUrl) next.add(it.id);
       }
       return next;
     });
-  }, [normalizedItems]);
+  }, [filteredItems]);
 
-  // Map of media filename / remote URL → number of scheduled or published
-  // posts that reference it. Built once per scheduledPosts change so the
-  // tile lookup below is O(1). Empty when no posts use any asset, which
-  // is the common case at boot.
   const usageByName = useMemo(() => {
     const counts = new Map();
     for (const post of scheduledPosts) {
       if (!Array.isArray(post.media)) continue;
       for (const m of post.media) {
-        const keys = [m.filename, m.name, m.remoteUrl].filter(Boolean);
-        for (const k of keys) counts.set(k, (counts.get(k) || 0) + 1);
+        for (const k of [m.filename, m.name, m.remoteUrl].filter(Boolean)) {
+          counts.set(k, (counts.get(k) || 0) + 1);
+        }
       }
     }
     return counts;
@@ -317,37 +414,26 @@ export default function MediaLibraryView() {
 
   const usageCountFor = useCallback(
     (item) => {
-      const candidates = [item.name, item.id, item.remoteUrl].filter(Boolean);
       let max = 0;
-      for (const c of candidates) {
-        const v = usageByName.get(c) || 0;
-        if (v > max) max = v;
+      for (const c of [item.name, item.id, item.remoteUrl].filter(Boolean)) {
+        max = Math.max(max, usageByName.get(c) || 0);
       }
       return max;
     },
     [usageByName]
   );
 
-  // "Use in new post": append the library item to the editor's currentPost
-  // (no clobber of in-flight content), navigate to the Creation view, and
-  // surface a notification so the user knows where to find it. The
-  // backend filename rides along so the AI's vision routing kicks in on
-  // the next Generate without a re-upload.
   const onUseInPost = useCallback(
     (item) => {
-      const newId = `lib_${Date.now()}_${useSeq.current++}`;
       dispatch(
         addMedia([
           {
-            id: newId,
+            id: `lib_${Date.now()}_${useSeq.current++}`,
             name: item.name,
             kind: item.kind || "image",
             previewUrl: item.remoteUrl || item.previewUrl || null,
             remoteUrl: item.remoteUrl || null,
             status: "uploaded",
-            // Backend search returns the content-dir-relative path as `id`.
-            // Strip any folder prefix because /upload writes flat into
-            // content_dir and /generate expects just the filename.
             filename: (item.id || item.name || "").split("/").pop(),
           },
         ])
@@ -355,7 +441,7 @@ export default function MediaLibraryView() {
       dispatch(setActiveView("creation"));
       dispatch(
         addNotification({
-          message: `Added "${item.name}" to the post you're composing.`,
+          message: `"${item.name}" ajouté au post en cours.`,
           type: "success",
         })
       );
@@ -363,16 +449,10 @@ export default function MediaLibraryView() {
     [dispatch]
   );
 
-  // Bulk version of onUseInPost — pushes every selected library item into
-  // the editor's currentPost in one dispatch, then navigates. Used by the
-  // selection-mode top bar's "Use in new post" button so the user can
-  // build a carousel out of N library items in one tap. Selection is
-  // cleared so re-entering the library doesn't appear "stuck" selected.
   const onBulkUseInPost = useCallback(() => {
     if (!selectedIds.size) return;
-    const all = normalizedItems.filter((it) => selectedIds.has(it.id));
-    const payload = all
-      .filter((it) => it.remoteUrl || it.previewUrl)
+    const payload = normalizedItems
+      .filter((it) => selectedIds.has(it.id) && (it.remoteUrl || it.previewUrl))
       .map((item) => ({
         id: `lib_${Date.now()}_${useSeq.current++}`,
         name: item.name,
@@ -383,26 +463,20 @@ export default function MediaLibraryView() {
         filename: (item.id || item.name || "").split("/").pop(),
       }));
     if (!payload.length) {
-      dispatch(
-        addNotification({
-          message: "Selected items have no usable URL — try re-uploading.",
-          type: "error",
-        })
-      );
+      dispatch(addNotification({ message: "Les éléments sélectionnés n'ont pas d'URL utilisable.", type: "error" }));
       return;
     }
     dispatch(addMedia(payload));
     dispatch(setActiveView("creation"));
     dispatch(
       addNotification({
-        message: `Added ${payload.length} item${payload.length === 1 ? "" : "s"} to the post you're composing.`,
+        message: `${payload.length} élément${payload.length > 1 ? "s" : ""} ajouté${payload.length > 1 ? "s" : ""} au post.`,
         type: "success",
       })
     );
     setSelectedIds(new Set());
   }, [selectedIds, normalizedItems, dispatch]);
 
-  // Fetch remote media on mount and whenever the query changes (debounced).
   useEffect(() => {
     if (tab !== "uploads") return;
     let cancelled = false;
@@ -415,10 +489,7 @@ export default function MediaLibraryView() {
         setSearching(false);
       }
     }, 200);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
+    return () => { cancelled = true; clearTimeout(t); };
   }, [query, tab]);
 
   const handleFiles = useCallback(async (files) => {
@@ -427,13 +498,7 @@ export default function MediaLibraryView() {
       const err = validateFile(file);
       const id = `u_${Date.now()}_${seq.current++}`;
       if (err) {
-        items.push({
-          id,
-          kind: file.type.startsWith("video/") ? "video" : "image",
-          name: file.name,
-          status: "error",
-          error: err,
-        });
+        items.push({ id, kind: file.type.startsWith("video/") ? "video" : "image", name: file.name, status: "error", error: err });
         continue;
       }
       items.push({
@@ -447,7 +512,6 @@ export default function MediaLibraryView() {
     }
     setUploads((prev) => [...items, ...prev]);
 
-    // Push each upload to the backend in parallel.
     await Promise.all(
       items
         .filter((it) => it.status === "uploading")
@@ -460,12 +524,7 @@ export default function MediaLibraryView() {
                     ...p,
                     _file: null,
                     status: result.status === "uploaded" ? "uploaded" : "error",
-                    // Surface the actual reason (size / auth / network)
-                    // instead of always saying "Backend offline".
-                    error:
-                      result.status === "uploaded"
-                        ? null
-                        : result.error || "Upload failed",
+                    error: result.status === "uploaded" ? null : result.error || "Échec de l'import",
                     remoteUrl: result.remoteUrl,
                   }
                 : p
@@ -473,7 +532,6 @@ export default function MediaLibraryView() {
           );
         })
     );
-    // Re-pull the remote listing so backend-persisted assets show up below.
     const hits = await listMedia(query.trim());
     setRemoteHits(hits);
   }, [query]);
@@ -484,251 +542,273 @@ export default function MediaLibraryView() {
     if (files.length) handleFiles(files);
   };
 
-  const onDrop = (e) => {
-    e.preventDefault();
-    const files = Array.from(e.dataTransfer.files || []);
-    if (files.length) handleFiles(files);
-  };
-
   const handleDelete = useCallback(async (item) => {
-    if (!window.confirm(`Delete "${item.name}"? This cannot be undone.`)) return;
+    if (!window.confirm(`Supprimer « ${item.name} » ? Cette action est irréversible.`)) return;
 
-    // Session-only items (upload still in progress, or backend offline): just drop locally.
     const isRemote = !!item.remoteUrl || /^[^_].*\.[a-z0-9]+$/i.test(item.id || "");
     if (!isRemote) {
       setUploads((prev) => prev.filter((u) => u.id !== item.id));
       return;
     }
 
-    // Optimistic: mark as deleting, then either remove or restore on failure.
-    setUploads((prev) =>
-      prev.map((u) => (u.id === item.id ? { ...u, status: "deleting" } : u))
-    );
-    setRemoteHits((prev) =>
-      prev.map((h) => (h.id === item.id ? { ...h, status: "deleting" } : h))
-    );
+    setUploads((prev) => prev.map((u) => (u.id === item.id ? { ...u, status: "deleting" } : u)));
+    setRemoteHits((prev) => prev.map((h) => (h.id === item.id ? { ...h, status: "deleting" } : h)));
 
-    // The backend path is the search `id` (content-dir-relative). For
-    // session uploads we don't have that, so fall back to filename.
-    const backendPath = item.id?.includes("/") || /\.[a-z0-9]+$/i.test(item.id || "")
-      ? item.id
-      : item.name;
-
+    const backendPath = item.id?.includes("/") || /\.[a-z0-9]+$/i.test(item.id || "") ? item.id : item.name;
     const { ok, status } = await deleteFromBackend(backendPath);
+
     if (!ok && status !== 404) {
-      setUploads((prev) =>
-        prev.map((u) => (u.id === item.id ? { ...u, status: "uploaded" } : u))
-      );
-      setRemoteHits((prev) =>
-        prev.map((h) => (h.id === item.id ? { ...h, status: "uploaded" } : h))
-      );
-      window.alert(`Couldn't delete "${item.name}" (HTTP ${status || "?"}).`);
+      setUploads((prev) => prev.map((u) => (u.id === item.id ? { ...u, status: "uploaded" } : u)));
+      setRemoteHits((prev) => prev.map((h) => (h.id === item.id ? { ...h, status: "uploaded" } : h)));
+      window.alert(`Impossible de supprimer « ${item.name} » (HTTP ${status || "?"}).`);
       return;
     }
 
     setUploads((prev) => prev.filter((u) => u.id !== item.id));
     setRemoteHits((prev) => prev.filter((h) => h.id !== item.id));
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      next.delete(item.id);
-      return next;
-    });
-    // Re-fetch so anything beyond the search page limit becomes visible
-    // (without this, deleting all currently-shown items can make the
-    // grid look empty even when more exist on disk).
+    setSelectedIds((prev) => { const next = new Set(prev); next.delete(item.id); return next; });
+
     try {
       const hits = await listMedia(query.trim());
       setRemoteHits(hits);
-    } catch {
-      /* listing is best-effort — the optimistic drop already happened */
-    }
+    } catch { /* best-effort */ }
   }, [query]);
 
   const handleBulkDelete = useCallback(async () => {
     if (!selectedIds.size) return;
-    if (!window.confirm(`Delete ${selectedIds.size} item(s)? This cannot be undone.`)) return;
+    if (!window.confirm(`Supprimer ${selectedIds.size} élément${selectedIds.size > 1 ? "s" : ""} ? Irréversible.`)) return;
 
-    // Optimistically mark as deleting
     setUploads((prev) => prev.map((u) => (selectedIds.has(u.id) ? { ...u, status: "deleting" } : u)));
     setRemoteHits((prev) => prev.map((h) => (selectedIds.has(h.id) ? { ...h, status: "deleting" } : h)));
 
-    // Gather all selected items from the normalized list (which carries
-    // the consistent `id`/`name`/`remoteUrl` shape both the optimistic
-    // marker and the backend deletion need).
     const itemsToDelete = normalizedItems.filter((it) => selectedIds.has(it.id));
-
-    // Process in parallel
     await Promise.all(
       itemsToDelete.map(async (item) => {
         const isRemote = !!item.remoteUrl || /^[^_].*\.[a-z0-9]+$/i.test(item.id || "");
-        if (!isRemote) return; // Only exists locally (e.g. upload failed)
-
-        const backendPath = item.id?.includes("/") || /\.[a-z0-9]+$/i.test(item.id || "")
-          ? item.id
-          : item.name;
-
+        if (!isRemote) return;
+        const backendPath = item.id?.includes("/") || /\.[a-z0-9]+$/i.test(item.id || "") ? item.id : item.name;
         await deleteFromBackend(backendPath);
       })
     );
 
-    // Drop them from the UI (ignoring individual errors to keep it simple, since if one fails it will just reappear on next refresh)
     setUploads((prev) => prev.filter((u) => !selectedIds.has(u.id)));
     setRemoteHits((prev) => prev.filter((h) => !selectedIds.has(h.id)));
     setSelectedIds(new Set());
-    // Same reason as the single-delete path: the next batch of media on
-    // disk (beyond the search-result page) only surfaces if we re-list.
+
     try {
       const hits = await listMedia(query.trim());
       setRemoteHits(hits);
-    } catch {
-      /* swallow — the optimistic UI already reflects the deletes */
-    }
+    } catch { /* best-effort */ }
   }, [selectedIds, normalizedItems, query]);
-
-  // Displayed grid mirrors the normalizedItems memo above so bulk
-  // handlers and the tile rendering can never disagree on shape.
-  const items = tab === "uploads" ? normalizedItems : [];
-
-  const isBrand = tab === "brand";
-  const isAI = tab === "ai";
 
   return (
     <div
-      className="h-full overflow-y-auto"
-      style={{ padding: 20 }}
-      onDragOver={(e) => e.preventDefault()}
+      className={`h-full overflow-y-auto ${fadeIn}`}
+      style={{ padding: 24 }}
+      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        if (tab === "uploads") handleFiles(Array.from(e.dataTransfer.files || []));
+      }}
     >
-      {/* Bulk Action Bar */}
+      {/* ── En-tête ──────────────────────────────────────────────── */}
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1
+            className="text-2xl font-extrabold tracking-tight"
+            style={{ fontFamily: "var(--font-display)", color: "var(--text-primary)" }}
+          >
+            Médiathèque
+          </h1>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
+            Importez, organisez et réutilisez vos visuels dans vos posts
+          </p>
+        </div>
+        {tab === "uploads" && (
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className={`${btnPrimary} inline-flex items-center gap-2`}
+          >
+            <UploadCloud size={16} />
+            Importer
+          </button>
+        )}
+      </div>
+
+      {/* ── KPIs ─────────────────────────────────────────────────── */}
+      {tab === "uploads" && (
+        <div className="mb-6 grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))" }}>
+          {[
+            { icon: HardDrive, label: "Total", value: stats.total, color: "var(--accent-primary)" },
+            { icon: ImageIcon, label: "Images", value: stats.images, color: "#E1306C" },
+            { icon: Film, label: "Vidéos", value: stats.videos, color: "#0891B2" },
+            { icon: Loader2, label: "En cours", value: stats.uploading, color: "var(--status-pending)" },
+          ].map(({ icon: Icon, label, value, color }) => (
+            <div
+              key={label}
+              className="flex items-center gap-3 rounded-2xl p-4"
+              style={{ background: "var(--bg-card)", border: "1px solid var(--border-default)" }}
+            >
+              <span
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
+                style={{ background: color + "18", color }}
+              >
+                <Icon size={17} />
+              </span>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
+                  {label}
+                </p>
+                <p className="text-xl font-extrabold leading-none" style={{ color: "var(--text-primary)" }}>
+                  {value}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Barre de sélection multiple ──────────────────────────── */}
       {selectedIds.size > 0 && tab === "uploads" && (
         <div
-          className="flex flex-wrap items-center justify-between gap-2 mb-5 px-4 py-2.5 rounded-lg border shadow-sm sticky top-0 z-20"
+          className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl px-5 py-3 sticky top-0 z-20"
           style={{
             background: "var(--bg-elevated)",
-            borderColor: "var(--accent-primary)",
+            border: "1px solid var(--accent-primary)",
+            boxShadow: "var(--shadow-md)",
           }}
         >
-          <div className="flex items-center gap-3">
-            <span
-              className="text-sm font-semibold"
-              style={{ color: "var(--accent-primary)" }}
-            >
-              {selectedIds.size} selected
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-sm font-bold" style={{ color: "var(--accent-primary)" }}>
+              {selectedIds.size} sélectionné{selectedIds.size > 1 ? "s" : ""}
             </span>
             <button
               type="button"
               onClick={selectAllVisible}
-              className="text-xs hover:underline inline-flex items-center gap-1"
-              style={{ color: "var(--text-secondary)" }}
-              title="Select every uploaded item visible in this list"
+              className={`${btnGhost} text-xs inline-flex items-center gap-1`}
             >
-              <CheckCheck size={12} /> Select all
+              <CheckCheck size={13} /> Tout sélectionner
             </button>
             <button
               type="button"
               onClick={() => setSelectedIds(new Set())}
-              className="text-xs hover:underline inline-flex items-center gap-1"
+              className={`${btnGhost} text-xs inline-flex items-center gap-1`}
               style={{ color: "var(--text-muted)" }}
             >
-              <X size={12} /> Clear
+              <X size={13} /> Effacer
             </button>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={onBulkUseInPost}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
-              style={{
-                background: "var(--accent-primary)",
-                color: "#fff",
-              }}
-              title="Add every selected item to the post you're composing"
+              className={`${btnPrimary} inline-flex items-center gap-2 text-sm py-2 px-4`}
             >
-              <Wand2 size={14} /> Use in new post
+              <Wand2 size={14} /> Utiliser dans un post
             </button>
             <button
               type="button"
               onClick={handleBulkDelete}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
-              style={{ background: "rgba(220, 38, 38, 0.1)", color: "#ef4444" }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(220, 38, 38, 0.2)")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(220, 38, 38, 0.1)")}
+              className="inline-flex items-center gap-2 rounded-[10px] px-4 py-2 text-sm font-semibold transition-all"
+              style={{ background: "var(--accent-red-soft)", color: "var(--accent-red)" }}
             >
-              <Trash2 size={14} /> Delete
+              <Trash2 size={14} /> Supprimer
             </button>
           </div>
         </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-        <div className="flex gap-2 flex-wrap">
-          {TABS.map((t) => {
-            const Icon = t.icon;
-            const on = tab === t.id;
-            return (
-              <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
-                style={{
-                  background: on ? "rgba(99,102,241,0.12)" : "var(--bg-tertiary)",
-                  color: on ? "var(--accent-primary-hover)" : "var(--text-secondary)",
-                  border: `1px solid ${on ? "rgba(99,102,241,0.3)" : "var(--border-default)"}`,
-                }}
-              >
-                <Icon size={15} />
-                {t.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {tab === "uploads" && (
-          <div className="flex items-center gap-2 flex-wrap">
-            <div
-              className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5"
+      {/* ── Onglets ──────────────────────────────────────────────── */}
+      <div
+        className="mb-5 flex gap-1 p-1 rounded-2xl w-fit"
+        style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-default)" }}
+      >
+        {TABS.map((t) => {
+          const Icon = t.icon;
+          const active = tab === t.id;
+          return (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-200"
               style={{
-                background: "var(--bg-card)",
-                border: "1px solid var(--border-default)",
+                background: active ? "var(--bg-card)" : "transparent",
+                color: active ? "var(--accent-primary)" : "var(--text-secondary)",
+                boxShadow: active ? "var(--shadow-sm)" : "none",
               }}
+            >
+              <Icon size={15} />
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── Onglet Fichiers ──────────────────────────────────────── */}
+      {tab === "uploads" && (
+        <>
+          {/* Filtres + recherche */}
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex gap-1.5">
+              {TYPE_FILTERS.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => setTypeFilter(f.id)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                  style={{
+                    background: typeFilter === f.id ? "rgba(91,91,214,0.12)" : "var(--bg-secondary)",
+                    color: typeFilter === f.id ? "var(--accent-primary)" : "var(--text-secondary)",
+                    border: `1px solid ${typeFilter === f.id ? "rgba(91,91,214,0.25)" : "var(--border-default)"}`,
+                  }}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+            <div
+              className="inline-flex items-center gap-2 rounded-xl px-3.5 py-2"
+              style={{ background: "var(--bg-card)", border: "1px solid var(--border-default)" }}
             >
               <Search size={14} style={{ color: "var(--text-muted)" }} />
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search media"
+                placeholder="Rechercher un fichier…"
                 className="bg-transparent outline-none text-sm"
-                style={{ color: "var(--text-primary)", width: 160 }}
+                style={{ color: "var(--text-primary)", width: 180 }}
+              />
+              {query && (
+                <button type="button" onClick={() => setQuery("")} className={btnGhost} style={{ padding: 2 }}>
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Zone de dépôt (toujours visible en haut si peu d'items) */}
+          {(filteredItems.length === 0 || dragging) && (
+            <div className="mb-5">
+              <DropZone
+                onFiles={handleFiles}
+                searching={searching}
+                hasItems={filteredItems.length > 0}
+                fileInputRef={fileInputRef}
+                onFileChange={onFileChange}
               />
             </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept={ACCEPTED_TYPES.join(",")}
-              multiple
-              hidden
-              onChange={onFileChange}
-            />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="btn-primary inline-flex items-center gap-2"
-            >
-              <UploadCloud size={16} />
-              Upload media
-            </button>
-          </div>
-        )}
-      </div>
+          )}
 
-      {tab === "uploads" && (
-        <>
-          {items.length > 0 ? (
+          {/* Grille */}
+          {filteredItems.length > 0 ? (
             <div
               className="grid gap-3"
-              style={{ gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))" }}
+              style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}
             >
-              {items.map((it) => (
-                <Tile
+              {filteredItems.map((it) => (
+                <MediaTile
                   key={it.id}
                   item={it}
                   onDelete={handleDelete}
@@ -740,46 +820,68 @@ export default function MediaLibraryView() {
                 />
               ))}
             </div>
-          ) : (
-            <div
-              className="rounded-xl flex flex-col items-center justify-center text-center gap-2 py-16"
-              style={{
-                background: "var(--bg-card)",
-                border: "1px dashed var(--border-default)",
-                color: "var(--text-muted)",
-              }}
-            >
-              <UploadCloud size={30} className="opacity-40" />
-              <p className="text-sm">
-                {searching
-                  ? "Searching…"
-                  : "Drag files here or click Upload to add media."}
-              </p>
-              <p className="text-xs">Max {Math.round(MAX_SIZE_BYTES / 1024 / 1024)} MB per file</p>
-            </div>
-          )}
+          ) : !searching && !dragging ? (
+            <EmptyPanel
+              icon={Grid3X3}
+              title="Aucun fichier trouvé"
+              subtitle={query ? `Aucun résultat pour « ${query} »` : "Importez vos premiers visuels pour commencer"}
+              action={
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`${btnSecondary} inline-flex items-center gap-2 text-sm`}
+                >
+                  <UploadCloud size={15} /> Importer un fichier
+                </button>
+              }
+            />
+          ) : null}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ACCEPTED_TYPES.join(",")}
+            multiple
+            hidden
+            onChange={onFileChange}
+          />
         </>
       )}
 
-      {isAI && (
-        <div
-          className="rounded-xl flex flex-col items-center justify-center text-center gap-2 py-16"
-          style={{ background: "var(--bg-card)", border: "1px dashed var(--border-default)", color: "var(--text-muted)" }}
-        >
-          <Sparkles size={30} className="opacity-40" />
-          <p className="text-sm">No AI-generated assets yet</p>
-        </div>
+      {/* ── Onglet IA ────────────────────────────────────────────── */}
+      {tab === "ai" && (
+        <EmptyPanel
+          icon={Sparkles}
+          title="Aucun asset généré par IA"
+          subtitle="Les images et vidéos créées automatiquement apparaîtront ici"
+          action={
+            <button
+              type="button"
+              onClick={() => dispatch(setActiveView("videos"))}
+              className={`${btnSecondary} inline-flex items-center gap-2 text-sm`}
+            >
+              <Sparkles size={15} /> Générer une vidéo IA
+            </button>
+          }
+        />
       )}
 
-      {isBrand && (
-        <div
-          className="rounded-xl flex flex-col items-center justify-center text-center gap-2 py-16"
-          style={{ background: "var(--bg-card)", border: "1px dashed var(--border-default)", color: "var(--text-muted)" }}
-        >
-          <Palette size={30} className="opacity-40" />
-          <p className="text-sm">Brand Kit — logos, palette & fonts</p>
-          <p className="text-xs">Configured in Settings</p>
-        </div>
+      {/* ── Onglet Brand Kit ─────────────────────────────────────── */}
+      {tab === "brand" && (
+        <EmptyPanel
+          icon={Palette}
+          title="Brand Kit"
+          subtitle="Logos, palette de couleurs et polices de votre marque — configurez-les dans les Paramètres"
+          action={
+            <button
+              type="button"
+              onClick={() => dispatch(setActiveView("settings"))}
+              className={`${btnSecondary} inline-flex items-center gap-2 text-sm`}
+            >
+              <Palette size={15} /> Ouvrir les Paramètres
+            </button>
+          }
+        />
       )}
     </div>
   );
