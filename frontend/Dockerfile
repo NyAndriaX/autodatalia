@@ -7,8 +7,8 @@ WORKDIR /app
 # Copy dependency manifests
 COPY package*.json ./
 
-# Install dependencies (ci ensures clean, repeatable install)
-RUN npm ci
+# Install dependencies
+RUN npm install
 
 # Copy the rest of the application files
 COPY . .
@@ -16,6 +16,12 @@ COPY . .
 # Set environment to production
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# Accept build arguments for Next.js static embedding
+ARG NEXT_PUBLIC_API_BASE_URL
+ARG NEXT_PUBLIC_BACKEND_AUTH_TOKEN
+ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+ENV NEXT_PUBLIC_BACKEND_AUTH_TOKEN=${NEXT_PUBLIC_BACKEND_AUTH_TOKEN}
 
 # Build the optimized production bundle
 RUN npm run build

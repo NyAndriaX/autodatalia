@@ -43,45 +43,13 @@ services:
       retries: 5
       start_period: 10s
 
-  caddy:
-    # Caddy auto-provisions Let's Encrypt certs on first request to the
-    # domain configured in caddy/Caddyfile. No manual certbot setup,
-    # no renewal cron — Caddy renews ~30 days before expiry on its own.
-    image: caddy:2-alpine
-    container_name: caddy
-    restart: always
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"   # HTTP/3
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data        # certs + state — must persist
-      - caddy-config:/config
-    environment:
-      # Caddyfile reads {$API_DOMAIN} — set in .env.production
-      API_DOMAIN: ${API_DOMAIN}
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "5"
-    depends_on:
-      - caption-api
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
   caption-api:
     build:
       context: ../backend
     container_name: caption-api
     restart: always
-    # NO host port binding — only Caddy reaches it, on the docker network.
-    expose:
-      - "8000"
+    ports:
+      - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -181,15 +149,20 @@ services:
       # explicitly with `docker volume rm`. Holds uploaded media,
       # cropped variants, posts.json, messages.json, oauth_tokens.json.
       - caption-content:/home/app/content
-    # Reasonable resource ceiling for a CX22 (4 GB total — leave room
-    # for caddy + ssh + apt). Adjust upward if larger VM.
-    deploy:
-      resources:
-        limits:
-          memory: 3g
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+        - NEXT_PUBLIC_BACKEND_AUTH_TOKEN=${BACKEND_AUTH_TOKEN}
+    container_name: datalia-frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    depends_on:
+      caption-api:
+        condition: service_healthy
 
 volumes:
   caption-content:
-  caddy-data:
-  caddy-config:
   postgres-data:
