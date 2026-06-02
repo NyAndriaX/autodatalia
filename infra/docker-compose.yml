@@ -52,7 +52,7 @@ services:
       AI_MODEL_PREMIUM: ${AI_MODEL_PREMIUM:-}
       AI_INCLUDE_IMAGES: ${AI_INCLUDE_IMAGES:-false}
       AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-200}
-      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://localhost:3005,http://127.0.0.1:3005}
       BACKEND_AUTH_TOKEN: ${BACKEND_AUTH_TOKEN:-}
       TUNNEL_ENABLED: ${TUNNEL_ENABLED:-false}
       NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
@@ -114,7 +114,7 @@ services:
     container_name: datalia-frontend
     restart: always
     ports:
-      - "3000:3000"
+      - "3005:3000"
     depends_on:
       caption-api:
         condition: service_healthy
