@@ -105,5 +105,19 @@ services:
     volumes:
       - ../backend/content:/app/content
 
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        - NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+        - NEXT_PUBLIC_BACKEND_AUTH_TOKEN=${BACKEND_AUTH_TOKEN:-}
+    container_name: datalia-frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    depends_on:
+      caption-api:
+        condition: service_healthy
+
 volumes:
   postgres_data:
