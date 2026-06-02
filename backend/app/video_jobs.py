@@ -561,13 +561,48 @@ def _ltx_inputs(*, prompt, ratio, duration_seconds, image_url, quality):
     return inputs
 
 
-def _veo3_inputs(*, prompt, ratio, duration_seconds, image_url, quality):
-    # Veo 3 is text-only on fal at the moment; image_url ignored.
-    return {
+def _veo_common_inputs(*, prompt, ratio, duration_seconds, image_url, quality):
+    # Map aspect ratio to '16:9' or '9:16'
+    aspect = _aspect_label(ratio)
+    if aspect not in ("16:9", "9:16"):
+        aspect = "16:9" if ratio == "16:9" else "9:16"
+
+    # Map duration to nearest '4s', '6s', or '8s'
+    if duration_seconds <= 5:
+        dur = "4s"
+    elif duration_seconds <= 7:
+        dur = "6s"
+    else:
+        dur = "8s"
+
+    inputs = {
         "prompt": prompt,
-        "duration": f"{min(8, max(5, duration_seconds))}s",
-        "aspect_ratio": _aspect_label(ratio),
+        "duration": dur,
+        "aspect_ratio": aspect,
+        "resolution": "1080p",
+        "generate_audio": False,
+        "negative_prompt": "blurry, low quality, distorted, deformed, ugly, watermark, text overlay, bad eyes, extra limbs",
     }
+    if image_url:
+        inputs["image_url"] = image_url
+    return inputs
+
+
+def _hunyuan_inputs(*, prompt, ratio, duration_seconds, image_url, quality):
+    # Map aspect ratio to '16:9' or '9:16'
+    aspect = _aspect_label(ratio)
+    if aspect not in ("16:9", "9:16"):
+        aspect = "16:9" if ratio == "16:9" else "9:16"
+
+    inputs = {
+        "prompt": prompt,
+        "aspect_ratio": aspect,
+        "num_frames": min(121, max(25, int(duration_seconds * 24))),
+        "enable_prompt_expansion": True,
+    }
+    if image_url:
+        inputs["image_url"] = image_url
+    return inputs
 
 
 def _hailuo_inputs(*, prompt, ratio, duration_seconds, image_url, quality):
@@ -581,19 +616,6 @@ def _hailuo_inputs(*, prompt, ratio, duration_seconds, image_url, quality):
     return inputs
 
 
-def _higgsfield_inputs(*, prompt, ratio, duration_seconds, image_url, quality):
-    """Higgsfield's Soul / Mix / Dop models all accept the same input
-    shape: a prompt + aspect ratio + optional reference image.
-    Duration is fixed by the model (typically 4-5s) so we just send
-    a request without a duration knob.
-    """
-    inputs = {
-        "prompt": prompt,
-        "aspect_ratio": _aspect_label(ratio),
-    }
-    if image_url:
-        inputs["image_url"] = image_url
-    return inputs
 
 
 FAL_MODEL_SPECS: dict[str, dict[str, Any]] = {
@@ -629,51 +651,68 @@ FAL_MODEL_SPECS: dict[str, dict[str, Any]] = {
             "supports_ugc": True,
         },
     },
-    # Veo 3 — Google's flagship, very expensive but cinema-grade.
-    "fal-ai/veo3": {
-        "label": "Veo 3",
+    # Veo 3.1 Fast — Google's latest flagship speed/cost tier. Extremely fast & cinematic ($0.10/s).
+    "fal-ai/veo3.1/fast": {
+        "label": "Veo 3.1 Fast (Google Flagship)",
         "endpoints": {
-            "text_to_video": "fal-ai/veo3",
+            "text_to_video": "fal-ai/veo3.1/fast",
+            "image_to_video": "fal-ai/veo3.1/fast/image-to-video",
         },
-        "build_inputs": _veo3_inputs,
-        "cost_per_second_usd": 0.50,
+        "build_inputs": _veo_common_inputs,
+        "cost_per_second_usd": 0.10,
         "features": {
-            "image_to_video": False,
+            "image_to_video": True,
             "audio": True,
             "max_duration_seconds": 8,
             "supports_ugc": False,
         },
     },
-    # Higgsfield Soul — explicitly tuned for UGC / influencer-style
-    # short-form. The CEO mentioned this as the "looks like a real
-    # person filming a product" model. ~$0.10/s.
-    "fal-ai/higgsfield-lite-text-to-video": {
-        "label": "Higgsfield Lite (UGC)",
+    # Veo 3.1 Standard — Google's flagship high-quality tier ($0.20/s).
+    "fal-ai/veo3.1": {
+        "label": "Veo 3.1 Standard (Google Flagship)",
         "endpoints": {
-            "text_to_video": "fal-ai/higgsfield-lite-text-to-video",
-            "image_to_video": "fal-ai/higgsfield-lite-image-to-video",
+            "text_to_video": "fal-ai/veo3.1",
+            "image_to_video": "fal-ai/veo3.1/image-to-video",
         },
-        "build_inputs": _higgsfield_inputs,
-        "cost_per_second_usd": 0.08,
+        "build_inputs": _veo_common_inputs,
+        "cost_per_second_usd": 0.20,
+        "features": {
+            "image_to_video": True,
+            "audio": True,
+            "max_duration_seconds": 8,
+            "supports_ugc": False,
+        },
+    },
+    # Hunyuan Video 1.5 — outstanding state-of-the-art open-source model ($0.075/s).
+    "fal-ai/hunyuan-video-v1.5/text-to-video": {
+        "label": "Hunyuan Video 1.5 Standard",
+        "endpoints": {
+            "text_to_video": "fal-ai/hunyuan-video-v1.5/text-to-video",
+            "image_to_video": "fal-ai/hunyuan-video-v1.5/image-to-video",
+        },
+        "build_inputs": _hunyuan_inputs,
+        "cost_per_second_usd": 0.075,
         "features": {
             "image_to_video": True,
             "audio": False,
-            "max_duration_seconds": 5,
+            "max_duration_seconds": 10,
             "supports_ugc": True,
         },
     },
-    "fal-ai/higgsfield-soul": {
-        "label": "Higgsfield Soul (cinematic UGC)",
+    # Veo 3 Standard — Legacy Veo 3 model ($0.50/s).
+    "fal-ai/veo3": {
+        "label": "Veo 3 Standard",
         "endpoints": {
-            "text_to_video": "fal-ai/higgsfield-soul",
+            "text_to_video": "fal-ai/veo3",
+            "image_to_video": "fal-ai/veo3/image-to-video",
         },
-        "build_inputs": _higgsfield_inputs,
-        "cost_per_second_usd": 0.15,
+        "build_inputs": _veo_common_inputs,
+        "cost_per_second_usd": 0.50,
         "features": {
-            "image_to_video": False,
-            "audio": False,
-            "max_duration_seconds": 5,
-            "supports_ugc": True,
+            "image_to_video": True,
+            "audio": True,
+            "max_duration_seconds": 8,
+            "supports_ugc": False,
         },
     },
     # MiniMax Hailuo 02 — great alternative for image-to-video.
@@ -727,6 +766,50 @@ def list_fal_models() -> list[dict[str, Any]]:
     ]
 
 
+async def _expand_video_prompt(prompt: str) -> str:
+    """Use standard LLM to expand a short video prompt into a rich cinematic description."""
+    # If the prompt is already highly detailed and long (e.g. > 45 words), keep it as is.
+    if len(prompt.split()) > 45:
+        return prompt
+
+    system_prompt = (
+        "You are an expert cinematic director and AI video prompt engineer. "
+        "Your task is to expand the user's short video description into a detailed, "
+        "highly visual director-level prompt optimized for Google Veo 3.1. "
+        "Focus on: camera shot type/angle, movement, lighting (e.g. golden hour, dramatic shadows), "
+        "textures, style (e.g. cinematic, 35mm film), and specific actions. "
+        "Keep it to exactly 2-3 sentences. "
+        "Do NOT include any preamble, introductory text, or quotes. Output ONLY the expanded prompt."
+    )
+
+    payload = {
+        "model": settings.ai_model_fast,
+        "temperature": 0.7,
+        "max_tokens": 150,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Expand this video prompt: {prompt}"},
+        ],
+    }
+
+    try:
+        from .services import _post_chat
+        expanded, _ = await _post_chat(
+            payload,
+            workflow="video_prompt_expansion",
+            tier="fast",
+            log_cost=True,
+        )
+        expanded = expanded.strip().strip('"').strip("'")
+        if expanded:
+            log.info("Expanded video prompt from '%s' to '%s'", prompt, expanded)
+            return expanded
+    except Exception as exc:
+        log.warning("Failed to expand video prompt: %s", exc)
+
+    return prompt
+
+
 async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
     """Submit a job to fal.ai's queue API, poll status, download result.
 
@@ -766,8 +849,16 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
             f"fal model '{requested_model}' has no usable endpoint configured"
         )
 
+    # For Veo models, automatically expand short prompts into detailed cinematic director-style descriptions
+    prompt_to_use = job["prompt"]
+    if "veo3" in requested_model:
+        prompt_to_use = await _expand_video_prompt(job["prompt"])
+        if prompt_to_use != job["prompt"]:
+            # Update the job prompt so the user can see it in the UI and dashboard!
+            _update_job(job["id"], {"prompt": prompt_to_use})
+
     inputs = spec["build_inputs"](
-        prompt=job["prompt"],
+        prompt=prompt_to_use,
         ratio=job["ratio"],
         duration_seconds=int(job["duration_seconds"]),
         image_url=public_image_url,
@@ -801,9 +892,12 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
     # the submission — use them. Building them by string concat breaks on
     # apps with sub-endpoints (e.g. fal-ai/kling-video/.../text-to-video),
     # because the status route lives on the parent app id, not the
-    # sub-endpoint.
-    status_url = submission.get("status_url") or f"{queue_url}/requests/{request_id}/status"
-    result_url = submission.get("response_url") or f"{queue_url}/requests/{request_id}"
+    # sub-endpoint. Extract the app root for the fallback URLs.
+    _ep_parts = endpoint.split("/")
+    _app_root = "/".join(_ep_parts[:2]) if len(_ep_parts) > 2 else endpoint
+    _app_root_url = f"https://queue.fal.run/{_app_root}"
+    status_url = submission.get("status_url") or f"{_app_root_url}/requests/{request_id}/status"
+    result_url = submission.get("response_url") or f"{_app_root_url}/requests/{request_id}"
     deadline = time.time() + 10 * 60
     while time.time() < deadline:
         await asyncio.sleep(3)

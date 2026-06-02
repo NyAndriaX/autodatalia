@@ -133,7 +133,7 @@ export default function AuthPage() {
 
   return (
     <div
-      className="flex min-h-screen overflow-auto"
+      className="flex flex-col md:flex-row min-h-screen md:h-screen overflow-hidden"
       style={{
         fontFamily:
           "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -154,18 +154,18 @@ export default function AuthPage() {
 
 /* ══════════════════════════════════════
    LEFT — Brand panel
-══════════════════════════════════════ */
+   ══════════════════════════════════════ */
 function BrandPanel({ isDark }) {
   return (
     <div
       style={{
         background: "linear-gradient(145deg, #0b1638 0%, #1d3fbe 60%, #3b5be3 100%)",
         position: "relative",
-        overflow: "hidden",
+        overflowY: "auto",
         flexDirection: "column",
         color: "#fff",
       }}
-      className="hidden md:flex md:basis-[48%] lg:basis-[52%] md:shrink-0 md:grow-0 p-8 md:p-10 lg:p-14"
+      className="hidden md:flex md:basis-[48%] lg:basis-[52%] md:shrink-0 md:grow-0 p-6 md:p-8 lg:p-12"
     >
       {/* Decorative blobs */}
       <div
@@ -208,7 +208,7 @@ function BrandPanel({ isDark }) {
       />
 
       {/* Logo */}
-      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 56, position: "relative", zIndex: 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 36, position: "relative", zIndex: 1 }}>
         <div
           style={{
             width: 44,
@@ -257,7 +257,7 @@ function BrandPanel({ isDark }) {
             color: "rgba(255,255,255,0.85)",
             letterSpacing: "0.06em",
             textTransform: "uppercase",
-            marginBottom: 24,
+            marginBottom: 20,
           }}
         >
           <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#34d399", display: "inline-block" }} />
@@ -270,7 +270,7 @@ function BrandPanel({ isDark }) {
             fontWeight: 800,
             lineHeight: 1.15,
             color: "#fff",
-            margin: "0 0 20px",
+            margin: "0 0 16px",
             letterSpacing: "-0.02em",
           }}
         >
@@ -288,10 +288,10 @@ function BrandPanel({ isDark }) {
 
         <p
           style={{
-            fontSize: 15,
-            lineHeight: 1.7,
+            fontSize: 14.5,
+            lineHeight: 1.65,
             color: "rgba(255,255,255,0.65)",
-            margin: "0 0 40px",
+            margin: "0 0 24px",
             maxWidth: 380,
           }}
         >
@@ -300,7 +300,7 @@ function BrandPanel({ isDark }) {
         </p>
 
         {/* Feature list */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 16, marginBottom: 48 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 28 }}>
           {FEATURES.map((f) => {
             const Icon = f.icon;
             return (
@@ -326,7 +326,7 @@ function BrandPanel({ isDark }) {
                   <div style={{ fontWeight: 600, fontSize: 13.5, color: "#fff", marginBottom: 2 }}>
                     {f.title}
                   </div>
-                  <div style={{ fontSize: 12.5, color: "rgba(255,255,255,0.5)", lineHeight: 1.5 }}>
+                  <div style={{ fontSize: 12.5, color: "rgba(255,255,255,0.5)", lineHeight: 1.45 }}>
                     {f.desc}
                   </div>
                 </div>
@@ -381,9 +381,9 @@ function BrandPanel({ isDark }) {
           display: "flex",
           gap: 32,
           flexWrap: "wrap",
-          paddingTop: 32,
+          paddingTop: 24,
           borderTop: "1px solid rgba(255,255,255,0.1)",
-          marginTop: 32,
+          marginTop: 24,
         }}
       >
         {STATS.map((s) => (
@@ -403,7 +403,7 @@ function BrandPanel({ isDark }) {
 
 /* ══════════════════════════════════════
    RIGHT — Auth panel
-══════════════════════════════════════ */
+   ══════════════════════════════════════ */
 function AuthPanel({ isDark, dispatch, resolved }) {
   const authStatus = useSelector((s) => s.auth.status);
   const authError = useSelector((s) => s.auth.error);
@@ -442,7 +442,7 @@ function AuthPanel({ isDark, dispatch, resolved }) {
 
   return (
     <div
-      className="px-4 py-8 sm:px-6 md:px-8"
+      className="px-4 py-6 sm:px-6 md:px-8 overflow-y-auto h-full w-full"
       style={{
         flex: 1,
         background: bg,
@@ -479,7 +479,7 @@ function AuthPanel({ isDark, dispatch, resolved }) {
 
       <div style={{ width: "100%", maxWidth: 420 }}>
         {/* Card header */}
-        <div style={{ marginBottom: 36, textAlign: "center" }}>
+        <div style={{ marginBottom: 24, textAlign: "center" }}>
           <Title
             level={2}
             className="!text-2xl sm:!text-[28px]"

@@ -464,6 +464,28 @@ function JobRow({ job, onDelete }) {
   const meta = STATUS_META[job.status] || STATUS_META.queued;
   const Icon = meta.icon;
   const statusLabel = t(meta.key);
+
+  const handleDownload = async (e) => {
+    e.preventDefault();
+    if (!job.output_url) return;
+    try {
+      const res = await fetch(job.output_url);
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = job.output_filename || "video.mp4";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      console.error("Download failed, opening in new tab instead:", err);
+      window.open(job.output_url, "_blank");
+    }
+  };
+
   return (
     <div
       className="p-3 rounded-lg"
@@ -568,19 +590,24 @@ function JobRow({ job, onDelete }) {
                 href={job.output_url}
                 target="_blank"
                 rel="noreferrer"
-                className="text-[11px] inline-flex items-center gap-1"
+                className="text-[11px] inline-flex items-center gap-1 hover:underline"
                 style={{ color: "var(--accent-primary)" }}
               >
                 <Play size={11} /> {t("openOutput")} <ExternalLink size={10} />
               </a>
-              <a
-                href={job.output_url}
-                download={job.output_filename}
-                className="text-[11px]"
-                style={{ color: "var(--text-muted)" }}
+              <button
+                onClick={handleDownload}
+                className="text-[11px] hover:underline"
+                style={{
+                  color: "var(--text-muted)",
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  cursor: "pointer",
+                }}
               >
                 {t("download")}
-              </a>
+              </button>
             </div>
           )}
         </div>
