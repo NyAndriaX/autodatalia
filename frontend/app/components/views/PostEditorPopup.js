@@ -1,7 +1,9 @@
 "use client";
+import { btnPrimary, btnSecondary, btnGhost, inputField, fadeIn, badgeDraft } from "../../lib/uiClasses";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch } from "react-redux";
+import { useTranslations } from "next-intl";
 import {
   X,
   Trash2,
@@ -22,12 +24,13 @@ import {
   PLATFORMS,
   PLATFORM_MAP,
   STATUS_META,
+  STATUS_LABEL_KEYS,
   RATIOS_BY_PLATFORM,
   parseRatio,
   activePlatformIds,
 } from "../../lib/platforms";
 import { isoDateKey, parseDateKey, startOfToday } from "../../lib/dateUtils";
-import { addNotification, addTokenUsage, recordCacheHit } from "../../store/uiSlice";
+import { addNotification, addTokenUsage, recordCacheHit, setActiveView } from "../../store/uiSlice";
 import TikTokOptionsPanel from "./TikTokOptionsPanel";
 import {
   ACCEPTED_TYPES,
@@ -37,10 +40,7 @@ import {
   revokeMediaItem,
 } from "../../lib/uploadService";
 import { generateContent } from "../../lib/aiService";
-import {
-  generateImageAsset,
-  generateVideoAsset,
-} from "../../lib/mediaGenerationService";
+import { generateImageAsset } from "../../lib/mediaGenerationService";
 import { getScheduleTimezone } from "../../lib/timezone";
 import DatePicker from "./DatePicker";
 import TimePicker from "./TimePicker";
@@ -57,6 +57,11 @@ import RatioPicker from "./RatioPicker";
  */
 export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
   const dispatch = useDispatch();
+  const t = useTranslations("postEditor");
+  const tCommon = useTranslations("common");
+  const tCreation = useTranslations("creation");
+  const tDashboard = useTranslations("dashboard");
+  const tNotifications = useTranslations("notifications");
   const [content, setContent] = useState(post.content ?? "");
   const [platforms, setPlatforms] = useState(
     post.platforms ?? { facebook: true }
@@ -81,15 +86,19 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
   const [tabIdx, setTabIdx] = useState(0);
   const safeTabIdx = Math.min(tabIdx, Math.max(0, activeIds.length - 1));
 
-  // Track previewUrls *this popup* created so we can revoke them on close.
+  // Track media items *this popup* created so we can revoke them on close.
   // Media that came in via `post.media` keeps its own lifecycle (the upload
   // service or store owns it), so we don't blanket-revoke everything.
-  const ownedPreviewIds = useRef(new Set());
+  // Holds the actual MediaItem objects (not just ids) so the cleanup
+  // effect doesn't have to depend on the React `media` state — that
+  // dependency was the root of the stale-closure bug where items added
+  // after mount were never revoked.
+  const ownedItems = useRef(new Map());
 
   useEffect(() => {
-    const owned = ownedPreviewIds.current;
+    const owned = ownedItems.current;
     return () => {
-      for (const m of media) if (owned.has(m.id)) revokeMediaItem(m);
+      for (const m of owned.values()) revokeMediaItem(m);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -99,9 +108,9 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
 
   const removeMedia = (id) => {
     setMedia((list) => {
-      const target = list.find((m) => m.id === id);
-      if (target && ownedPreviewIds.current.has(id)) revokeMediaItem(target);
-      ownedPreviewIds.current.delete(id);
+      const owned = ownedItems.current.get(id);
+      if (owned) revokeMediaItem(owned);
+      ownedItems.current.delete(id);
       return list.filter((m) => m.id !== id);
     });
   };
@@ -120,7 +129,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
       return;
     }
     const item = toMediaItem(file);
-    ownedPreviewIds.current.add(item.id);
+    ownedItems.current.set(item.id, item);
     setMedia((list) => [...list, item]);
     updateMedia(item.id, { status: "uploading" });
     const result = await uploadToBackend(file);
@@ -128,7 +137,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
     if (result.status !== "uploaded") {
       dispatch(
         addNotification({
-          message: `${file.name} couldn't be uploaded — the scheduler will fire this post without media.`,
+          message: tNotifications("mediaUploadFailedScheduler", { filename: file.name }),
           type: "error",
         })
       );
@@ -183,13 +192,13 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
       if (text) setContent(text);
       if (cached) {
         dispatch(recordCacheHit());
-        dispatch(addNotification({ message: "Reused last generation — no tokens spent.", type: "info" }));
+        dispatch(addNotification({ message: tCreation("unchangedReuses"), type: "info" }));
       } else if (usage?.total_tokens > 0) {
         dispatch(addTokenUsage(usage.total_tokens));
       }
     } catch (err) {
       dispatch(addNotification({
-        message: `Generation failed: ${err.message || "unknown error"}`,
+        message: tCreation("generationFailed", { error: err.message || tCommon("unknownError") }),
         type: "error",
       }));
     } finally {
@@ -214,31 +223,63 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
     if (!prompt) {
       dispatch(
         addNotification({
-          message: `Enter a prompt before generating a ${kind}.`,
+          message: tCreation("enterPromptBeforeGenerating", { kind }),
           type: "error",
         })
       );
       return;
     }
+    const ratio =
+      Object.values(ratios || {})[0] || (kind === "video" ? "9:16" : "1:1");
+
+    // Video generation routinely exceeds 60s and the public HTTPS proxies
+    // (ngrok/Cloudflare) time out the request before the job finishes.
+    // Hand off to VideoJobsView — it owns the queue UI, polling, and
+    // "attach to post" flow, so the popup doesn't try to inline-poll a
+    // VideoJob that has no output_url/filename yet.
+    if (kind === "video") {
+      const uploadedImage = (media || []).find(
+        (m) => m.kind === "image" && m.status === "uploaded" && m.remoteUrl
+      );
+      const prefill = {
+        prompt,
+        ratio,
+        mode: uploadedImage ? "image" : "text",
+        referenceImage: uploadedImage
+          ? { filename: uploadedImage.filename, url: uploadedImage.remoteUrl }
+          : null,
+      };
+      try {
+        sessionStorage.setItem(
+          "datalia.videoJobs.prefill",
+          JSON.stringify(prefill)
+        );
+      } catch {
+        /* private mode — proceed without prefill */
+      }
+      onClose?.();
+      dispatch(setActiveView("videos"));
+      return;
+    }
+
     setGeneratingMediaKind(kind);
     try {
-      const ratio =
-        Object.values(ratios || {})[0] || (kind === "video" ? "9:16" : "1:1");
-      const result =
-        kind === "video"
-          ? await generateVideoAsset({ prompt, ratio })
-          : await generateImageAsset({ prompt, ratio });
+      const result = await generateImageAsset({ prompt, ratio });
       setMedia((list) => [...list, result.mediaItem]);
       dispatch(
         addNotification({
-          message: `${kind === "video" ? "Video" : "Image"} generated via ${result.data?.provider || "backend"}.`,
+          message: tCreation("imageGeneratedVia", {
+            provider: result.data?.provider || "backend",
+          }),
           type: "success",
         })
       );
     } catch (err) {
       dispatch(
         addNotification({
-          message: `${kind === "video" ? "Video" : "Image"} generation failed: ${err.message || "unknown error"}`,
+          message: tCreation("imageGenerationFailed", {
+            error: err.message || tCommon("unknownError"),
+          }),
           type: "error",
         })
       );
@@ -280,7 +321,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 animate-fade-in"
+      className={`fixed inset-0 z-[100] flex items-center justify-center p-4 ${fadeIn}`}
       style={{ background: "rgba(15, 23, 42, 0.5)" }}
       onClick={onClose}
     >
@@ -301,7 +342,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
       >
         {/* Header */}
         <div
-          className="flex items-center justify-between px-5 py-3 shrink-0"
+          className="flex items-center justify-between px-4 md:px-5 py-3 shrink-0"
           style={{ borderBottom: "1px solid var(--border-default)" }}
         >
           <div className="flex items-center gap-2">
@@ -309,30 +350,29 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
               className="text-base font-bold"
               style={{ color: "var(--text-primary)" }}
             >
-              Edit post
+              {t("editPost")}
             </h3>
             <span
-              className={STATUS_META[status]?.badgeClass || "badge-draft"}
+              className={STATUS_META[status]?.badgeClass || badgeDraft}
               style={{ fontSize: 10 }}
             >
-              {STATUS_META[status]?.label || status}
+              {tDashboard(STATUS_LABEL_KEYS[status] ?? "statusDraft")}
             </span>
           </div>
           <button
             onClick={onClose}
-            className="btn-ghost"
+            className={`${btnGhost}`}
             style={{ padding: 6 }}
-            aria-label="Close"
+            aria-label={tCommon("close")}
           >
             <X size={16} />
           </button>
         </div>
 
-        {/* Body — split layout */}
+        {/* Body — split layout (stacks on mobile, side-by-side from md+) */}
         <div
-          className="flex-1 grid"
+          className="flex-1 grid grid-cols-1 md:grid-cols-2 auto-rows-fr"
           style={{
-            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
             minHeight: 0,
             /* overflow visible on the grid so each column manages its
                own scroll independently. The previous overflow-hidden
@@ -343,9 +383,9 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
         >
           {/* LEFT — editor */}
           <div
-            className="overflow-y-auto p-5"
+            className="overflow-y-auto p-4 md:p-5 border-b md:border-b-0 md:border-r"
             style={{
-              borderRight: "1px solid var(--border-default)",
+              borderColor: "var(--border-default)",
               minHeight: 0, /* required for grid child scroll */
             }}
           >
@@ -354,7 +394,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
                 className="text-xs font-semibold uppercase tracking-wider"
                 style={{ color: "var(--text-tertiary)" }}
               >
-                Content
+                {t("content")}
               </label>
               <button
                 type="button"
@@ -370,19 +410,19 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
                 }}
                 title={
                   content.trim()
-                    ? "Generate a new draft based on the current content"
-                    : "Generate a draft from the selected platforms"
+                    ? t("regenerateTitle")
+                    : t("generateFromPlatformsTitle")
                 }
               >
                 {isGenerating ? (
                   <>
                     <Loader2 size={11} className="animate-spin" />
-                    Generating…
+                    {tCreation("generating")}
                   </>
                 ) : (
                   <>
                     <Sparkles size={11} />
-                    {content.trim() ? "Regenerate" : "Generate with AI"}
+                    {content.trim() ? tCreation("regenerate") : t("generateWithAi")}
                   </>
                 )}
               </button>
@@ -391,57 +431,57 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
               value={content}
               onChange={(e) => setContent(e.target.value)}
               rows={5}
-              className="input-field"
+              className={`${inputField}`}
               style={{ resize: "vertical", marginBottom: 16 }}
-              placeholder="What do you want to post? Or click Generate with AI."
+              placeholder={t("contentPlaceholder")}
             />
 
             <label
               className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
               style={{ color: "var(--text-tertiary)" }}
             >
-              Media
+              {t("media")}
             </label>
             <div className="flex flex-wrap gap-2 mb-2">
               <button
                 onClick={() => imageInputRef.current?.click()}
-                className="btn-secondary text-xs inline-flex items-center gap-1.5"
+                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
               >
-                <Upload size={13} /> Image
+                <Upload size={13} /> {t("image")}
               </button>
               <button
                 onClick={() => videoInputRef.current?.click()}
-                className="btn-secondary text-xs inline-flex items-center gap-1.5"
+                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
               >
-                <Film size={13} /> Video
+                <Film size={13} /> {t("video")}
               </button>
             </div>
             <div className="flex flex-wrap gap-2 mb-3">
               <button
                 onClick={() => handleGenerateMedia("image")}
                 disabled={!!generatingMediaKind}
-                className="btn-secondary text-xs inline-flex items-center gap-1.5"
-                title="Generate an image from the current prompt"
+                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
+                title={tCreation("aiImageTitle")}
               >
                 {generatingMediaKind === "image" ? (
                   <Loader2 size={13} className="animate-spin" />
                 ) : (
                   <Sparkles size={13} />
                 )}{" "}
-                AI image
+                {tCreation("aiImageBtn")}
               </button>
               <button
                 onClick={() => handleGenerateMedia("video")}
                 disabled={!!generatingMediaKind}
-                className="btn-secondary text-xs inline-flex items-center gap-1.5"
-                title="Generate a motion video from the current prompt"
+                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
+                title={tCreation("aiVideoTitle")}
               >
                 {generatingMediaKind === "video" ? (
                   <Loader2 size={13} className="animate-spin" />
                 ) : (
                   <Film size={13} />
                 )}{" "}
-                AI video
+                {tCreation("aiVideoBtn")}
               </button>
             </div>
             <input
@@ -489,10 +529,10 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
                       }}
                       title={
                         m.status === "uploaded"
-                          ? "Ready — will be sent at publish time"
+                          ? t("mediaReady")
                           : m.status === "uploading"
-                          ? "Uploading…"
-                          : "Local-only preview — won't reach the platform"
+                          ? tCommon("uploading")
+                          : t("mediaLocalOnly")
                       }
                     >
                       {m.kind === "video" ? (
@@ -505,7 +545,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
                       <button
                         onClick={() => removeMedia(m.id)}
                         style={{ color: "var(--text-muted)" }}
-                        aria-label="Remove media"
+                        aria-label={t("removeMedia")}
                       >
                         <X size={12} />
                       </button>
@@ -520,7 +560,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
               className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
               style={{ color: "var(--text-tertiary)" }}
             >
-              Platforms
+              {tCreation("platforms")}
             </label>
             <div className="flex flex-wrap gap-2 mb-3">
               {PLATFORMS.map((p) => {
@@ -560,7 +600,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
                   className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
                   style={{ color: "var(--text-tertiary)" }}
                 >
-                  Aspect ratio
+                  {t("aspectRatio")}
                 </label>
                 <div className="flex flex-wrap items-center gap-2 mb-4">
                   {activeIds.map((id) => {
@@ -595,7 +635,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
               className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
               style={{ color: "var(--text-tertiary)" }}
             >
-              Schedule
+              {tCommon("schedule")}
             </label>
             <div className="flex flex-wrap items-center gap-2 mb-4">
               <DatePicker
@@ -621,19 +661,19 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
                 color: "var(--text-secondary)",
               }}
             >
-              <span style={{ color: "var(--text-muted)" }}>Saving as</span>
+              <span style={{ color: "var(--text-muted)" }}>{tCommon("savingAs")}</span>
               <span
-                className={STATUS_META[status]?.badgeClass || "badge-draft"}
+                className={STATUS_META[status]?.badgeClass || badgeDraft}
                 style={{ fontSize: 10 }}
               >
-                {STATUS_META[status]?.label || status}
+                {tDashboard(STATUS_LABEL_KEYS[status] ?? "statusDraft")}
               </span>
               {status === "scheduled" && (
                 <span
                   className="ml-auto text-[10px]"
                   style={{ color: "var(--text-muted)" }}
                 >
-                  fires at {time} on {date}
+                  {t("firesAt", { time, date })}
                 </span>
               )}
             </div>
@@ -647,7 +687,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
                   className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
                   style={{ color: "var(--text-tertiary)" }}
                 >
-                  Publish results
+                  {t("publishResults")}
                 </label>
                 <ul className="flex flex-col gap-1.5">
                   {post.publish_results.map((r, idx) => {
@@ -691,9 +731,9 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 text-[10px]"
                             style={{ color: "var(--accent-primary)" }}
-                            title="Open the live post in a new tab"
+                            title={t("openLivePostNewTab")}
                           >
-                            View <ExternalLink size={10} />
+                            {t("view")} <ExternalLink size={10} />
                           </a>
                         )}
                       </li>
@@ -714,7 +754,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
 
           {/* RIGHT — preview */}
           <div
-            className="overflow-y-auto p-5"
+            className="overflow-y-auto p-4 md:p-5"
             style={{ background: "var(--bg-secondary)" }}
           >
             {activeIds.length === 0 ? (
@@ -723,15 +763,15 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
                 style={{ color: "var(--text-muted)" }}
               >
                 <Sparkles size={28} className="opacity-40" />
-                <p className="text-sm">No platform selected</p>
-                <p className="text-xs">Toggle a platform on the left to preview</p>
+                <p className="text-sm">{tCreation("noPlatformsSelected")}</p>
+                <p className="text-xs">{tCreation("togglePlatformsHint")}</p>
               </div>
             ) : (
               <>
                 {/* Platform tabs */}
                 <div
                   role="tablist"
-                  aria-label="Platform previews"
+                  aria-label={tCreation("platformPreviewsAria")}
                   className="flex items-center gap-1 mb-3"
                 >
                   {activeIds.map((id, idx) => {
@@ -787,7 +827,7 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
 
         {/* Footer actions */}
         <div
-          className="flex items-center justify-between px-5 py-3 shrink-0"
+          className="flex items-center justify-between flex-wrap gap-2 px-4 md:px-5 py-3 shrink-0"
           style={{ borderTop: "1px solid var(--border-default)" }}
         >
           <button
@@ -805,23 +845,23 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
               (e.currentTarget.style.background = "transparent")
             }
           >
-            <Trash2 size={13} /> Delete
+            <Trash2 size={13} /> {tCommon("delete")}
           </button>
           <div className="flex items-center gap-2">
-            <button className="btn-secondary text-sm" onClick={onClose}>
-              Cancel
+            <button className={`${btnSecondary} text-sm`} onClick={onClose}>
+              {tCommon("cancel")}
             </button>
             <button
-              className="btn-primary text-sm"
+              className={`${btnPrimary} text-sm`}
               onClick={handleSave}
               disabled={hasPending}
               title={
                 hasPending
-                  ? "Waiting for media to finish uploading…"
+                  ? t("waitingForUploads")
                   : undefined
               }
             >
-              {hasPending ? "Uploading…" : "Save changes"}
+              {hasPending ? tCommon("uploading") : tCommon("saveChanges")}
             </button>
           </div>
         </div>
@@ -836,6 +876,8 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
    with platform-appropriate aspect ratio, char/hashtag limits, and chrome.
    ─────────────────────────────────────────────────────────────────────── */
 function PostMiniPreview({ platform, content, media, hashtagCount, ratio }) {
+  const t = useTranslations("postEditor");
+  const tCreation = useTranslations("creation");
   const [mediaIdx, setMediaIdx] = useState(0);
   const Icon = platform.icon;
   // Caller supplies the active ratio; fall back to the platform default
@@ -884,7 +926,7 @@ function PostMiniPreview({ platform, content, media, hashtagCount, ratio }) {
             className="text-[10px]"
             style={{ color: "var(--text-muted)" }}
           >
-            {platform.label} · scheduled
+            {platform.label} · {t("scheduledStatus")}
           </p>
         </div>
         <Icon size={14} style={{ color: platform.color }} />
@@ -941,7 +983,7 @@ function PostMiniPreview({ platform, content, media, hashtagCount, ratio }) {
               style={{ color: platform.color }}
             />
             <p className="text-[11px]">
-              {effectiveRatio} {numericRatio < 0.7 ? "Vertical" : numericRatio > 1.1 ? "Landscape" : "Square"}
+              {effectiveRatio} {numericRatio < 0.7 ? tCreation("vertical") : numericRatio > 1.1 ? tCreation("landscape") : tCreation("square")}
             </p>
           </div>
         )}
@@ -957,7 +999,7 @@ function PostMiniPreview({ platform, content, media, hashtagCount, ratio }) {
               <button
                 onClick={(e) => { e.stopPropagation(); setMediaIdx(i => i - 1); }}
                 className="absolute left-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full flex items-center justify-center bg-black/50 text-white hover:bg-black/70 transition-colors z-10"
-                aria-label="Previous media"
+                aria-label={tCreation("previousMedia")}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
               </button>
@@ -966,7 +1008,7 @@ function PostMiniPreview({ platform, content, media, hashtagCount, ratio }) {
               <button
                 onClick={(e) => { e.stopPropagation(); setMediaIdx(i => i + 1); }}
                 className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full flex items-center justify-center bg-black/50 text-white hover:bg-black/70 transition-colors z-10"
-                aria-label="Next media"
+                aria-label={tCreation("nextMedia")}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
               </button>
@@ -991,7 +1033,7 @@ function PostMiniPreview({ platform, content, media, hashtagCount, ratio }) {
             WebkitLineClamp: 4,
           }}
         >
-          {content || "Your post content will appear here…"}
+          {content || tCreation("postContentPlaceholder")}
         </p>
       </div>
 

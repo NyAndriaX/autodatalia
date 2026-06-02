@@ -23,6 +23,41 @@ try:
 except Exception:  # pragma: no cover — environmental
     _get_ffmpeg_exe = None  # type: ignore[assignment]
 
+# ── Atomic file write helper ───────────────────────────────────────────
+# Every JSON store in the codebase (posts.json, automation_rules.json,
+# messages.json, cost_logs.json, video_jobs.json, .ai_cache.json) is the
+# source of truth for some flow — a crash during write would corrupt
+# the calendar, scheduler or cost dashboard. Going through this helper
+# guarantees a half-written file never reaches the persisted path: we
+# write to a sibling .tmp, fsync, then os.replace() which is atomic on
+# POSIX and on NTFS via MoveFileEx().
+
+
+def atomic_write_text(path, content: str, *, encoding: str = "utf-8") -> None:
+    """Write ``content`` to ``path`` atomically.
+
+    Same signature as ``Path.write_text`` so the callsites can swap
+    ``path.write_text(x)`` for ``atomic_write_text(path, x)`` with no
+    other change. Creates the parent dir if missing.
+    """
+    import os as _os
+    from pathlib import Path as _Path
+    path = _Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding=encoding) as f:
+        f.write(content)
+        f.flush()
+        try:
+            _os.fsync(f.fileno())
+        except OSError:
+            # Some filesystems (e.g. tmpfs on certain dev setups) don't
+            # support fsync; the rename is still atomic enough for our
+            # crash window since the kernel page cache holds the bytes.
+            pass
+    _os.replace(tmp, path)
+
+
 # ── Constants ──────────────────────────────────────────────────────────
 
 # .jfif is what Microsoft Edge / older Windows tools name a regular JPEG.
@@ -45,12 +80,19 @@ def read_description(image_path: Path) -> str:
 
 
 def iter_content_items() -> list[dict[str, Any]]:
-    """Scan the content directory and return metadata for every image found."""
+    """Scan the content directory and return metadata for every image found.
+
+    Skips pipeline derivatives so caption generation doesn't redo the same
+    image once per crop variant (4 calls for one upload would be billed
+    individually otherwise).
+    """
     items: list[dict[str, Any]] = []
     for image_path in sorted(settings.content_dir.rglob("*")):
         if not image_path.is_file():
             continue
         if image_path.suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+        if _is_derivative_filename(image_path.name):
             continue
         items.append(
             {
@@ -87,7 +129,7 @@ def _extract_json(raw: str) -> dict[str, Any]:
 
 
 async def generate_captions(
-    item: dict[str, Any], *, include_image: bool
+    item: dict[str, Any], *, include_image: bool, user_id: str | int | None = None
 ) -> dict[str, str]:
     """Call the configured AI model and return Instagram + TikTok captions."""
     if not settings.ai_api_key:
@@ -161,6 +203,23 @@ async def generate_captions(
             part.get("text", "") for part in message_content if isinstance(part, dict)
         )
 
+    # Log this call in the cost dashboard — captions are a STANDARD-tier
+    # workflow (creative + per-platform), distinct from /generate so the
+    # dashboard can show per-feature spend.
+    try:
+        from .cost_tracking import record_call
+        usage = data.get("usage") or {}
+        record_call(
+            workflow="captions",
+            tier="standard",
+            model=settings.ai_model,
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            user_id=user_id,
+        )
+    except Exception:
+        pass
+
     try:
         captions = _extract_json(message_content)
     except (ValueError, json.JSONDecodeError) as exc:
@@ -198,9 +257,7 @@ _AI_CACHE: dict[str, list[Any]] = _load_cache()
 
 def _save_cache() -> None:
     try:
-        _AI_CACHE_FILE.write_text(
-            json.dumps(_AI_CACHE), encoding="utf-8"
-        )
+        atomic_write_text(_AI_CACHE_FILE, json.dumps(_AI_CACHE))
     except Exception:
         pass  # cache is best-effort; never break a request over it
 
@@ -270,9 +327,38 @@ def rate_tick(client_id: str) -> None:
 
 _ZERO_USAGE = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
+# ── LLM tier → model resolver ──────────────────────────────────────────
+# Centralised so every callsite picks a tier (fast/standard/premium) and
+# the actual model id is one config swap away. This is the wiring the
+# CEO checklist (#4 "tiered LLM routing") expects: every call labels its
+# tier, and the cost dashboard rolls up spend per tier.
 
-async def _post_chat(payload: dict[str, Any]) -> tuple[str, dict[str, int]]:
-    """POST an OpenAI-compatible chat payload; return (text, usage)."""
+_TIER_TO_MODEL = {
+    "fast": lambda: settings.ai_model_fast,
+    "standard": lambda: settings.ai_model,
+    "premium": lambda: settings.ai_model_premium,
+}
+
+
+def model_for_tier(tier: str) -> str:
+    resolver = _TIER_TO_MODEL.get(tier) or _TIER_TO_MODEL["standard"]
+    return resolver()
+
+
+async def _post_chat(
+    payload: dict[str, Any],
+    *,
+    workflow: str = "generate",
+    tier: str = "standard",
+    user_id: str | int | None = None,
+    log_cost: bool = True,
+) -> tuple[str, dict[str, int]]:
+    """POST an OpenAI-compatible chat payload; return (text, usage).
+
+    Every successful call lands a row in the cost log via cost_tracking
+    so the dashboard can show per-workflow spend. Skip with log_cost=False
+    when the caller is going to log a different shape (e.g. media gen).
+    """
     if not settings.ai_api_key:
         raise HTTPException(status_code=500, detail="AI_API_KEY is not configured.")
 
@@ -310,7 +396,48 @@ async def _post_chat(payload: dict[str, Any]) -> tuple[str, dict[str, int]]:
         "completion_tokens": usage.get("completion_tokens", 0),
         "total_tokens": usage.get("total_tokens", 0),
     }
+    if log_cost:
+        try:
+            from .cost_tracking import record_call
+            record_call(
+                workflow=workflow,
+                tier=tier,
+                model=payload.get("model") or model_for_tier(tier),
+                prompt_tokens=usage["prompt_tokens"],
+                completion_tokens=usage["completion_tokens"],
+                user_id=user_id,
+            )
+        except Exception:
+            pass  # cost logging is best-effort — never break a real call
     return content, usage
+
+
+def record_cache_hit(
+    *,
+    workflow: str,
+    tier: str,
+    model: str,
+    estimated_prompt_tokens: int = 0,
+    estimated_completion_tokens: int = 0,
+    user_id: str | int | None = None,
+) -> None:
+    """Persist a zero-cost cache-hit log entry so the dashboard can show
+    real "tokens saved" stats. Safe to call from any path that returns a
+    memoized response without hitting the model.
+    """
+    try:
+        from .cost_tracking import record_call
+        record_call(
+            workflow=workflow,
+            tier=tier,
+            model=model,
+            prompt_tokens=estimated_prompt_tokens,
+            completion_tokens=estimated_completion_tokens,
+            user_id=user_id,
+            cached=True,
+        )
+    except Exception:
+        pass
 
 
 def _image_hash(image_path: Path) -> str:
@@ -322,7 +449,9 @@ def _image_hash(image_path: Path) -> str:
     return h.hexdigest()
 
 
-async def _describe_image(image_path: Path) -> str:
+async def _describe_image(
+    image_path: Path, *, user_id: str | int | None = None
+) -> str:
     """Return a short cached text description of the image.
 
     The vision model is hit at most once per unique file (key = content
@@ -335,6 +464,12 @@ async def _describe_image(image_path: Path) -> str:
     key = _cache_key("describe", _image_hash(image_path))
     cached = _cache_get(key)
     if isinstance(cached, str) and cached:
+        record_cache_hit(
+            workflow="image_description",
+            tier="fast",
+            model=settings.ai_model_fast,
+            user_id=user_id,
+        )
         return cached
 
     payload = {
@@ -365,7 +500,9 @@ async def _describe_image(image_path: Path) -> str:
         ],
     }
     try:
-        text, _usage = await _post_chat(payload)
+        text, _usage = await _post_chat(
+            payload, workflow="image_description", tier="fast", user_id=user_id
+        )
     except HTTPException as e:
         print(f"[debug] _describe_image AI error: {e.detail}")
         return ""
@@ -375,6 +512,95 @@ async def _describe_image(image_path: Path) -> str:
     return text
 
 
+# ── Fast-tier dedicated helpers ────────────────────────────────────────
+# Hashtags, post summaries and reformulations are SIMPLE-tier jobs:
+# accuracy/repeatability matter, not creativity. Routing them through
+# the cheap model cuts spend by ~10x on heavy days.
+
+
+async def generate_hashtags(
+    content: str, *, user_id: str | int | None = None, max_tags: int = 8
+) -> tuple[list[str], dict[str, int]]:
+    """Suggest hashtags for a post. Fast tier."""
+    content = _compress(content, limit=2000)
+    if not content.strip():
+        return [], dict(_ZERO_USAGE)
+    cache_key = _cache_key("hashtags", content, max_tags)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        record_cache_hit(
+            workflow="hashtags",
+            tier="fast",
+            model=settings.ai_model_fast,
+            user_id=user_id,
+        )
+        return cached, dict(_ZERO_USAGE)
+    payload = {
+        "model": settings.ai_model_fast,
+        "temperature": 0.4,
+        "max_tokens": 100,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Suggest concise, on-topic social hashtags. Return ONE "
+                    "line, space-separated, each tag starting with #."
+                ),
+            },
+            {"role": "user", "content": f"Up to {max_tags} hashtags for:\n\n{content}"},
+        ],
+    }
+    text, usage = await _post_chat(
+        payload, workflow="hashtags", tier="fast", user_id=user_id
+    )
+    tags = [t.strip() for t in text.split() if t.startswith("#")][:max_tags]
+    _cache_set(cache_key, tags)
+    return tags, usage
+
+
+async def summarize_post(
+    content: str, *, user_id: str | int | None = None, target_chars: int = 240
+) -> tuple[str, dict[str, int]]:
+    """One-paragraph summary of a longer post. Fast tier."""
+    content = _compress(content, limit=4000)
+    if not content.strip():
+        return "", dict(_ZERO_USAGE)
+    cache_key = _cache_key("summary", content, target_chars)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        record_cache_hit(
+            workflow="summary",
+            tier="fast",
+            model=settings.ai_model_fast,
+            user_id=user_id,
+        )
+        return cached, dict(_ZERO_USAGE)
+    payload = {
+        "model": settings.ai_model_fast,
+        "temperature": 0.3,
+        "max_tokens": 200,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You summarise marketing copy. Return ONE short paragraph, "
+                    "no preamble, no bullet points."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"Summarise in ~{target_chars} characters:\n\n{content}",
+            },
+        ],
+    }
+    text, usage = await _post_chat(
+        payload, workflow="summary", tier="fast", user_id=user_id
+    )
+    text = text.strip()
+    _cache_set(cache_key, text)
+    return text, usage
+
+
 async def generate_post_variants(
     *,
     prompt: str,
@@ -382,8 +608,18 @@ async def generate_post_variants(
     template: str | None = None,
     n: int = 1,
     image_filename: str | None = None,
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Prompt-driven generation — returns ([{id,text,tone}], usage)."""
+    quality: str = "auto",
+    user_id: str | int | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, int], str]:
+    """Prompt-driven generation — returns ([{id,text,tone}], usage, model).
+
+    `quality` controls tier selection:
+      - "auto"     : standard tier, escalates to premium when n >= 3
+                     (more variants = harder differentiation problem)
+      - "fast"     : forces fast tier — cheapest, single-variant only
+      - "standard" : forces standard tier
+      - "premium"  : forces premium tier (use sparingly — most expensive)
+    """
     prompt = _compress(prompt)
     active = [k for k, v in (platforms or {}).items() if v] or ["generic"]
 
@@ -409,14 +645,32 @@ async def generate_post_variants(
     image_fingerprint: str | None = None
     if image_path:
         image_fingerprint = _image_hash(image_path)
-        image_description = await _describe_image(image_path)
+        image_description = await _describe_image(image_path, user_id=user_id)
+
+    # Tier selection — drives the model choice + dashboard label.
+    if quality == "fast":
+        tier = "fast"
+    elif quality == "premium":
+        tier = "premium"
+    elif quality == "standard":
+        tier = "standard"
+    else:  # auto
+        tier = "premium" if n >= 3 else "standard"
+    chosen_model = model_for_tier(tier)
 
     cache_key = _cache_key(
-        "generate", prompt, sorted(active), template, n, image_fingerprint, image_description,
+        "generate", prompt, sorted(active), template, n,
+        image_fingerprint, image_description, tier,
     )
     cached = _cache_get(cache_key)
     if cached is not None:
-        return cached, dict(_ZERO_USAGE)
+        record_cache_hit(
+            workflow="post_variants",
+            tier=tier,
+            model=chosen_model,
+            user_id=user_id,
+        )
+        return cached, dict(_ZERO_USAGE), chosen_model
 
     user_prompt = (
         f"Write {n} distinct social media post variants.\n"
@@ -438,7 +692,7 @@ async def generate_post_variants(
     user_content = user_prompt
 
     payload = {
-        "model": settings.ai_model,
+        "model": chosen_model,
         "temperature": 0.85,
         # Bound output cost: ~110 tokens per variant + JSON overhead.
         "max_tokens": 110 * n + 80,
@@ -454,7 +708,9 @@ async def generate_post_variants(
         ],
     }
 
-    raw, usage = await _post_chat(payload)
+    raw, usage = await _post_chat(
+        payload, workflow="post_variants", tier=tier, user_id=user_id
+    )
     try:
         parsed = _extract_json(raw)
     except (ValueError, json.JSONDecodeError) as exc:
@@ -476,7 +732,7 @@ async def generate_post_variants(
             status_code=502, detail="AI returned no usable variants."
         )
     _cache_set(cache_key, variants)
-    return variants, usage
+    return variants, usage, chosen_model
 
 
 _TRANSFORM_INSTRUCTIONS = {
@@ -490,9 +746,9 @@ TRANSFORM_ACTIONS = tuple(_TRANSFORM_INSTRUCTIONS.keys())
 
 
 async def transform_content(
-    content: str, action: str
-) -> tuple[str, dict[str, int]]:
-    """Apply a quick AI action to existing content; returns the new text."""
+    content: str, action: str, *, user_id: str | int | None = None
+) -> tuple[str, dict[str, int], str]:
+    """Apply a quick AI action to existing content; returns (text, usage, model)."""
     instruction = _TRANSFORM_INSTRUCTIONS.get(action)
     if instruction is None:
         # Explicit 422 with the allowed values — better than a silent pass.
@@ -508,7 +764,13 @@ async def transform_content(
     cache_key = _cache_key("transform", action, content)
     cached = _cache_get(cache_key)
     if cached is not None:
-        return cached, dict(_ZERO_USAGE)
+        record_cache_hit(
+            workflow="transform",
+            tier="fast",
+            model=settings.ai_model_fast,
+            user_id=user_id,
+        )
+        return cached, dict(_ZERO_USAGE), settings.ai_model_fast
 
     payload = {
         # Quick actions use the cheap/fast model (LLM Router cost strategy).
@@ -528,10 +790,12 @@ async def transform_content(
             {"role": "user", "content": f"{instruction}\n\n---\n{content}"},
         ],
     }
-    text, usage = await _post_chat(payload)
+    text, usage = await _post_chat(
+        payload, workflow="transform", tier="fast", user_id=user_id
+    )
     text = text.strip()
     _cache_set(cache_key, text)
-    return text, usage
+    return text, usage, settings.ai_model_fast
 
 
 # ── Media upload ───────────────────────────────────────────────────────
@@ -775,6 +1039,26 @@ async def save_upload(file: UploadFile) -> dict[str, str]:
 
 # ── Search ─────────────────────────────────────────────────────────────
 
+# Derivatives the publish/crop/transcode pipeline writes next to the
+# original. These are cache artefacts — the Library should never show
+# them as standalone tiles, otherwise one upload looks like 3-4 separate
+# assets to the user.
+#   _r<W>x<H>_cropped : per-platform aspect-ratio crop (images.py:103)
+#   _converted        : image-format normalisation, e.g. HEIC→JPG (images.py:208)
+#   __norm            : video transcode for publishing (services.py:907)
+_DERIVATIVE_PATTERN = re.compile(
+    r"(_r\d+x\d+_cropped|_converted|__norm)+$",
+    re.IGNORECASE,
+)
+
+
+def _is_derivative_filename(name: str) -> bool:
+    """True if this looks like a derivative file produced by the publish
+    pipeline (not an asset the user uploaded directly)."""
+    stem = name.rsplit(".", 1)[0]
+    return bool(_DERIVATIVE_PATTERN.search(stem))
+
+
 def search_media(query: str, limit: int = 50) -> list[dict[str, str]]:
     """Search the content directory for media matching `query`.
 
@@ -782,6 +1066,10 @@ def search_media(query: str, limit: int = 50) -> list[dict[str, str]]:
     the Media Library). Posts/templates live in Airtable (not wired yet) so
     only `media` hits are returned for now — honest partial results, no
     mock padding.
+
+    Pipeline derivatives (``_converted``, ``_rNxN_cropped``, ``__norm``)
+    are hidden — they're caches keyed off the original and would otherwise
+    surface as duplicate tiles in the Library.
     """
     q = query.strip().lower()
     hits: list[dict[str, str]] = []
@@ -790,6 +1078,8 @@ def search_media(query: str, limit: int = 50) -> list[dict[str, str]]:
             continue
         suffix = path.suffix.lower()
         if suffix not in IMAGE_EXTENSIONS and suffix not in VIDEO_EXTENSIONS:
+            continue
+        if _is_derivative_filename(path.name):
             continue
         description = read_description(path)
         if q and q not in path.name.lower() and q not in description.lower():
@@ -833,7 +1123,7 @@ def _posts_read_raw() -> list[dict[str, Any]]:
 
 def _posts_write_raw(posts: list[dict[str, Any]]) -> None:
     _POSTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _POSTS_FILE.write_text(json.dumps(posts, indent=2), encoding="utf-8")
+    atomic_write_text(_POSTS_FILE, json.dumps(posts, indent=2))
 
 
 def posts_list() -> list[dict[str, Any]]:
@@ -904,7 +1194,7 @@ def _automation_read_raw() -> list[dict[str, Any]]:
 
 def _automation_write_raw(rules: list[dict[str, Any]]) -> None:
     _AUTOMATION_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _AUTOMATION_FILE.write_text(json.dumps(rules, indent=2), encoding="utf-8")
+    atomic_write_text(_AUTOMATION_FILE, json.dumps(rules, indent=2))
 
 
 def automation_list() -> list[dict[str, Any]]:
@@ -982,7 +1272,7 @@ def _messages_read_raw() -> list[dict[str, Any]]:
 
 def _messages_write_raw(items: list[dict[str, Any]]) -> None:
     _MESSAGES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _MESSAGES_FILE.write_text(json.dumps(items, indent=2), encoding="utf-8")
+    atomic_write_text(_MESSAGES_FILE, json.dumps(items, indent=2))
 
 
 def messages_list() -> list[dict[str, Any]]:

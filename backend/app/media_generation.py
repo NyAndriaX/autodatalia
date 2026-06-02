@@ -6,10 +6,13 @@ import asyncio
 import base64
 import hashlib
 import io
+import json
+import logging
 import os
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -21,12 +24,18 @@ from .models import (
     GeneratedMediaResponse,
     ImageGenerationRequest,
     VideoGenerationRequest,
+    VideoJob,
+    VideoJobsResponse,
+    VideoModel,
+    VideoModelsResponse,
 )
 
 try:
     from imageio_ffmpeg import get_ffmpeg_exe as _get_ffmpeg_exe
 except Exception:  # pragma: no cover - environmental
     _get_ffmpeg_exe = None  # type: ignore[assignment]
+
+log = logging.getLogger("datalia.media_generation")
 
 router = APIRouter(tags=["media-generation"])
 
@@ -118,11 +127,29 @@ def _render_fallback_poster(prompt: str, width: int, height: int) -> bytes:
     return buf.getvalue()
 
 
-async def _call_image_api(prompt: str, width: int, height: int) -> tuple[bytes, str]:
+async def _call_image_api(
+    prompt: str, width: int, height: int, *, user_id: str | int | None = None
+) -> tuple[bytes, str]:
+    """Generate one image. Dispatches between two API shapes:
+
+      1. **Chat-completions** — for Gemini image models (Nano Banana =
+         ``google/gemini-2.5-flash-image-preview``). These speak the
+         OpenAI ChatCompletions REST contract and return the image
+         either as an entry in ``choices[0].message.images`` (OpenRouter)
+         or as an ``inline_data`` part on the message (Google native).
+      2. **Images-generations** — the classic ``/images/generations``
+         endpoint used by DALL·E, FLUX-via-Together, fal.ai, etc.
+
+    The selector is the model id: anything matching ``gemini*image``
+    takes path (1); everything else takes path (2).
+    """
     if not settings.ai_image_model:
         return _render_fallback_poster(prompt, width, height), "fallback-poster"
     if not settings.ai_image_api_key:
         raise HTTPException(500, "AI_IMAGE_API_KEY is not configured.")
+
+    if _is_gemini_image_model(settings.ai_image_model):
+        return await _call_gemini_image_api(prompt, width, height, user_id=user_id)
 
     payload = {
         "model": settings.ai_image_model,
@@ -151,14 +178,182 @@ async def _call_image_api(prompt: str, width: int, height: int) -> tuple[bytes, 
     data = resp.json()
     first = (data.get("data") or [{}])[0] or {}
     if first.get("b64_json"):
+        _log_image_cost(prompt, user_id)
         return base64.b64decode(first["b64_json"]), settings.ai_image_model
     if first.get("url"):
         async with httpx.AsyncClient(timeout=120.0) as client:
             image_resp = await client.get(first["url"])
         if image_resp.status_code >= 400:
             raise HTTPException(502, "Generated image URL could not be fetched.")
+        _log_image_cost(prompt, user_id)
         return image_resp.content, settings.ai_image_model
     raise HTTPException(502, "Image generation returned no asset.")
+
+
+def _is_gemini_image_model(model: str) -> bool:
+    m = (model or "").lower()
+    return "gemini" in m and "image" in m
+
+
+async def _call_gemini_image_api(
+    prompt: str, width: int, height: int, *, user_id: str | int | None = None
+) -> tuple[bytes, str]:
+    """Image generation via Gemini's chat-completions shape (Nano Banana).
+
+    Works against OpenRouter (``google/gemini-2.5-flash-image-preview``)
+    and Google AI Studio's OpenAI-compatible endpoint
+    (``generativelanguage.googleapis.com/v1beta/openai``). The size hint
+    is encoded into the prompt because Gemini doesn't accept a ``size``
+    parameter the way DALL·E does — the model is good at honouring an
+    aspect-ratio cue in plain English.
+    """
+    aspect_hint = f"Generate a single {width}x{height} image. {prompt}"
+    payload = {
+        "model": settings.ai_image_model,
+        # OpenRouter routes image-output models when modalities is set.
+        # Native Google API ignores it harmlessly.
+        "modalities": ["image", "text"],
+        # Cap output tokens so OpenRouter's pre-flight credit check
+        # doesn't reserve the model's full context window (~30k for
+        # Gemini 2.5 Flash Image). 2500 is the minimum that reliably
+        # produces a complete image without OpenRouter rejecting the
+        # call on low-balance accounts.
+        "max_tokens": 2500,
+        "messages": [{"role": "user", "content": aspect_hint}],
+    }
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        resp = await client.post(
+            f"{settings.ai_image_api_base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {settings.ai_image_api_key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://caption-api.local",
+                "X-Title": "Datalia Image Gen",
+            },
+            json=payload,
+        )
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "Gemini image generation request failed.",
+                "status_code": resp.status_code,
+                "response": resp.text[:800],
+            },
+        )
+    data = resp.json()
+    img_bytes = await _extract_gemini_image(data)
+    if img_bytes is None:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "Gemini returned no image asset.",
+                "response": json.dumps(data)[:800] if isinstance(data, dict) else "",
+            },
+        )
+    _log_image_cost(prompt, user_id)
+    return img_bytes, settings.ai_image_model
+
+
+async def _extract_gemini_image(data: dict) -> bytes | None:
+    """Pull the first image payload out of a Gemini chat-completions
+    response. Tries every shape the providers use in 2026:
+
+      * OpenRouter image-output: ``choices[0].message.images[0].image_url.url``
+        as a ``data:image/...;base64,...`` URL.
+      * OpenAI multimodal echo: same path but ``content`` is an array
+        with an ``image_url`` part.
+      * Google AI Studio direct: ``candidates[0].content.parts[]`` has
+        an ``inline_data`` part with ``mime_type`` + base64 ``data``.
+
+    A remote ``http(s)://`` URL (rare but legal) is fetched and returned
+    as bytes. Returns None when no image is found.
+    """
+    # 1. OpenRouter / OpenAI chat shape
+    for choice in data.get("choices") or []:
+        msg = choice.get("message") or {}
+        for entry in msg.get("images") or []:
+            url = (entry.get("image_url") or {}).get("url") or entry.get("url")
+            if url:
+                blob = await _bytes_from_image_url(url)
+                if blob is not None:
+                    return blob
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_url":
+                    url = (part.get("image_url") or {}).get("url")
+                    if url:
+                        blob = await _bytes_from_image_url(url)
+                        if blob is not None:
+                            return blob
+
+    # 2. Google AI Studio native shape (candidates / inline_data)
+    for cand in data.get("candidates") or []:
+        parts = (cand.get("content") or {}).get("parts") or []
+        for part in parts:
+            inline = part.get("inline_data") or part.get("inlineData") or {}
+            payload = inline.get("data") if isinstance(inline, dict) else None
+            if payload:
+                try:
+                    return base64.b64decode(payload)
+                except Exception:
+                    continue
+    return None
+
+
+async def _bytes_from_image_url(url: str) -> bytes | None:
+    if not url:
+        return None
+    if url.startswith("data:"):
+        try:
+            _, b64 = url.split(",", 1)
+            return base64.b64decode(b64)
+        except (ValueError, base64.binascii.Error):
+            return None
+    if url.startswith("http://") or url.startswith("https://"):
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            r = await client.get(url)
+        if r.status_code < 400:
+            return r.content
+    return None
+
+
+def _log_image_cost(prompt: str, user_id: str | int | None) -> None:
+    """Stick a row in the cost dashboard for one image generation.
+
+    Image providers price per image (not per token), so we log a flat
+    dollar amount. The value here ($0.04) reflects typical SDXL/DALL-E 3
+    pricing; override via env in cost_tracking if your provider differs.
+    """
+    try:
+        from .cost_tracking import record_media_job
+        model = settings.ai_image_model or "fallback-poster"
+        # Best-effort provider tag — used in the cost dashboard's
+        # "by_model" breakdown. Cost per image varies wildly by provider
+        # (Nano Banana is ~$0.03, DALL·E 3 ~$0.04, FLUX-schnell free).
+        if _is_gemini_image_model(model):
+            provider = "gemini"
+            cost_usd = 0.03
+        elif "dall-e" in model.lower():
+            provider = "openai"
+            cost_usd = 0.04
+        elif "flux" in model.lower() and "schnell" in model.lower():
+            provider = "together"
+            cost_usd = 0.0  # FLUX-schnell free tier
+        else:
+            provider = "openrouter"
+            cost_usd = 0.04
+        record_media_job(
+            workflow="image",
+            provider=provider,
+            model=model,
+            cost_usd=cost_usd,
+            user_id=user_id,
+            metadata={"prompt_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]},
+        )
+    except Exception as exc:
+        log.warning("[cost] record_media_job failed: %s", exc)
 
 
 def _write_bytes(prompt: str, suffix: str, payload: bytes) -> Path:
@@ -170,9 +365,11 @@ def _write_bytes(prompt: str, suffix: str, payload: bytes) -> Path:
     return path
 
 
-async def _generate_image_file(prompt: str, ratio: str) -> tuple[Path, str]:
+async def _generate_image_file(
+    prompt: str, ratio: str, *, user_id: str | int | None = None
+) -> tuple[Path, str]:
     width, height = _pick_size(ratio)
-    payload, provider = await _call_image_api(prompt, width, height)
+    payload, provider = await _call_image_api(prompt, width, height, user_id=user_id)
     out = _write_bytes(prompt, ".png", payload)
     return out, provider
 
@@ -238,23 +435,118 @@ def _response_for(request: Request, path: Path, *, kind: str, provider: str, pro
     )
 
 
-@router.post("/media/generate/image", response_model=GeneratedMediaResponse, dependencies=[Depends(require_token)])
-async def generate_image(request: Request, body: ImageGenerationRequest) -> GeneratedMediaResponse:
-    path, provider = await _generate_image_file(body.prompt, body.ratio)
+@router.post("/media/generate/image", response_model=GeneratedMediaResponse)
+async def generate_image(
+    request: Request,
+    body: ImageGenerationRequest,
+    user_id: int = Depends(require_token),
+) -> GeneratedMediaResponse:
+    path, provider = await _generate_image_file(body.prompt, body.ratio, user_id=user_id)
     return _response_for(request, path, kind="image", provider=provider, prompt=body.prompt)
 
 
-@router.post("/media/generate/video", response_model=GeneratedMediaResponse, dependencies=[Depends(require_token)])
-async def generate_video(request: Request, body: VideoGenerationRequest) -> GeneratedMediaResponse:
-    width, height = _pick_size(body.ratio, video=True)
-    poster, provider = await _generate_image_file(body.prompt, body.ratio)
-    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-    out = _generated_dir() / f"{stamp}-{_safe_stub(body.prompt)}-motion.mp4"
-    await _render_motion_video(poster, out, width, height, body.duration_seconds)
-    return _response_for(
-        request,
-        out,
+@router.post("/media/generate/video")
+async def generate_video(
+    request: Request,
+    body: VideoGenerationRequest,
+    user_id: int = Depends(require_token),
+):
+    """Kick off a video generation job.
+
+    With ``async_mode=true`` (default) this returns the queued ``VideoJob``
+    immediately and the client polls ``GET /video-jobs/{id}`` until
+    ``status == "succeeded"``. Set ``async_mode=false`` to keep the
+    legacy synchronous behaviour — useful for in-process callers (the
+    automation worker) but not safe behind public HTTPS proxies that
+    enforce ~60s timeouts.
+    """
+    from .video_jobs import create_job, run_job
+    if body.async_mode:
+        job = create_job(
+            prompt=body.prompt,
+            ratio=body.ratio,
+            duration_seconds=body.duration_seconds,
+            image_filename=body.image_filename,
+            provider=body.provider,
+            user_id=user_id,
+            fal_model=body.fal_model,
+            quality=body.quality,
+            mode=body.mode,
+        )
+        return VideoJob(**job)
+
+    # Synchronous fallback path — used by the automation worker. Runs
+    # the same code as the async worker but blocks the caller.
+    job = create_job(
+        prompt=body.prompt,
+        ratio=body.ratio,
+        duration_seconds=body.duration_seconds,
+        image_filename=body.image_filename,
+        provider=body.provider,
+        user_id=user_id,
+        fal_model=body.fal_model,
+        quality=body.quality,
+        mode=body.mode,
+    )
+    finished = await run_job(job["id"])
+    if not finished or finished.get("status") != "succeeded":
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "Video generation failed.",
+                "error": (finished or {}).get("error") or "unknown",
+                "job": finished,
+            },
+        )
+    return GeneratedMediaResponse(
+        url=finished["output_url"],
+        filename=finished["output_filename"],
         kind="video",
-        provider=f"{provider}+motion",
+        provider=finished["provider"],
         prompt=body.prompt,
     )
+
+
+# ── Video jobs queue ──────────────────────────────────────────────────
+
+
+@router.get("/video-models", response_model=VideoModelsResponse)
+async def video_models_list() -> VideoModelsResponse:
+    """Catalogue of fal.ai video models the backend knows about.
+
+    The frontend uses this to populate the model picker on the AI Video
+    page, hide controls a model can't support (e.g. audio for LTX),
+    and surface per-model pricing.
+    """
+    from .video_jobs import list_fal_models
+    from .config import settings as _settings
+    return VideoModelsResponse(
+        models=[VideoModel(**m) for m in list_fal_models()],
+        default=_settings.fal_video_model,
+    )
+
+
+@router.get("/video-jobs", response_model=VideoJobsResponse)
+async def video_jobs_list() -> VideoJobsResponse:
+    from .video_jobs import list_jobs
+    return VideoJobsResponse(jobs=[VideoJob(**j) for j in list_jobs()])
+
+
+@router.get("/video-jobs/{job_id}", response_model=VideoJob)
+async def video_jobs_get(job_id: str) -> VideoJob:
+    from .video_jobs import get_job
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Video job not found.")
+    return VideoJob(**job)
+
+
+@router.delete("/video-jobs/{job_id}")
+async def video_jobs_delete(
+    job_id: str,
+    user_id: int = Depends(require_token),
+) -> dict[str, Any]:
+    from .video_jobs import delete_job
+    if not delete_job(job_id):
+        raise HTTPException(404, "Video job not found.")
+    return {"deleted": True}

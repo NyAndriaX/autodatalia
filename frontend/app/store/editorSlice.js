@@ -21,7 +21,6 @@ const initialState = {
     ratios: {},
     status: "draft", // "draft" | "pending" | "approved" | "published" | "error"
     scheduledDate: null,
-    hashtags: [],
     media: [],
     /* TikTok-specific compose flags. TikTok's audit reviewers verify the
        editor exposes all four of these BEFORE the publish call — they're
@@ -42,7 +41,6 @@ const initialState = {
     selectedVariant: null,
     error: null,
   },
-  drafts: [],
 };
 
 const editorSlice = createSlice({
@@ -82,12 +80,6 @@ const editorSlice = createSlice({
     setStatus: (state, action) => {
       state.currentPost.status = action.payload;
     },
-    setScheduledDate: (state, action) => {
-      state.currentPost.scheduledDate = action.payload;
-    },
-    setHashtags: (state, action) => {
-      state.currentPost.hashtags = action.payload;
-    },
     addMedia: (state, action) => {
       // payload: array of media descriptors (see lib/uploadService)
       state.currentPost.media.push(...action.payload);
@@ -101,16 +93,6 @@ const editorSlice = createSlice({
       state.currentPost.media = state.currentPost.media.filter(
         (m) => m.id !== action.payload
       );
-    },
-    clearMedia: (state) => {
-      state.currentPost.media = [];
-    },
-    reorderMedia: (state, action) => {
-      const { from, to } = action.payload;
-      const media = state.currentPost.media;
-      if (from < 0 || to < 0 || from >= media.length || to >= media.length) return;
-      const [moved] = media.splice(from, 1);
-      media.splice(to, 0, moved);
     },
     // AI generation lifecycle — dispatched by editorThunks
     startGeneration: (state) => {
@@ -142,7 +124,6 @@ const editorSlice = createSlice({
         state.currentPost.content = state.aiGeneration.variants[action.payload]?.text || "";
       }
     },
-    resetEditor: () => initialState,
   },
 });
 
@@ -155,20 +136,15 @@ export const {
   setPlatformRatio,
   setTiktokOptions,
   setStatus,
-  setScheduledDate,
-  setHashtags,
   addMedia,
   updateMedia,
   removeMedia,
-  clearMedia,
-  reorderMedia,
   startGeneration,
   setVariants,
   setGenerationError,
   startQuickAction,
   finishQuickAction,
   selectVariant,
-  resetEditor,
 } = editorSlice.actions;
 
 export default editorSlice.reducer;

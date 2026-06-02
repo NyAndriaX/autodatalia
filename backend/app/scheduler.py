@@ -157,7 +157,7 @@ async def fire_post(post: dict[str, Any]) -> dict[str, Any]:
     pid = post["id"]
     media_url = _resolve_media_url(post)
     media_urls = _resolve_media_urls(post)
-    targets = await build_targets_from_post(
+    targets, skipped = await build_targets_from_post(
         platforms=post.get("platforms") or {},
         media_url=media_url,
         media_urls=media_urls,
@@ -166,7 +166,7 @@ async def fire_post(post: dict[str, Any]) -> dict[str, Any]:
         tiktok_options=post.get("tiktok"),
     )
 
-    if not targets:
+    if not targets and not skipped:
         updated = posts_update(pid, {
             "status": "error",
             "error": "no_connected_targets",
@@ -183,7 +183,11 @@ async def fire_post(post: dict[str, Any]) -> dict[str, Any]:
         return updated or post
 
     try:
-        results = await publish_to_targets(content=post.get("content", ""), targets=targets)
+        publish_results = (
+            await publish_to_targets(content=post.get("content", ""), targets=targets)
+            if targets
+            else []
+        )
     except Exception as exc:
         log.exception("[scheduler] publish_to_targets failed for %s", pid)
         updated = posts_update(pid, {
@@ -198,6 +202,11 @@ async def fire_post(post: dict[str, Any]) -> dict[str, Any]:
         })
         return updated or post
 
+    # Merge real publish results with the synthetic skip rows so the
+    # response, the bell feed, and post.publish_results all reflect
+    # every platform the user requested — no more silent IG/TikTok
+    # drops when only Facebook posted.
+    results = list(publish_results) + list(skipped)
     any_ok = any(r.get("ok") for r in results)
     _record_messages_for_results(pid, results)
     # posts_update skips None values (so empty PATCH bodies don't clobber
@@ -265,12 +274,7 @@ def start_scheduler() -> None:
     if _TASK is not None and not _TASK.done():
         return
     _STOP = False
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    _TASK = loop.create_task(_loop())
+    _TASK = asyncio.create_task(_loop())
 
 
 def stop_scheduler() -> None:

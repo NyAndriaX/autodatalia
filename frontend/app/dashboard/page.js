@@ -1,4 +1,5 @@
 "use client";
+import { fadeIn } from "../lib/uiClasses";
 
 import { useRouter } from "next/navigation";
 import { useSelector, useDispatch } from "react-redux";
@@ -15,6 +16,7 @@ import AnalyticsView from "../components/views/AnalyticsView";
 import SettingsView from "../components/views/SettingsView";
 import DashboardView from "../components/views/DashboardView";
 import CreditsView from "../components/views/CreditsView";
+import VideoJobsView from "../components/views/VideoJobsView";
 
 export default function Home() {
   const dispatch = useDispatch();
@@ -51,6 +53,8 @@ export default function Home() {
         return <CalendarView />;
       case "library":
         return <MediaLibraryView />;
+      case "videos":
+        return <VideoJobsView />;
       case "analytics":
         return <AnalyticsView />;
       case "credits":
@@ -72,7 +76,7 @@ export default function Home() {
       {/* Dim backdrop behind the mobile drawer */}
       {isMobile && mobileNavOpen && (
         <div
-          className="fixed inset-0 z-[45] animate-fade-in"
+          className={`fixed inset-0 z-[45] ${fadeIn}`}
           style={{ background: "rgba(15, 23, 42, 0.5)" }}
           onClick={() => dispatch(setMobileNav(false))}
           aria-hidden="true"

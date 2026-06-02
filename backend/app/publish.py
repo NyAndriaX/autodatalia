@@ -44,6 +44,56 @@ DUPLICATE_WINDOW_SECONDS = 5 * 60
 _RECENT_POSTS: dict[str, list[tuple[str, float]]] = {}
 
 
+def _local_path_for_content_url(url: str) -> Path | None:
+    """If `url` points at one of our own /content/<filename> URLs, return
+    the matching path on disk. Returns None for foreign URLs (e.g. user
+    pasted a third-party image) or anything outside the content dir.
+
+    Used by the publish pre-flight to detect "URL exists in the draft
+    but the file is gone from disk" — surfaces a clear error instead of
+    letting Meta/TikTok complain about a fetch failure 30s later.
+    """
+    if not url:
+        return None
+    marker = "/content/"
+    idx = url.find(marker)
+    if idx < 0:
+        return None
+    rel = url[idx + len(marker):]
+    # Strip any query string / fragment.
+    for sep in ("?", "#"):
+        cut = rel.find(sep)
+        if cut >= 0:
+            rel = rel[:cut]
+    if not rel:
+        return None
+    try:
+        candidate = (settings.content_dir / rel).resolve()
+        # Prevent path traversal — must stay under content_dir.
+        candidate.relative_to(settings.content_dir.resolve())
+    except (ValueError, OSError):
+        return None
+    return candidate
+
+
+def _missing_media_for_target(t: dict[str, Any]) -> str | None:
+    """Return the first content-served media URL on the target whose
+    backing file is missing on disk, else None.
+
+    Skips foreign URLs — only our own /content/ URLs are checked, since
+    we can't reason about whether arbitrary third-party hosts are up.
+    """
+    urls: list[str] = []
+    if t.get("media_url"):
+        urls.append(t["media_url"])
+    urls.extend(t.get("media_urls") or [])
+    for url in urls:
+        path = _local_path_for_content_url(url)
+        if path is not None and not path.exists():
+            return url
+    return None
+
+
 def _content_hash(content: str, media_url: str | None) -> str:
     h = hashlib.sha256()
     h.update((content or "").encode("utf-8"))
@@ -1227,34 +1277,6 @@ async def publish_linkedin(
     content: str,
     media_url: str | None = None,
 ) -> PublishResult:
-    """LinkedIn UGC posts — stub until LinkedIn creds land.
-
-    Personal post path (no review needed):
-      POST /v2/ugcPosts
-        author = "urn:li:person:{id}"
-        lifecycleState = "PUBLISHED"
-        specificContent."com.linkedin.ugc.ShareContent" with shareCommentary + media
-
-    Organization (Page) post requires Community Management API approval;
-    same endpoint, different author URN ("urn:li:organization:{id}").
-    """
-    return PublishResult(
-        target_id=member_or_org_urn,
-        target_label=label,
-        platform="linkedin",
-        ok=False,
-        error="linkedin_publish_not_implemented",
-    )
-
-
-async def publish_linkedin(
-    member_or_org_urn: str,
-    access_token: str,
-    *,
-    label: str,
-    content: str,
-    media_url: str | None = None,
-) -> PublishResult:
     """Publish a LinkedIn member post through the REST Posts API."""
     if not access_token:
         return PublishResult(
@@ -1358,18 +1380,18 @@ async def build_targets_from_post(
     link: str | None = None,
     ratios: dict[str, str] | None = None,
     tiktok_options: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Build a publish-ready target list from a Post's `platforms` toggle map.
+
+    Returns ``(resolved, skipped)`` where ``skipped`` carries one entry per
+    requested platform that ended up with zero usable destinations — used
+    by the scheduler to surface "IG silently dropped because Meta page
+    has no IG account linked" instead of pretending the publish succeeded.
 
     The HTTP /publish route receives explicit {platform, id} pairs the
     frontend picked. The scheduler doesn't have a frontend — it just has
     `platforms: {facebook: true, ...}` on the stored post, so it needs to
-    re-discover the connected destinations itself. Mirrors the resolution
-    /publish does inline, but starts one step earlier (toggles → targets)
-    and returns fully token-resolved rows ready for publish_to_targets.
-
-    Platforms that aren't connected are skipped silently — the caller
-    surfaces "no targets" on the post when the list ends up empty.
+    re-discover the connected destinations itself.
     """
     # Local imports keep publish.py free of an oauth.py module-level dep.
     from .oauth import _load_tokens, _fetch_meta_pages
@@ -1380,14 +1402,33 @@ async def build_targets_from_post(
     user_meta_token = meta_record.get("access_token")
     enabled = [k for k, v in (platforms or {}).items() if v]
     if not enabled:
-        return []
+        return [], []
 
     pages = await _fetch_meta_pages(user_meta_token) if user_meta_token else []
     resolved: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     effective_urls = media_urls or ([media_url] if media_url else [])
+
+    def _skip(platform: str, reason: str) -> None:
+        skipped.append({
+            "target_id": platform,
+            "target_label": platform.capitalize(),
+            "platform": platform,
+            "ok": False,
+            "platform_post_id": None,
+            "permalink_url": None,
+            "error": reason,
+            "raw": None,
+        })
 
     for platform in enabled:
         if platform == "facebook":
+            if not user_meta_token:
+                _skip(platform, "meta_not_connected")
+                continue
+            if not pages:
+                _skip(platform, "no_facebook_pages_found")
+                continue
             for page in pages:
                 resolved.append({
                     "platform": "facebook",
@@ -1400,6 +1441,10 @@ async def build_targets_from_post(
                     "link": link,
                 })
         elif platform == "instagram":
+            if not user_meta_token:
+                _skip(platform, "meta_not_connected")
+                continue
+            ig_targets_before = len(resolved)
             for page in pages:
                 ig = page.get("instagram") or {}
                 if not ig.get("ig_id"):
@@ -1413,16 +1458,24 @@ async def build_targets_from_post(
                     "media_urls": effective_urls,
                     "media_kind": media_kind,
                 })
+            if len(resolved) == ig_targets_before:
+                _skip(
+                    platform,
+                    "no_instagram_business_linked_to_page — link an IG "
+                    "Business account to the Page in Meta Business Suite.",
+                )
         elif platform == "tiktok":
-            # Scheduler path: refresh TikTok token if it's expired (24h
-            # short-lived). Mirrors what /publish does inline. Without this,
-            # any scheduled post >24h after the last manual reconnect would
-            # 401 silently.
+            # Refresh TikTok token if it's expired (24h short-lived).
+            # Mirrors what /publish does inline.
             from .oauth import resolve_tiktok_access_token
             token = await resolve_tiktok_access_token()
             tokens = _load_tokens()
             record = tokens.get("tiktok") or {}
             if not token:
+                _skip(
+                    platform,
+                    "tiktok_not_connected — reconnect TikTok in Settings.",
+                )
                 continue
             raw = record.get("raw") or {}
             open_id = record.get("open_id") or raw.get("open_id")
@@ -1435,6 +1488,19 @@ async def build_targets_from_post(
                 } else "video"
 
             tk_opts = tiktok_options or {}
+            # Default to "direct" so the auto path matches the manual
+            # path (TikTokOptions model default = "direct"). Previously
+            # the scheduler defaulted to "inbox" so auto-fired TikTok
+            # posts silently became drafts the user never tapped.
+            requested_audit = tk_opts.get("audit_mode", "direct")
+            granted_scope = (record.get("scope") or "").lower()
+            effective_audit = requested_audit
+            if requested_audit == "direct" and "video.publish" not in granted_scope:
+                # Scope downgrade — mirrors routes.py logic. Without
+                # video.publish granted the direct endpoint 401s; inbox
+                # still works so the post lands in TikTok drafts.
+                effective_audit = "inbox"
+
             resolved.append({
                 "platform": "tiktok",
                 "id": open_id or "tiktok",
@@ -1446,12 +1512,17 @@ async def build_targets_from_post(
                 "privacy_level": tk_opts.get("privacy_level", "SELF_ONLY"),
                 "disclose_video_branded": tk_opts.get("disclose_video_branded", False),
                 "disclose_video_your_brand": tk_opts.get("disclose_video_your_brand", False),
-                "audit_mode": tk_opts.get("audit_mode", "inbox"),
+                "audit_mode": effective_audit,
+                "audit_downgraded": requested_audit != effective_audit,
             })
         elif platform == "linkedin":
             record = tokens.get(platform) or {}
             token = record.get("access_token")
             if not token:
+                _skip(
+                    platform,
+                    "linkedin_not_connected — reconnect LinkedIn in Settings.",
+                )
                 continue
             raw = record.get("raw") or {}
             resolved.append({
@@ -1479,7 +1550,7 @@ async def build_targets_from_post(
                 )
                 for url in r["media_urls"]
             ]
-    return resolved
+    return resolved, skipped
 
 
 async def publish_to_targets(
@@ -1506,6 +1577,19 @@ async def publish_to_targets(
     async def _dispatch(t: dict[str, Any]) -> PublishResult:
         try:
             platform = t.get("platform")
+            # Pre-flight: any /content/-served URL whose file is gone from
+            # disk would surface as `Meta 9004` / `tiktok photo_pull_failed`
+            # ~30s later. Catch it here so the user sees "Media file no
+            # longer on disk — re-upload or pick from Library" instead.
+            missing = _missing_media_for_target(t)
+            if missing:
+                return PublishResult(
+                    target_id=t["id"],
+                    target_label=t.get("label") or t["id"],
+                    platform=platform or "unknown",
+                    ok=False,
+                    error=f"media_missing_on_disk: {missing.rsplit('/', 1)[-1]} — re-upload from the Media Library.",
+                )
             # Spam guard: cooldown + duplicate-content check per target. Runs
             # before any upstream call so a flood never reaches the platform.
             guard = check_spam_guard(t["id"], content, t.get("media_url"))

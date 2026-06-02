@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { X, Send, AlertTriangle, Music, UserCheck } from "lucide-react";
+import { useTranslations } from "next-intl";
+import { X, Send, AlertTriangle } from "lucide-react";
 import { fetchConnections } from "../../lib/oauthService";
 import { PLATFORMS } from "../../lib/platforms";
 import { setTiktokOptions } from "../../store/editorSlice";
@@ -51,6 +52,8 @@ export default function PublishConfirmModal({
   onConfirm,
 }) {
   const dispatch = useDispatch();
+  const tCommon = useTranslations("common");
+  const t = useTranslations("publishConfirm");
   const tiktok = useSelector((s) => s.editor.currentPost.tiktok || {});
   const [providers, setProviders] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -98,7 +101,7 @@ export default function PublishConfirmModal({
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="Confirm publish"
+      aria-label={t("title", { n: totalTargets })}
     >
       <div
         className="w-full max-w-md rounded-2xl overflow-hidden flex flex-col"
@@ -114,24 +117,24 @@ export default function PublishConfirmModal({
       >
         {/* Header — fixed at top */}
         <div
-          className="flex items-center justify-between px-5 py-4 shrink-0"
+          className="flex items-center justify-between px-4 sm:px-5 py-4 shrink-0"
           style={{ borderBottom: "1px solid var(--border-default)" }}
         >
           <h2 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
-            Confirm publish
+            {t("title", { n: totalTargets })}
           </h2>
           <button
             onClick={onClose}
             className="p-1 rounded-md"
             style={{ color: "var(--text-secondary)" }}
-            aria-label="Close"
+            aria-label={t("close")}
           >
             <X size={16} />
           </button>
         </div>
 
         {/* Body — scrolls when content exceeds available space */}
-        <div className="px-5 py-4 space-y-3 overflow-y-auto flex-1 min-h-0">
+        <div className="px-4 sm:px-5 py-4 space-y-3 overflow-y-auto flex-1 min-h-0">
           {/* Duplicate warning — surfaces a frontend-only hint before the
               backend would reject the same content. */}
           {isDuplicate && (
@@ -145,32 +148,32 @@ export default function PublishConfirmModal({
             >
               <AlertTriangle size={14} style={{ color: "#eab308" }} className="shrink-0 mt-0.5" />
               <span>
-                You posted this same content recently — confirming again will publish a duplicate.
+                {t("duplicateWarning")}
               </span>
             </div>
           )}
 
           <div>
             <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: "var(--text-muted)" }}>
-              Content
+              {t("content")}
             </p>
             <div
               className="text-xs whitespace-pre-wrap max-h-24 overflow-y-auto px-3 py-2 rounded-md"
               style={{ background: "var(--bg-secondary)", color: "var(--text-primary)" }}
             >
-              {content || <em style={{ color: "var(--text-muted)" }}>(empty — media only)</em>}
+              {content || <em style={{ color: "var(--text-muted)" }}>{t("emptyMediaOnly")}</em>}
             </div>
           </div>
 
           <div>
             <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: "var(--text-muted)" }}>
-              Posting to ({totalTargets})
+              {t("postingTo", { n: totalTargets })}
             </p>
             {loading ? (
-              <p className="text-xs" style={{ color: "var(--text-muted)" }}>Loading connected accounts…</p>
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>{tCommon("loadingConnections")}</p>
             ) : totalTargets === 0 ? (
               <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-                No connected accounts for the selected platforms.
+                {t("noTargets")}
               </p>
             ) : (
               <ul className="space-y-1">
@@ -180,17 +183,17 @@ export default function PublishConfirmModal({
                     return (
                       <li
                         key={`${platformId}-${t.id}`}
-                        className="flex items-center gap-2 text-xs px-2 py-1.5 rounded-md"
+                        className="flex items-center gap-2 flex-wrap text-xs px-2 py-1.5 rounded-md"
                         style={{ background: "var(--bg-secondary)" }}
                       >
                         <span
-                          className="w-1.5 h-1.5 rounded-full"
+                          className="w-1.5 h-1.5 rounded-full shrink-0"
                           style={{ background: platform?.color || "var(--accent-primary)" }}
                           aria-hidden="true"
                         />
                         <span style={{ color: "var(--text-secondary)" }}>{platform?.label || platformId}</span>
                         <span style={{ color: "var(--text-muted)" }}>·</span>
-                        <span style={{ color: "var(--text-primary)" }}>{t.label}</span>
+                        <span className="break-words min-w-0" style={{ color: "var(--text-primary)" }}>{t.label}</span>
                       </li>
                     );
                   })
@@ -211,7 +214,7 @@ export default function PublishConfirmModal({
 
         {/* Footer — pinned to bottom */}
         <div
-          className="flex items-center justify-end gap-2 px-5 py-3 shrink-0"
+          className="flex items-center justify-end gap-2 flex-wrap px-4 sm:px-5 py-3 shrink-0"
           style={{ borderTop: "1px solid var(--border-default)" }}
         >
           <button
@@ -223,7 +226,7 @@ export default function PublishConfirmModal({
               border: "1px solid var(--border-default)",
             }}
           >
-            Cancel
+            {t("cancel")}
           </button>
           <button
             onClick={() => {
@@ -247,18 +250,18 @@ export default function PublishConfirmModal({
             }}
             title={
               !tiktokGateOk
-                ? "Confirm TikTok music rights before publishing"
+                ? t("confirmMusicRightsTitle")
                 : undefined
             }
           >
             <Send size={12} />
             {!tiktokGateOk
-              ? "Confirm music rights first"
+              ? t("confirmMusicRights")
               : isConfirming
-              ? "Publishing..."
+              ? t("publishing")
               : isDuplicate
-              ? "Publish anyway"
-              : `Publish to ${totalTargets}`}
+              ? t("publishAnyway")
+              : t("title", { n: totalTargets })}
           </button>
         </div>
       </div>

@@ -2,937 +2,497 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSelector, useDispatch } from "react-redux";
+import { useTranslations, useFormatter } from "next-intl";
 import { fetchConnections } from "../../lib/oauthService";
-import {
-  Sparkles,
-  CalendarDays,
-  Send,
-  Clock,
-  Coins,
-  ArrowRight,
-  CheckCircle2,
-  AlertCircle,
-  Users,
-  Heart,
-  ExternalLink,
-  Image as ImageIcon,
-} from "lucide-react";
 import { setActiveView } from "../../store/uiSlice";
-import {
-  PLATFORMS,
-  PLATFORM_MAP,
-  STATUS_META,
-  activePlatformIds,
-} from "../../lib/platforms";
-import {
-  parseDateKey,
-  startOfToday,
-  isoDateKey,
-  addDays,
-} from "../../lib/dateUtils";
+import { PLATFORMS, STATUS_META, activePlatformIds } from "../../lib/platforms";
+import { startOfToday, isoDateKey, addDays, parseDateKey } from "../../lib/dateUtils";
 import { useIsMobile } from "../../lib/useIsMobile";
+import {
+  TrendingUp, Calendar, Users, Zap, ArrowRight, ExternalLink,
+  CheckCircle2, FileText, BarChart2,
+  PlusCircle, Bot, Image, AlertCircle, Sparkles,
+} from "lucide-react";
 
-// Same conversion used in the Credits view — keep these in sync.
-const CREDIT_TO_EUR = 0.01;
-const TOKEN_TO_CREDIT_PER_1K = 1;
+/* ─── constantes ─────────────────────────────────────────────────────────*/
+const PLATFORM_COLORS = { facebook:"#1877F2", instagram:"#e1306c", tiktok:"#181818", linkedin:"#0A66C2" };
 
-// Locale-independent number formatter so the SSR-rendered HTML matches what
-// the client renders after hydration (toLocaleString() varies by locale).
-const fmt = (n) =>
-  Math.round(Number(n) || 0)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+const PLATFORM_TO_PROVIDER    = { facebook:"meta", instagram:"meta", tiktok:"tiktok", linkedin:"linkedin" };
+const PLATFORM_TO_TARGET_KIND = { facebook:"facebook_page", instagram:"instagram_business", tiktok:"tiktok_account", linkedin:"linkedin_member" };
 
-const WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const WEEKDAY_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const MONTH_LONG = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
+const fmt = (n) => Math.round(Number(n)||0).toString().replace(/\B(?=(\d{3})+(?!\d))/g," ");
 
-/**
- * Landing dashboard.
- *
- * Everything above the fold is real data now — the previous version had
- * MOCK subscribers / ads / impressions / audience / top-posts that made
- * the CEO's screenshot look like a demo. Sources:
- *
- *   - Credits spent: live ai_usage ring buffer
- *   - Audience per platform: Meta /me/accounts (fan_count for Pages,
- *     followers_count for linked IG Business accounts) — surfaced
- *     through /oauth/connections.targets[].audience
- *   - Published / scheduled / drafts / errors: calendar Redux store
- *   - Recent posts (formerly "Top performing"): the last N posts whose
- *     status flipped to "published" by the manual flow or the scheduler.
- *     Carries the live permalink so the card click-throughs work.
- *
- * Insights-API-dependent metrics (impressions, ad spend) are deliberately
- * NOT rendered — better to show what we have honestly than pad the page
- * with stubs labelled "sample".
- */
+const STATUS_COLORS = {
+  published : { bg:"rgba(6,182,212,.15)",  text:"var(--status-published)", dot:"#06b6d4" },
+  scheduled : { bg:"rgba(99,102,241,.12)", text:"#6366f1",                 dot:"#6366f1" },
+  draft     : { bg:"rgba(100,116,139,.12)",text:"var(--status-draft)",     dot:"#64748b" },
+  pending   : { bg:"rgba(245,158,11,.12)", text:"var(--status-pending)",   dot:"#f59e0b" },
+  error     : { bg:"rgba(239,68,68,.12)",  text:"var(--status-error)",     dot:"#ef4444" },
+  approved  : { bg:"rgba(34,197,94,.12)",  text:"var(--status-approved)",  dot:"#22c55e" },
+  awaiting_validation: { bg:"rgba(168,85,247,.12)", text:"var(--status-awaiting)",  dot:"#a855f7" },
+  rejected  : { bg:"rgba(148,163,184,.15)",text:"var(--status-rejected)",  dot:"#94a3b8" },
+};
+
+/* ─── sous-composants ────────────────────────────────────────────────────*/
+function KpiCard({ icon: Icon, label, value, sub, color, onClick }) {
+  return (
+    <button type="button" onClick={onClick}
+      className="w-full text-left"
+      style={{ border:"none", background:"none", padding:0, cursor: onClick ? "pointer" : "default" }}>
+      <div className="flex flex-col gap-2 rounded-2xl p-5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl"
+        style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
+        <div className="flex items-center justify-between">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl"
+            style={{ background: color + "20", color }}>
+            <Icon size={18} />
+          </span>
+          {onClick && <ArrowRight size={13} style={{ color:"var(--text-muted)" }} />}
+        </div>
+        <div className="mt-1">
+          <p className="text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
+            {label}
+          </p>
+          <p className="mt-0.5 text-3xl font-extrabold leading-none tracking-tight" style={{ color:"var(--text-primary)" }}>
+            {value}
+          </p>
+          {sub && <p className="mt-1 text-xs" style={{ color:"var(--text-muted)" }}>{sub}</p>}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function PipelineBar({ stats }) {
+  const t = useTranslations("dashboard");
+  const items = [
+    { key:"draft",     label:t("drafts"),    dot:"#64748b" },
+    { key:"pending",   label:t("pending"),   dot:"#f59e0b" },
+    { key:"scheduled", label:t("scheduled"), dot:"#6366f1" },
+    { key:"published", label:t("published"), dot:"#22c55e" },
+    { key:"error",     label:t("errors"),    dot:"#ef4444" },
+  ];
+  const total = Math.max(1, items.reduce((s,i) => s + (stats.byStatus[i.key]||0), 0));
+  return (
+    <div className="rounded-2xl p-5" style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
+      <p className="mb-3 text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
+        {t("pipelineTitle")}
+      </p>
+      <div className="flex h-3 w-full overflow-hidden rounded-full" style={{ background:"var(--bg-tertiary)" }}>
+        {items.map(({ key, dot }) => {
+          const pct = ((stats.byStatus[key]||0) / total) * 100;
+          return pct > 0 ? (
+            <div key={key} style={{ width:`${pct}%`, background:dot, transition:"width .4s ease" }} />
+          ) : null;
+        })}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2">
+        {items.map(({ key, label, dot }) => (
+          <span key={key} className="flex items-center gap-1.5 text-xs font-medium" style={{ color:"var(--text-secondary)" }}>
+            <span className="h-2 w-2 rounded-full" style={{ background: dot }} />
+            {label} <strong style={{ color:"var(--text-primary)" }}>{stats.byStatus[key]||0}</strong>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function WeekStrip({ week, todayKey, onCalendar }) {
+  const t = useTranslations("dashboard");
+  const format = useFormatter();
+  return (
+    <div className="rounded-2xl p-5" style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
+      <div className="mb-3 flex items-center justify-between">
+        <p className="text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
+          {t("next7Days")}
+        </p>
+        <button type="button" onClick={onCalendar}
+          className="flex items-center gap-1 text-xs font-semibold transition-opacity hover:opacity-70"
+          style={{ color:"var(--accent-primary)", border:"none", background:"none", cursor:"pointer" }}>
+          {t("fullCalendar")} <ArrowRight size={12} />
+        </button>
+      </div>
+      <div className="grid grid-cols-7 gap-2">
+        {week.map(({ date, key, day }) => {
+          const isToday = key === todayKey;
+          const hasPost = day.length > 0;
+          return (
+            <button key={key} type="button" onClick={onCalendar}
+              className="flex flex-col items-center gap-1 rounded-xl py-2 sm:py-3 transition-all duration-150 hover:scale-105 min-w-0"
+              style={{
+                background: isToday ? "var(--accent-primary)" : hasPost ? "var(--bg-secondary)" : "var(--bg-tertiary)",
+                border: `1px solid ${isToday ? "transparent" : "var(--border-default)"}`,
+                cursor:"pointer",
+              }}>
+              <span className="text-[9px] font-bold uppercase tracking-wider"
+                style={{ color: isToday ? "rgba(255,255,255,.7)" : "var(--text-muted)" }}>
+                {format.dateTime(date, { weekday: "short" }).toUpperCase()}
+              </span>
+              <span className="text-sm sm:text-base font-extrabold leading-none"
+                style={{ color: isToday ? "#fff" : "var(--text-primary)" }}>
+                {date.getDate()}
+              </span>
+              <div className="flex flex-wrap justify-center gap-0.5">
+                {day.slice(0,3).map((p,i) => {
+                  const s = STATUS_META[p.status] || STATUS_META.draft;
+                  return <span key={i} className="h-1 w-1 rounded-full"
+                    style={{ background: isToday ? "rgba(255,255,255,.7)" : s.colorVar }} />;
+                })}
+                {day.length > 3 && (
+                  <span className="text-[8px] font-bold"
+                    style={{ color: isToday ? "rgba(255,255,255,.7)" : "var(--text-muted)" }}>
+                    +{day.length-3}
+                  </span>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function AudienceCard({ audience, totalAudience, onManage }) {
+  const t = useTranslations("dashboard");
+  const max = Math.max(1, ...audience.map(r => r.count));
+  return (
+    <div className="rounded-2xl p-5 h-full flex flex-col" style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
+      <div className="mb-4 flex items-center justify-between">
+        <p className="text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
+          {t("audience")}
+        </p>
+        <button type="button" onClick={onManage}
+          className="text-xs font-semibold transition-opacity hover:opacity-70"
+          style={{ color:"var(--accent-primary)", border:"none", background:"none", cursor:"pointer" }}>
+          {t("manage")}
+        </button>
+      </div>
+      {audience.every(r => !r.connected) ? (
+        <div className="flex flex-col items-center justify-center py-6 text-center flex-1">
+          <Users size={28} style={{ color:"var(--text-muted)", marginBottom:8 }} />
+          <p className="text-sm font-medium" style={{ color:"var(--text-secondary)" }}>{t("noPlatformsConnected")}</p>
+          <p className="mt-1 text-xs" style={{ color:"var(--text-muted)" }}>{t("connectInSettings")}</p>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3 flex-1">
+          {audience.map(row => {
+            const color = PLATFORM_COLORS[row.platform] || "#64748b";
+            const pct   = Math.round((row.count / max) * 100);
+            return (
+              <div key={row.platform}>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="flex items-center gap-2 text-xs font-semibold capitalize" style={{ color:"var(--text-secondary)" }}>
+                    <span className="flex h-5 w-5 items-center justify-center rounded-md text-[9px] font-black text-white"
+                      style={{ background: color }}>
+                      {row.platform[0].toUpperCase()}
+                    </span>
+                    {row.platform}
+                    {!row.connected && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold"
+                        style={{ background:"rgba(100,116,139,.12)", color:"var(--text-muted)" }}>
+                        {t("offline")}
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-xs font-bold tabular-nums" style={{ color:"var(--text-primary)" }}>
+                    {fmt(row.count)}
+                  </span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full" style={{ background:"var(--bg-tertiary)" }}>
+                  <div className="h-full rounded-full transition-all duration-500"
+                    style={{ width: row.connected ? `${pct}%` : "0%", background: color }} />
+                </div>
+              </div>
+            );
+          })}
+          <p className="mt-auto pt-2 text-right text-xs font-bold" style={{ color:"var(--text-muted)" }}>
+            {t("followersTotal", { count: fmt(totalAudience) })}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RecentPost({ post }) {
+  const t = useTranslations("dashboard");
+  const STATUS_LABELS = {
+    published: t("statusPublished"),
+    scheduled: t("statusScheduled"),
+    draft:     t("statusDraft"),
+    pending:   t("statusPending"),
+    error:     t("statusError"),
+    approved:  t("statusApproved"),
+    awaiting_validation: t("statusAwaiting"),
+    rejected:  t("statusRejected"),
+  };
+  const ids = activePlatformIds(post.platforms);
+  const statusColor = STATUS_COLORS[post.status] || STATUS_COLORS.draft;
+  return (
+    <div className="flex items-start gap-3 px-5 py-3.5 transition-all duration-150 hover:bg-[var(--bg-card-hover)]"
+      style={{ borderBottom:"1px solid var(--border-default)" }}>
+      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-black text-white"
+        style={{ background: ids.length > 0 ? (PLATFORM_COLORS[ids[0]] || "#64748b") : "#64748b" }}>
+        {ids.length > 0 ? ids[0][0].toUpperCase() : "?"}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium" style={{ color:"var(--text-primary)" }}>
+          {post.content || <span style={{ color:"var(--text-muted)" }}>{t("noCaption")}</span>}
+        </p>
+        <div className="mt-1 flex items-center gap-2 text-[11px]" style={{ color:"var(--text-muted)" }}>
+          <span>{post.scheduledDate || "—"}</span>
+          {ids.slice(0,3).map(pid => (
+            <span key={pid} className="h-1.5 w-1.5 rounded-full" style={{ background: PLATFORM_COLORS[pid] }} />
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <span className="rounded-full px-2.5 py-0.5 text-[10px] font-bold"
+          style={{ background: statusColor.bg, color: statusColor.text }}>
+          {STATUS_LABELS[post.status] || post.status}
+        </span>
+        {post.permalink && (
+          <a href={post.permalink} target="_blank" rel="noopener noreferrer"
+            className="rounded p-1 transition-opacity hover:opacity-70"
+            style={{ color:"var(--accent-primary)" }}>
+            <ExternalLink size={12} />
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ActionCard({ icon: Icon, title, description, color, onClick }) {
+  return (
+    <button type="button" onClick={onClick}
+      className="group flex w-full items-start gap-3 rounded-2xl p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-lg"
+      style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)", cursor:"pointer" }}>
+      <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-transform duration-200 group-hover:scale-110"
+        style={{ background: color + "20", color }}>
+        <Icon size={20} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-bold" style={{ color:"var(--text-primary)" }}>{title}</p>
+        <p className="mt-0.5 text-xs leading-relaxed" style={{ color:"var(--text-muted)" }}>{description}</p>
+      </div>
+      <ArrowRight size={14} className="mt-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+        style={{ color }} />
+    </button>
+  );
+}
+
+/* ─── composant principal ───────────────────────────────────────────────*/
 export default function DashboardView() {
-  const dispatch = useDispatch();
+  const t              = useTranslations("dashboard");
+  const tSidebar       = useTranslations("sidebar");
+  const format         = useFormatter();
+  const dispatch       = useDispatch();
   const scheduledPosts = useSelector((s) => s.calendar.scheduledPosts);
-  const aiUsage = useSelector((s) => s.ui.aiUsage);
-  const isMobile = useIsMobile();
+  const aiUsage        = useSelector((s) => s.ui.aiUsage);
+  const user           = useSelector((s) => s.auth.user);
+  const isMobile       = useIsMobile();
 
-  const today = startOfToday();
-  const todayKey = isoDateKey(today);
+  const todayKey = isoDateKey(startOfToday());
+  // Stable across renders within the same day — flips at midnight when
+  // todayKey changes. Keeps stats/week useMemo from invalidating every render.
+  const today    = useMemo(() => parseDateKey(todayKey), [todayKey]);
 
-  // Live OAuth state — same source the Settings view uses, so the Dashboard
-  // never lies about what's actually wired. Initial state is null so SSR
-  // and the first client tick agree (no hydration mismatch on the "live"
-  // badge etc.); a useEffect on mount paints from the cache instantly
-  // (so the "0 connected" flash is just one tick), then a background
-  // fetchConnections refreshes anything older than the TTL.
   const [oauthState, setOauthState] = useState(null);
   useEffect(() => {
     let alive = true;
-    fetchConnections().then((d) => {
-      if (alive) setOauthState(d?.providers || {});
-    });
-    return () => {
-      alive = false;
-    };
+    fetchConnections().then((d) => { if (alive) setOauthState(d?.providers || {}); });
+    return () => { alive = false; };
   }, []);
 
-  // Locale-formatted date — render only after mount to avoid SSR/client
-  // hydration mismatch (server locale ≠ browser locale in some configs).
-  const dateLabel = `${WEEKDAY_LONG[today.getDay()]}, ${
-    MONTH_LONG[today.getMonth()]
-  } ${today.getDate()}`;
+  const dateLabel = format.dateTime(today, { weekday: "long", day: "numeric", month: "long" });
 
-  const PLATFORM_TO_PROVIDER = {
-    facebook: "meta",
-    instagram: "meta",
-    tiktok: "tiktok",
-    linkedin: "linkedin",
-  };
-  const PLATFORM_TO_TARGET_KIND = {
-    facebook: "facebook_page",
-    instagram: "instagram_business",
-    tiktok: "tiktok_account",
-    linkedin: "linkedin_member",
-  };
-  const isConnected = (platformId) =>
-    !!oauthState?.[PLATFORM_TO_PROVIDER[platformId]]?.connected;
+  const isConnected = (pid) => !!oauthState?.[PLATFORM_TO_PROVIDER[pid]]?.connected;
 
-  // ─ Audience per platform (real) ──────────────────────────────────
-  // Walk /oauth/connections.providers.*.targets and sum the `audience`
-  // numbers Meta hands us. A connected platform with no audience number
-  // (Meta still propagating, IG without followers_count) shows up as 0.
-  const audience = useMemo(() => {
-    const out = PLATFORMS.map((p) => {
-      const provider = oauthState?.[PLATFORM_TO_PROVIDER[p.id]];
-      const targets = provider?.targets || [];
-      const kind = PLATFORM_TO_TARGET_KIND[p.id];
-      const matching = targets.filter((t) => t.kind === kind);
-      const count = matching.reduce((sum, t) => sum + (t.audience || 0), 0);
-      return {
-        platform: p.id,
-        count,
-        connected: !!provider?.connected,
-        // accountCount lets the row honestly say "no Pages yet" vs "0 fans"
-        accountCount: matching.length,
-      };
-    });
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [oauthState]);
-
-  const totalAudience = audience.reduce((sum, a) => sum + a.count, 0);
-
-  // ─ Calendar-derived stats (real) ──────────────────────────────────
-  const stats = useMemo(() => {
-    const byStatus = {
-      draft: 0,
-      scheduled: 0,
-      pending: 0,
-      approved: 0,
-      published: 0,
-      error: 0,
+  const audience = useMemo(() => PLATFORMS.map((p) => {
+    const prov    = oauthState?.[PLATFORM_TO_PROVIDER[p.id]];
+    const targets = (prov?.targets || []).filter((t) => t.kind === PLATFORM_TO_TARGET_KIND[p.id]);
+    return {
+      platform: p.id,
+      count: targets.reduce((s, t) => s + (t.audience || 0), 0),
+      connected: !!prov?.connected,
+      accountCount: targets.length,
     };
-    let thisWeek = 0;
-    let publishedThisWeek = 0;
+  }), [oauthState]);
+
+  const totalAudience = audience.reduce((s, a) => s + a.count, 0);
+
+  const stats = useMemo(() => {
+    const byStatus = { draft:0, scheduled:0, pending:0, approved:0, published:0, error:0 };
+    let thisWeek = 0, publishedThisWeek = 0;
     const weekAheadKey = isoDateKey(addDays(today, 7));
-    const weekAgoKey = isoDateKey(addDays(today, -7));
+    const weekAgoKey   = isoDateKey(addDays(today, -7));
     for (const p of scheduledPosts) {
-      if (byStatus[p.status] !== undefined) byStatus[p.status] += 1;
-      if (
-        p.status === "scheduled" &&
-        p.scheduledDate >= todayKey &&
-        p.scheduledDate <= weekAheadKey
-      ) {
-        thisWeek += 1;
-      }
-      if (
-        p.status === "published" &&
-        p.scheduledDate >= weekAgoKey &&
-        p.scheduledDate <= todayKey
-      ) {
-        publishedThisWeek += 1;
-      }
+      if (byStatus[p.status] !== undefined) byStatus[p.status]++;
+      if (p.status === "scheduled" && p.scheduledDate >= todayKey && p.scheduledDate <= weekAheadKey) thisWeek++;
+      if (p.status === "published" && p.scheduledDate >= weekAgoKey && p.scheduledDate <= todayKey)  publishedThisWeek++;
     }
     return { byStatus, thisWeek, publishedThisWeek, total: scheduledPosts.length };
   }, [scheduledPosts, today, todayKey]);
 
-  // ─ Credits → EUR (real, from AI usage) ────────────────────────────
-  const creditsSpent = Math.round(
-    (aiUsage.totalTokens / 1000) * TOKEN_TO_CREDIT_PER_1K
-  );
-  const eurSpent = creditsSpent * CREDIT_TO_EUR;
-
-  // ─ Recent published posts (real) ─────────────────────────────────
-  // The scheduler patches publish_results onto a Post when it fires; the
-  // manual /publish path also writes them. Either way we get a real list
-  // ordered by published_at, with at least one permalink for click-through.
-  const recentPublished = useMemo(() => {
-    return scheduledPosts
-      .filter((p) => p.status === "published")
-      .sort((a, b) => {
-        // published_at sorts when present; otherwise fall back to date
-        const pa = a.published_at || 0;
-        const pb = b.published_at || 0;
-        if (pa !== pb) return pb - pa;
-        return (b.scheduledDate || "").localeCompare(a.scheduledDate || "");
-      })
-      .slice(0, 4)
-      .map((p) => {
-        const firstHit = (p.publish_results || []).find(
-          (r) => r?.ok && r?.permalink_url
-        );
-        return {
-          id: p.id,
-          content: p.content,
-          platforms: p.platforms || {},
-          permalink: firstHit?.permalink_url || null,
-          publishedAt: p.published_at || null,
-          targetLabel: firstHit?.target_label || null,
-        };
-      });
-  }, [scheduledPosts]);
-
-  // ─ 7-day mini calendar ────────────────────────────────────────────
-  const week = useMemo(() => {
-    return Array.from({ length: 7 }, (_, i) => {
-      const date = addDays(today, i);
-      const key = isoDateKey(date);
-      const day = scheduledPosts.filter((p) => p.scheduledDate === key);
-      return { date, key, day };
-    });
-  }, [scheduledPosts, today]);
-
+  const creditsSpent   = Math.round((aiUsage.totalTokens / 1000));
+  const eurSpent       = (creditsSpent * 0.01).toFixed(2);
   const connectedCount = PLATFORMS.filter((p) => isConnected(p.id)).length;
 
-  // Responsive padding — tight on phones so the KPI cards aren't pinched.
-  const pagePadding = isMobile ? 12 : 24;
+  const recentPublished = useMemo(() => scheduledPosts
+    .filter((p) => p.status === "published")
+    .sort((a, b) => (b.published_at || 0) - (a.published_at || 0))
+    .slice(0, 6)
+    .map((p, i) => {
+      const hit = (p.publish_results || []).find((r) => r?.ok && r?.permalink_url);
+      return {
+        key: p.id||i, content: p.content, platforms: p.platforms||{},
+        permalink: hit?.permalink_url||null, scheduledDate: p.scheduledDate||null, status: p.status,
+      };
+    }), [scheduledPosts]);
+
+  const week = useMemo(() => Array.from({ length: 7 }, (_, i) => {
+    const date = addDays(today, i);
+    const key  = isoDateKey(date);
+    return { date, key, day: scheduledPosts.filter((p) => p.scheduledDate === key) };
+  }), [scheduledPosts, today]);
+
+  const pad = isMobile ? 12 : 24;
 
   return (
-    <div
-      className="h-full overflow-y-auto animate-fade-in"
-      style={{ padding: pagePadding }}
-    >
-      <div style={{ maxWidth: 1200, margin: "0 auto" }}>
-        {/* Hero */}
-        <div className="mb-5 md:mb-6">
-          <h1
-            className="text-xl md:text-2xl font-bold mb-1"
-            style={{ color: "var(--text-primary)" }}
-          >
-            Welcome back
+    <div className="h-full overflow-y-auto" style={{ background:"var(--bg-primary)", padding: pad }}>
+      {/* pas de maxWidth — pleine largeur du panneau de contenu */}
+
+      {/* ══ EN-TÊTE ═══════════════════════════════════════════════════════ */}
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="mb-0.5 text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
+            {dateLabel}
+          </p>
+          <h1 className="text-2xl font-extrabold leading-tight tracking-tight" style={{ color:"var(--text-primary)" }}>
+            {user?.name ? t("helloUser", { name: user.name.split(" ")[0] }) : t("helloNoUser")}
           </h1>
-          <p className="text-xs md:text-sm" style={{ color: "var(--text-muted)" }}>
-            Today at a glance{dateLabel ? ` — ${dateLabel}` : ""}
+          <p className="mt-1 text-sm" style={{ color:"var(--text-muted)" }}>
+            {t("subtitleMarketing")}
           </p>
         </div>
-
-        {/* Top KPIs — all real. Two-up on phones, four-up on desktop. */}
-        <div
-          className="grid gap-3 mb-5 md:mb-6"
-          style={{
-            gridTemplateColumns: isMobile
-              ? "repeat(2, minmax(0, 1fr))"
-              : "repeat(auto-fit, minmax(220px, 1fr))",
-          }}
-        >
-          <BigKpi
-            icon={Coins}
-            label="Credits spent"
-            value={fmt(creditsSpent)}
-            sub={`≈ €${eurSpent.toFixed(2)}`}
-            accent="var(--accent-primary)"
-            onClick={() => dispatch(setActiveView("credits"))}
-            live
-          />
-          <BigKpi
-            icon={Users}
-            label="Total audience"
-            value={fmt(totalAudience)}
-            sub={
-              connectedCount > 0
-                ? `Across ${connectedCount} connected platform${
-                    connectedCount === 1 ? "" : "s"
-                  }`
-                : "Connect a platform to see real numbers"
-            }
-            accent="var(--status-approved)"
-            onClick={() => dispatch(setActiveView("settings"))}
-            live={connectedCount > 0}
-          />
-          <BigKpi
-            icon={CalendarDays}
-            label="Scheduled · 7d"
-            value={stats.thisWeek}
-            sub={`${stats.total} total in calendar`}
-            accent="var(--accent-secondary, #6366f1)"
-            onClick={() => dispatch(setActiveView("calendar"))}
-            live
-          />
-          <BigKpi
-            icon={CheckCircle2}
-            label="Published · 7d"
-            value={stats.publishedThisWeek}
-            sub={`${stats.byStatus.published} all-time`}
-            accent="var(--status-approved)"
-            onClick={() => dispatch(setActiveView("calendar"))}
-            live
-          />
-        </div>
-
-        {/* Workflow stat row — drilldown counts. Hidden when empty for
-            scheduled/published so the row doesn't double up with the KPIs. */}
-        <div
-          className="grid gap-3 mb-5 md:mb-6"
-          style={{
-            gridTemplateColumns: isMobile
-              ? "repeat(2, minmax(0, 1fr))"
-              : "repeat(auto-fit, minmax(180px, 1fr))",
-          }}
-        >
-          <SmallKpi
-            icon={Clock}
-            label="Pending approval"
-            value={stats.byStatus.pending}
-            sub={`${stats.byStatus.draft} drafts`}
-            tone={stats.byStatus.pending > 0 ? "warn" : undefined}
-          />
-          <SmallKpi
-            icon={Sparkles}
-            label="AI cache hits"
-            value={aiUsage.cacheHits}
-            sub={`${aiUsage.calls} calls`}
-            onClick={() => dispatch(setActiveView("analytics"))}
-          />
-          <SmallKpi
-            icon={Send}
-            label="Drafts"
-            value={stats.byStatus.draft}
-            sub="awaiting schedule"
-          />
-          <SmallKpi
-            icon={AlertCircle}
-            label="Errors"
-            value={stats.byStatus.error}
-            tone={stats.byStatus.error > 0 ? "error" : undefined}
-            onClick={
-              stats.byStatus.error > 0
-                ? () => dispatch(setActiveView("calendar"))
-                : undefined
-            }
-          />
-        </div>
-
-        {/* 7-day calendar preview — scrolls horizontally on phones so the
-            day cells stay readable instead of pinched. */}
-        <Section
-          title="Next 7 days"
-          action={
-            <button
-              className="text-xs inline-flex items-center gap-1"
-              style={{ color: "var(--accent-primary)" }}
-              onClick={() => dispatch(setActiveView("calendar"))}
-            >
-              Open calendar <ArrowRight size={12} />
-            </button>
-          }
-        >
-          <div
-            style={{
-              overflowX: isMobile ? "auto" : "visible",
-              margin: isMobile ? "0 -6px" : 0,
-              padding: isMobile ? "0 6px" : 0,
-            }}
-          >
-            <div
-              className="grid gap-2"
-              style={{
-                gridTemplateColumns: "repeat(7, 1fr)",
-                minWidth: isMobile ? 560 : "auto",
-              }}
-            >
-              {week.map(({ date, key, day }) => {
-                const isToday = key === todayKey;
-                return (
-                  <button
-                    key={key}
-                    onClick={() => dispatch(setActiveView("calendar"))}
-                    className="rounded-lg text-left p-2 transition-colors"
-                    style={{
-                      background: isToday
-                        ? "var(--bg-elevated)"
-                        : "var(--bg-secondary)",
-                      border: `1px solid ${
-                        isToday ? "var(--accent-primary)" : "var(--border-default)"
-                      }`,
-                      minHeight: 96,
-                    }}
-                  >
-                    <div
-                      className="text-[10px] uppercase tracking-wider"
-                      style={{
-                        color: isToday
-                          ? "var(--accent-primary)"
-                          : "var(--text-muted)",
-                      }}
-                    >
-                      {WEEKDAY_SHORT[date.getDay()]}
-                    </div>
-                    <div
-                      className="text-lg font-bold leading-tight"
-                      style={{ color: "var(--text-primary)" }}
-                    >
-                      {date.getDate()}
-                    </div>
-                    <div className="mt-1 flex flex-col gap-0.5">
-                      {day.slice(0, 2).map((post) => {
-                        const ids = activePlatformIds(post.platforms);
-                        const status = STATUS_META[post.status] || STATUS_META.draft;
-                        return (
-                          <div
-                            key={post.id}
-                            className="flex items-center gap-1 text-[10px] px-1 py-0.5 rounded"
-                            style={{
-                              background: "var(--bg-card)",
-                              color: "var(--text-secondary)",
-                            }}
-                            title={post.content}
-                          >
-                            <span
-                              className="w-1 h-1 rounded-full shrink-0"
-                              style={{ background: status.colorVar }}
-                              aria-hidden="true"
-                            />
-                            <span className="truncate flex-1">
-                              {post.content || "(empty)"}
-                            </span>
-                            {ids[0] && (
-                              <span style={{ color: PLATFORM_MAP[ids[0]].color }}>
-                                ·
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
-                      {day.length > 2 && (
-                        <div
-                          className="text-[10px]"
-                          style={{ color: "var(--text-muted)" }}
-                        >
-                          +{day.length - 2} more
-                        </div>
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </Section>
-
-        {/* Two-col: Audience (real) + Recent published posts (real) */}
-        <div
-          className="grid gap-4 mb-4 mt-4"
-          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}
-        >
-          <Section
-            title="Audience by platform"
-            action={
-              <button
-                className="text-xs inline-flex items-center gap-1"
-                style={{ color: "var(--accent-primary)" }}
-                onClick={() => dispatch(setActiveView("settings"))}
-              >
-                Manage <ArrowRight size={12} />
-              </button>
-            }
-          >
-            {totalAudience === 0 && connectedCount === 0 ? (
-              <EmptyHint
-                icon={Users}
-                title="No platforms connected yet"
-                body="Connect Facebook or Instagram in Settings to see real follower counts here."
-                cta="Open Settings"
-                onCta={() => dispatch(setActiveView("settings"))}
-              />
-            ) : (
-              <div className="flex flex-col gap-2">
-                {audience.map((row) => {
-                  const p = PLATFORM_MAP[row.platform];
-                  const Icon = p.icon;
-                  const maxCount = Math.max(
-                    1,
-                    ...audience.map((r) => r.count)
-                  );
-                  const pct = (row.count / maxCount) * 100;
-                  return (
-                    <div key={row.platform} className="flex items-center gap-3">
-                      <Icon
-                        size={14}
-                        style={{ color: p.color, flexShrink: 0, opacity: row.connected ? 1 : 0.4 }}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between text-xs mb-1">
-                          <span style={{ color: "var(--text-secondary)" }}>
-                            {p.label}
-                          </span>
-                          <span
-                            className="font-semibold tabular-nums"
-                            style={{ color: "var(--text-primary)" }}
-                          >
-                            {row.connected ? (
-                              row.accountCount === 0 ? (
-                                <span
-                                  className="text-[10px]"
-                                  style={{ color: "var(--text-muted)" }}
-                                >
-                                  no accounts
-                                </span>
-                              ) : (
-                                fmt(row.count)
-                              )
-                            ) : (
-                              <span
-                                className="text-[10px] uppercase tracking-wider"
-                                style={{ color: "var(--text-muted)" }}
-                              >
-                                not connected
-                              </span>
-                            )}
-                          </span>
-                        </div>
-                        <div
-                          className="h-1.5 rounded-full overflow-hidden"
-                          style={{ background: "var(--bg-elevated)" }}
-                        >
-                          <div
-                            className="h-full"
-                            style={{
-                              width: `${pct}%`,
-                              background: p.color,
-                              opacity: row.connected ? 1 : 0.3,
-                              transition: "width .3s",
-                            }}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </Section>
-
-          <Section
-            title="Recent published posts"
-            action={
-              <button
-                className="text-xs inline-flex items-center gap-1"
-                style={{ color: "var(--accent-primary)" }}
-                onClick={() => dispatch(setActiveView("calendar"))}
-              >
-                See all <ArrowRight size={12} />
-              </button>
-            }
-          >
-            {recentPublished.length === 0 ? (
-              <EmptyHint
-                icon={Send}
-                title="Nothing published yet"
-                body="Posts you publish manually or via the scheduler show up here with click-through links."
-                cta="Create a post"
-                onCta={() => dispatch(setActiveView("creation"))}
-              />
-            ) : (
-              <div className="flex flex-col gap-2">
-                {recentPublished.map((post) => {
-                  const ids = activePlatformIds(post.platforms);
-                  const primary = ids[0] ? PLATFORM_MAP[ids[0]] : null;
-                  const Icon = primary?.icon || ImageIcon;
-                  const card = (
-                    <div
-                      className="flex items-start gap-2.5 px-3 py-2 rounded-lg"
-                      style={{
-                        background: "var(--bg-secondary)",
-                        border: "1px solid var(--border-default)",
-                      }}
-                    >
-                      <div
-                        className="w-7 h-7 rounded-md flex items-center justify-center shrink-0"
-                        style={{ background: "var(--bg-elevated)" }}
-                      >
-                        <Icon
-                          size={14}
-                          style={{ color: primary?.color || "var(--text-muted)" }}
-                        />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p
-                          className="text-xs"
-                          style={{
-                            color: "var(--text-primary)",
-                            display: "-webkit-box",
-                            WebkitBoxOrient: "vertical",
-                            WebkitLineClamp: 2,
-                            overflow: "hidden",
-                          }}
-                        >
-                          {post.content || "(empty post)"}
-                        </p>
-                        <div
-                          className="flex items-center gap-2 mt-1 text-[10px]"
-                          style={{ color: "var(--text-muted)" }}
-                        >
-                          {post.targetLabel && (
-                            <span className="truncate">{post.targetLabel}</span>
-                          )}
-                          {post.permalink && (
-                            <span
-                              className="inline-flex items-center gap-1"
-                              style={{ color: "var(--accent-primary)" }}
-                            >
-                              View <ExternalLink size={10} />
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                  return post.permalink ? (
-                    <a
-                      key={post.id}
-                      href={post.permalink}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block"
-                      style={{ textDecoration: "none" }}
-                      title="Open the live post"
-                    >
-                      {card}
-                    </a>
-                  ) : (
-                    <div key={post.id}>{card}</div>
-                  );
-                })}
-              </div>
-            )}
-          </Section>
-        </div>
-
-        {/* Connected platforms + AI usage strip */}
-        <div
-          className="grid gap-4"
-          style={{ gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}
-        >
-          <Section
-            title="Connected platforms"
-            action={
-              <button
-                className="text-xs inline-flex items-center gap-1"
-                style={{ color: "var(--accent-primary)" }}
-                onClick={() => dispatch(setActiveView("settings"))}
-              >
-                Manage <ArrowRight size={12} />
-              </button>
-            }
-          >
-            <p className="text-xs mb-3" style={{ color: "var(--text-muted)" }}>
-              {connectedCount} / {PLATFORMS.length} connected
-            </p>
-            <div className="flex flex-col gap-1.5">
-              {PLATFORMS.map((p) => {
-                const Icon = p.icon;
-                const connected = isConnected(p.id);
-                return (
-                  <div
-                    key={p.id}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg"
-                    style={{
-                      background: "var(--bg-secondary)",
-                      border: "1px solid var(--border-default)",
-                    }}
-                  >
-                    <Icon size={15} style={{ color: p.color }} />
-                    <span
-                      className="text-sm flex-1"
-                      style={{ color: "var(--text-secondary)" }}
-                    >
-                      {p.label}
-                    </span>
-                    <span
-                      className="text-[10px] uppercase tracking-wider font-semibold"
-                      style={{
-                        color: connected
-                          ? "var(--status-approved)"
-                          : "var(--text-muted)",
-                      }}
-                    >
-                      {connected ? "Connected" : "Not connected"}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </Section>
-
-          <Section
-            title="AI usage this session"
-            action={
-              <button
-                className="text-xs inline-flex items-center gap-1"
-                style={{ color: "var(--accent-primary)" }}
-                onClick={() => dispatch(setActiveView("analytics"))}
-              >
-                Analytics <ArrowRight size={12} />
-              </button>
-            }
-          >
-            <div
-              className="grid gap-3"
-              style={{
-                gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
-              }}
-            >
-              <MiniStat
-                icon={Sparkles}
-                label="AI calls"
-                value={aiUsage.calls}
-              />
-              <MiniStat
-                icon={Coins}
-                label="Tokens"
-                value={fmt(aiUsage.totalTokens)}
-              />
-              <MiniStat
-                icon={Send}
-                label="Cache hits"
-                value={aiUsage.cacheHits}
-              />
-            </div>
-          </Section>
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={() => dispatch(setActiveView("calendar"))}
+            className="flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 hover:-translate-y-px hover:shadow-md"
+            style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)", color:"var(--text-primary)", cursor:"pointer" }}>
+            <Calendar size={15} /> {tSidebar("calendar")}
+          </button>
+          <button type="button" onClick={() => dispatch(setActiveView("creation"))}
+            className="flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold text-white transition-all duration-200 hover:-translate-y-px hover:shadow-lg"
+            style={{ background:"var(--accent-gradient)", border:"none", cursor:"pointer", boxShadow:"0 4px 14px rgba(29,63,190,.35)" }}>
+            <PlusCircle size={15} /> {t("newPost")}
+          </button>
         </div>
       </div>
-    </div>
-  );
-}
 
-/* ─────────────────────────── Building blocks ────────────────────────── */
-
-function BigKpi({ icon: Icon, label, value, sub, accent, onClick, live, positive }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={!onClick}
-      className="card text-left transition-transform"
-      style={{
-        padding: 16,
-        cursor: onClick ? "pointer" : "default",
-        position: "relative",
-      }}
-      onMouseEnter={(e) => {
-        if (onClick) e.currentTarget.style.transform = "translateY(-1px)";
-      }}
-      onMouseLeave={(e) => {
-        if (onClick) e.currentTarget.style.transform = "translateY(0)";
-      }}
-    >
-      <div className="flex items-center justify-between mb-2">
-        <div
-          className="w-8 h-8 rounded-lg flex items-center justify-center"
-          style={{ background: `${accent}1a`, color: accent }}
-        >
-          <Icon size={15} />
+      {/* ══ ALERTES ═══════════════════════════════════════════════════════ */}
+      {connectedCount === 0 && (
+        <div className="mb-5 flex flex-wrap items-start gap-3 rounded-2xl p-4"
+          style={{ background:"rgba(29,63,190,.08)", border:"1px solid rgba(29,63,190,.25)" }}>
+          <Sparkles size={18} style={{ color:"var(--accent-primary)", flexShrink:0, marginTop:1 }} />
+          <div className="flex-1">
+            <p className="text-sm font-semibold" style={{ color:"var(--text-primary)" }}>{t("connectFirstPlatform")}</p>
+            <p className="mt-0.5 text-xs" style={{ color:"var(--text-muted)" }}>
+              {t("connectIntro")}
+            </p>
+          </div>
+          <button type="button" onClick={() => dispatch(setActiveView("settings"))}
+            className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold text-white"
+            style={{ background:"var(--accent-gradient)", border:"none", cursor:"pointer" }}>
+            {t("goToSettings")}
+          </button>
         </div>
-        {live && (
-          <span
-            className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded"
-            style={{
-              background: "rgba(34,197,94,0.10)",
-              color: "var(--status-approved)",
-            }}
-            title="Live data — updates as you use the app"
-          >
-            live
-          </span>
+      )}
+      {stats.byStatus.error > 0 && (
+        <div className="mb-5 flex flex-wrap items-start gap-3 rounded-2xl p-4"
+          style={{ background:"rgba(239,68,68,.08)", border:"1px solid rgba(239,68,68,.25)" }}>
+          <AlertCircle size={18} style={{ color:"var(--status-error)", flexShrink:0, marginTop:1 }} />
+          <div className="flex-1">
+            <p className="text-sm font-semibold" style={{ color:"var(--text-primary)" }}>
+              {t("publishErrors", { count: stats.byStatus.error })}
+            </p>
+            <p className="mt-0.5 text-xs" style={{ color:"var(--text-muted)" }}>
+              {t("checkFailedPosts")}
+            </p>
+          </div>
+          <button type="button" onClick={() => dispatch(setActiveView("calendar"))}
+            className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold"
+            style={{ background:"rgba(239,68,68,.15)", border:"none", color:"var(--status-error)", cursor:"pointer" }}>
+            {t("viewErrors")}
+          </button>
+        </div>
+      )}
+
+      {/* ══ KPI ══════════════════════════════════════════════════════════ */}
+      <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-2 lg:grid-cols-4">
+        <KpiCard icon={Zap}          label={t("creditsSpent")}  value={fmt(creditsSpent)}         sub={t("approxThisSession", { eur: eurSpent })}         color="#1d3fbe"  onClick={() => dispatch(setActiveView("credits"))} />
+        <KpiCard icon={Users}        label={t("totalAudience")}   value={fmt(totalAudience)}         sub={t("platformsConnectedCount", { count: connectedCount })} color="#22c55e" onClick={() => dispatch(setActiveView("settings"))} />
+        <KpiCard icon={Calendar}     label={t("scheduled7d")}   value={stats.thisWeek}             sub={t("postsTotal", { count: stats.total })}                     color="#6366f1"  onClick={() => dispatch(setActiveView("calendar"))} />
+        <KpiCard icon={CheckCircle2} label={t("published7d")}     value={stats.publishedThisWeek}    sub={t("publishedTotal", { count: stats.byStatus.published })} color="#06b6d4" onClick={() => dispatch(setActiveView("calendar"))} />
+      </div>
+
+      {/* ══ PIPELINE + CALENDRIER + AUDIENCE ════════════════════════════ */}
+      <div className="mb-5 grid grid-cols-1 gap-4 lg:[grid-template-columns:2fr_1fr]">
+        <div className="flex flex-col gap-4">
+          <PipelineBar stats={stats} />
+          <WeekStrip week={week} todayKey={todayKey} onCalendar={() => dispatch(setActiveView("calendar"))} />
+        </div>
+        <AudienceCard
+          audience={audience}
+          totalAudience={totalAudience}
+          onManage={() => dispatch(setActiveView("settings"))}
+        />
+      </div>
+
+      {/* ══ POSTS RÉCENTS ════════════════════════════════════════════════ */}
+      <div className="mb-5 overflow-hidden rounded-2xl" style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
+        <div className="flex items-center justify-between px-5 py-4"
+          style={{ borderBottom:"1px solid var(--border-default)" }}>
+          <div className="flex items-center gap-2">
+            <TrendingUp size={16} style={{ color:"var(--accent-primary)" }} />
+            <p className="text-sm font-bold" style={{ color:"var(--text-primary)" }}>{t("recentPublishedPosts")}</p>
+          </div>
+          <button type="button" onClick={() => dispatch(setActiveView("calendar"))}
+            className="flex items-center gap-1 text-xs font-semibold transition-opacity hover:opacity-70"
+            style={{ color:"var(--accent-primary)", border:"none", background:"none", cursor:"pointer" }}>
+            {t("seeAll")} <ArrowRight size={12} />
+          </button>
+        </div>
+        {recentPublished.length === 0 ? (
+          <div className="flex flex-col items-center py-12 text-center">
+            <FileText size={32} style={{ color:"var(--text-muted)", marginBottom:10 }} />
+            <p className="text-sm font-medium" style={{ color:"var(--text-secondary)" }}>{t("noPublishedPost")}</p>
+            <p className="mt-1 text-xs" style={{ color:"var(--text-muted)" }}>{t("createToSeeHere")}</p>
+            <button type="button" onClick={() => dispatch(setActiveView("creation"))}
+              className="mt-4 flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-white"
+              style={{ background:"var(--accent-gradient)", border:"none", cursor:"pointer" }}>
+              <PlusCircle size={14} /> {t("createFirstPost")}
+            </button>
+          </div>
+        ) : (
+          recentPublished.map((p) => <RecentPost key={p.key} post={p} />)
         )}
       </div>
-      <p
-        className="text-[11px] uppercase tracking-wider mb-1"
-        style={{ color: "var(--text-muted)" }}
-      >
-        {label}
-      </p>
-      <p
-        className="text-xl md:text-2xl font-bold leading-tight tabular-nums"
-        style={{ color: "var(--text-primary)" }}
-      >
-        {value}
-      </p>
-      {sub && (
-        <p
-          className="text-[11px] mt-1"
-          style={{
-            color:
-              positive === true
-                ? "var(--status-approved)"
-                : positive === false
-                ? "var(--status-error)"
-                : "var(--text-tertiary)",
-          }}
-        >
-          {sub}
+
+      {/* ══ ACTIONS RAPIDES ══════════════════════════════════════════════ */}
+      <div>
+        <p className="mb-3 text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
+          {t("quickActions")}
         </p>
-      )}
-    </button>
-  );
-}
-
-function SmallKpi({ icon: Icon, label, value, sub, tone, onClick }) {
-  const tones = {
-    ok: "var(--status-approved)",
-    warn: "var(--status-pending)",
-    error: "var(--status-error)",
-  };
-  const accent = tone ? tones[tone] : "var(--accent-primary)";
-  return (
-    <button
-      onClick={onClick}
-      disabled={!onClick}
-      className="card text-left"
-      style={{ padding: 14, cursor: onClick ? "pointer" : "default" }}
-    >
-      <div className="flex items-center gap-2 mb-1.5">
-        <Icon size={13} style={{ color: accent }} />
-        <span
-          className="text-[11px] uppercase tracking-wider"
-          style={{ color: "var(--text-muted)" }}
-        >
-          {label}
-        </span>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <ActionCard icon={PlusCircle} title={t("createPost")}       description={t("actionCreateDesc")}  color="#1d3fbe" onClick={() => dispatch(setActiveView("creation"))} />
+          <ActionCard icon={Bot}        title={tSidebar("automation")}     description={t("actionAutomationDesc")}    color="#7c3aed" onClick={() => dispatch(setActiveView("automation"))} />
+          <ActionCard icon={Image}      title={tSidebar("library")}         description={t("actionLibraryDesc")}            color="#0891b2" onClick={() => dispatch(setActiveView("library"))} />
+          <ActionCard icon={BarChart2}  title={tSidebar("analytics")}         description={t("actionAnalyticsDesc")}      color="#059669" onClick={() => dispatch(setActiveView("analytics"))} />
+        </div>
       </div>
-      <p
-        className="text-lg md:text-xl font-bold leading-tight tabular-nums"
-        style={{ color: "var(--text-primary)" }}
-      >
-        {value}
-      </p>
-      {sub && (
-        <p
-          className="text-[10px] mt-0.5"
-          style={{ color: "var(--text-tertiary)" }}
-        >
-          {sub}
-        </p>
-      )}
-    </button>
-  );
-}
 
-function Section({ title, action, children }) {
-  return (
-    <div className="card" style={{ padding: 16 }}>
-      <div className="flex items-center justify-between mb-3 gap-2">
-        <h2
-          className="text-sm font-semibold"
-          style={{ color: "var(--text-primary)" }}
-        >
-          {title}
-        </h2>
-        {action}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function MiniStat({ icon: Icon, label, value }) {
-  return (
-    <div
-      className="px-3 py-2.5 rounded-lg"
-      style={{
-        background: "var(--bg-secondary)",
-        border: "1px solid var(--border-default)",
-      }}
-    >
-      <div className="flex items-center gap-2 mb-1">
-        <Icon size={12} style={{ color: "var(--accent-primary)" }} />
-        <span
-          className="text-[10px] uppercase tracking-wider"
-          style={{ color: "var(--text-muted)" }}
-        >
-          {label}
-        </span>
-      </div>
-      <p
-        className="text-base font-bold leading-tight tabular-nums"
-        style={{ color: "var(--text-primary)" }}
-      >
-        {value}
-      </p>
-    </div>
-  );
-}
-
-/* Empty-state hint — shown when a section has no real data yet, with a
-   single clear path to make it have some. Better than rendering a fake
-   row, which is what the previous MOCK approach did. */
-function EmptyHint({ icon: Icon, title, body, cta, onCta }) {
-  return (
-    <div
-      className="flex flex-col items-start gap-2 px-3 py-4 rounded-lg"
-      style={{
-        background: "var(--bg-secondary)",
-        border: "1px dashed var(--border-default)",
-      }}
-    >
-      <Icon size={18} style={{ color: "var(--text-muted)" }} />
-      <p className="text-xs font-semibold" style={{ color: "var(--text-primary)" }}>
-        {title}
-      </p>
-      <p
-        className="text-[11px]"
-        style={{ color: "var(--text-muted)", lineHeight: 1.5 }}
-      >
-        {body}
-      </p>
-      {cta && (
-        <button
-          className="text-xs font-medium mt-1 inline-flex items-center gap-1"
-          style={{ color: "var(--accent-primary)" }}
-          onClick={onCta}
-        >
-          {cta} <ArrowRight size={11} />
-        </button>
-      )}
     </div>
   );
 }

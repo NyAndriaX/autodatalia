@@ -25,8 +25,10 @@ function readSession() {
 
 function writeSession(user) {
   if (typeof window === "undefined") return;
-  if (user) window.localStorage.setItem(SESSION_KEY, JSON.stringify(user));
-  else window.localStorage.removeItem(SESSION_KEY);
+  try {
+    if (user) window.localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+    else window.localStorage.removeItem(SESSION_KEY);
+  } catch {}
 }
 
 function delay(ms = 500) {

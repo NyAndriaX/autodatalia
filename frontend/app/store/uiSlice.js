@@ -7,12 +7,15 @@ const AI_CALL_RING_SIZE = 50;
 const initialState = {
   sidebarCollapsed: false,
   mobileNavOpen: false, // off-canvas sidebar drawer on small screens
-  activeView: "dashboard", // "dashboard" | "creation" | "calendar" | "library" | "analytics" | "settings"
+  activeView: "dashboard", // "dashboard" | "creation" | "automation" | "calendar" | "library" | "videos" | "analytics" | "credits" | "settings"
   notifications: [], // local in-app events (pushed by thunks)
   searchQuery: "",
-  commandPaletteOpen: false,
   // "light" | "dark" | "system" — the *preference*; resolved value lives on <html>
   theme: "system",
+  // UI language. "en" is the fallback; "fr" is the second shipped bundle.
+  // The I18nProvider hydrates this from localStorage / navigator.language
+  // on first client render.
+  locale: "en",
   // "unknown" | "online" | "offline"
   connectivity: { backend: "unknown" },
   // Service-fed search (searchThunks)
@@ -20,7 +23,7 @@ const initialState = {
     results: [],
     status: "idle", // "idle" | "loading" | "done" | "error"
   },
-  // Service-fed message/activity feed (messagesThunks)
+  // Service-fed message/activity feed (searchThunks)
   messages: {
     items: [],
     status: "idle", // "idle" | "loading" | "done" | "error"
@@ -130,14 +133,14 @@ const uiSlice = createSlice({
     markAllMessagesRead: (state) => {
       for (const m of state.messages.items) m.read = true;
     },
-    toggleCommandPalette: (state) => {
-      state.commandPaletteOpen = !state.commandPaletteOpen;
-    },
     setConnectivity: (state, action) => {
       state.connectivity = { ...state.connectivity, ...action.payload };
     },
     setTheme: (state, action) => {
       state.theme = action.payload; // "light" | "dark" | "system"
+    },
+    setLocale: (state, action) => {
+      state.locale = action.payload || "en"; // "en" | "fr"
     },
     addTokenUsage: (state, action) => {
       state.aiUsage.totalTokens += action.payload || 0;
@@ -197,9 +200,9 @@ export const {
   setMessages,
   markMessageRead,
   markAllMessagesRead,
-  toggleCommandPalette,
   setConnectivity,
   setTheme,
+  setLocale,
   addTokenUsage,
   recordCacheHit,
   recordAiCall,

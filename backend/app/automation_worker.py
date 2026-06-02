@@ -233,11 +233,12 @@ async def generate_candidate(rule: dict[str, Any], fire_epoch: float) -> dict[st
     """
     # 1. Caption generation
     brief = _build_brief(rule)
-    variants, _ = await generate_post_variants(
+    variants, _usage, _model = await generate_post_variants(
         prompt=brief,
         platforms=rule.get("platforms") or {},
         template=rule.get("description_style") or None,
         n=1,
+        quality="standard",
     )
     content = (variants[0].get("text") or "").strip() if variants else ""
 
@@ -285,15 +286,11 @@ async def generate_candidate(rule: dict[str, Any], fire_epoch: float) -> dict[st
     if chat_id and settings.telegram_bot_token:
         try:
             message_id = await _send_validation_card(post, chat_id)
-            post = (
-                {
-                    **post,
-                    "telegram_chat_id": chat_id,
-                    "telegram_message_id": message_id,
-                }
-                if message_id is None
-                else post
-            )
+            post = {
+                **post,
+                "telegram_chat_id": chat_id,
+                "telegram_message_id": message_id,
+            }
             from .services import posts_update as _posts_update
             _posts_update(post["id"], {
                 "telegram_chat_id": chat_id,
@@ -344,11 +341,12 @@ async def regenerate_for_post(post: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError(f"rule {rule_id} no longer exists")
 
     brief = _build_brief(rule)
-    variants, _ = await generate_post_variants(
+    variants, _usage, _model = await generate_post_variants(
         prompt=brief,
         platforms=rule.get("platforms") or {},
         template=rule.get("description_style") or None,
         n=1,
+        quality="standard",
     )
     content = (variants[0].get("text") or "").strip() if variants else ""
 
@@ -462,6 +460,33 @@ async def tick(now: float | None = None) -> dict[str, list[str]]:
             continue
         # Don't re-generate the same fire if we already did.
         if (rule.get("last_fire_at") or 0) >= next_fire:
+            continue
+        # HARD GATE: refuse to even generate a candidate without a
+        # Telegram destination. Without this, the post would be created
+        # in awaiting_validation forever, but the user might not realise
+        # the rule is silently stuck. CEO requirement: every auto post
+        # must be human-approved before publishing.
+        chat_id = (
+            rule.get("validation_chat_id")
+            or settings.telegram_default_chat_id
+            or ""
+        ).strip()
+        if not chat_id or not settings.telegram_bot_token:
+            messages_append({
+                "kind": "automation_error",
+                "post_id": None,
+                "message": (
+                    f"Rule '{rule.get('name')}' skipped — no Telegram "
+                    "validation destination configured. Set "
+                    "TELEGRAM_BOT_TOKEN + TELEGRAM_DEFAULT_CHAT_ID (or "
+                    "validation_chat_id on the rule). Auto-posts cannot "
+                    "fire without approval."
+                ),
+            })
+            automation_update(rule["id"], {
+                "last_fire_at": next_fire,
+                "last_error": "no_telegram_destination",
+            })
             continue
         try:
             await generate_candidate(rule, next_fire)

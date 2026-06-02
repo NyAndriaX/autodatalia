@@ -1,18 +1,12 @@
 "use client";
 
+import { btnPrimary, btnSecondary, inputField } from "../../lib/uiClasses";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDispatch } from "react-redux";
+import { useTranslations } from "next-intl";
 import {
-  Bot,
-  Plus,
-  Trash2,
-  Save,
-  Loader2,
-  Power,
-  PowerOff,
-  Clock,
-  ListChecks,
-  X,
+  Bot, Plus, Trash2, Save, Loader2, Power, PowerOff, Clock,
+  ListChecks, X, Settings2, Sparkles, Zap, CalendarDays, Radio,
 } from "lucide-react";
 import {
   DEFAULT_AUTOMATION_RULE,
@@ -25,90 +19,70 @@ import { addNotification } from "../../store/uiSlice";
 import { PLATFORMS, TONES } from "../../lib/platforms";
 import TimePicker from "./TimePicker";
 
-// Form view-models mirror the backend AutomationRule pydantic model.
-const CONTENT_TYPES = [
-  { id: "photo", label: "Photo" },
-  { id: "video", label: "Video" },
-  { id: "carousel", label: "Carousel" },
-  { id: "template", label: "Template" },
-  { id: "text", label: "Text" },
-];
-
-const OBJECTIVES = [
-  { id: "informative", label: "Informative" },
-  { id: "promotional", label: "Promotional" },
-  { id: "engagement", label: "Engagement" },
-  { id: "acquisition", label: "Acquisition" },
-];
-
-const FREQUENCIES = [
-  { id: "daily", label: "Daily" },
-  { id: "weekdays", label: "Specific days" },
-  { id: "weekly", label: "Weekly" },
-  { id: "monthly", label: "Monthly" },
-  { id: "custom", label: "Custom" },
-];
-
 const LEAD_PRESETS = [5, 30, 60];
 
-const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-function summarizeSchedule(rule) {
-  const s = rule.schedule || {};
-  const times = (s.times || []).join(", ") || "—";
-  switch (s.frequency) {
-    case "daily":
-      return `Daily at ${times}`;
-    case "weekdays":
-      return `${(s.weekdays || []).map((d) => WEEKDAY_LABELS[d]).join(", ") || "(no days)"} at ${times}`;
-    case "weekly":
-      return `Every ${WEEKDAY_LABELS[(s.weekdays || [])[0] ?? 0]} at ${times}`;
-    case "monthly":
-      return `Day(s) ${(s.month_days || []).join(", ") || "?"} at ${times}`;
-    case "custom":
-      return `Custom · ${times}`;
-    default:
-      return "—";
-  }
+function useStaticData() {
+  const t = useTranslations("automation");
+  const CONTENT_TYPES = [
+    { id:"photo",    label:t("photo"),     emoji:"🖼️" },
+    { id:"video",    label:t("video"),     emoji:"🎬" },
+    { id:"carousel", label:t("carousel"),  emoji:"📱" },
+    { id:"template", label:t("template"),  emoji:"📄" },
+    { id:"text",     label:t("text"),      emoji:"✍️" },
+  ];
+  const OBJECTIVES = [
+    { id:"informative",  label:t("informative")  },
+    { id:"promotional",  label:t("promotional")  },
+    { id:"engagement",   label:t("engagement")   },
+    { id:"acquisition",  label:t("acquisition")  },
+  ];
+  const FREQUENCIES = [
+    { id:"daily",    label:t("daily")         },
+    { id:"weekdays", label:t("specificDays")  },
+    { id:"weekly",   label:t("weekly")        },
+    { id:"monthly",  label:t("monthly")       },
+    { id:"custom",   label:t("custom")        },
+  ];
+  const WEEKDAY_LABELS = [
+    t("weekdayMon"), t("weekdayTue"), t("weekdayWed"),
+    t("weekdayThu"), t("weekdayFri"), t("weekdaySat"), t("weekdaySun"),
+  ];
+  return { CONTENT_TYPES, OBJECTIVES, FREQUENCIES, WEEKDAY_LABELS };
 }
 
-function summarizeNumMedia(spec) {
-  if (!spec) return "1";
-  if (spec.mode === "range") return `${spec.min}–${spec.max} (AI picks)`;
-  return `${spec.count}`;
+function useResumePlanning() {
+  const t = useTranslations("automation");
+  const { WEEKDAY_LABELS } = useStaticData();
+  return (rule) => {
+    const s     = rule.schedule || {};
+    const times = (s.times || []).join(", ") || "—";
+    switch (s.frequency) {
+      case "daily":    return t("summaryDaily",    { times });
+      case "weekdays": return t("summaryWeekdays", { days: (s.weekdays||[]).map((d) => WEEKDAY_LABELS[d]).join(", ") || t("noDay"), times });
+      case "weekly":   return t("summaryWeekly",   { day: WEEKDAY_LABELS[(s.weekdays||[])[0]??0], times });
+      case "monthly":  return t("summaryMonthly",  { days: (s.month_days||[]).join(", ") || "?", times });
+      case "custom":   return t("summaryCustom",   { times });
+      default:         return "—";
+    }
+  };
 }
 
-// ── Form primitives ────────────────────────────────────────────────────
-// SegmentedControl renders a row of pill buttons. Used wherever a short
-// list of mutually-exclusive options would otherwise become a browser
-// <select> — content type, objective, frequency, num_media mode. Visually
-// echoes the platform/weekday chips elsewhere in the editor so the form
-// feels of-a-piece with the rest of the app.
-
-function SegmentedControl({ options, value, onChange, ariaLabel }) {
+/* ─── Chips ──────────────────────────────────────────────────────────────*/
+function Chips({ options, value, onChange }) {
   return (
-    <div
-      className="inline-flex flex-wrap gap-1 p-1 rounded-lg"
-      style={{ background: "var(--bg-tertiary)" }}
-      role="radiogroup"
-      aria-label={ariaLabel}
-    >
+    <div className="flex flex-wrap gap-1.5">
       {options.map((opt) => {
         const active = value === opt.id;
         return (
-          <button
-            key={opt.id}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            onClick={() => onChange(opt.id)}
-            className="text-xs font-medium px-3 py-1.5 rounded-md transition-colors"
+          <button key={opt.id} type="button" onClick={() => onChange(opt.id)}
+            className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-all duration-150"
             style={{
-              background: active ? "var(--accent-primary)" : "transparent",
-              color: active ? "white" : "var(--text-secondary)",
-            }}
-          >
-            {opt.label}
+              background: active ? "var(--accent-primary)" : "var(--bg-tertiary)",
+              color:      active ? "#fff"                  : "var(--text-secondary)",
+              border:     `1px solid ${active ? "transparent" : "var(--border-default)"}`,
+              cursor:"pointer",
+            }}>
+            {opt.emoji && <span className="mr-1">{opt.emoji}</span>}{opt.label}
           </button>
         );
       })}
@@ -116,115 +90,146 @@ function SegmentedControl({ options, value, onChange, ariaLabel }) {
   );
 }
 
-function Field({ label, hint, children }) {
+/* ─── Champ de formulaire ────────────────────────────────────────────────*/
+function Champ({ label, hint, children }) {
   return (
     <div className="mb-4">
-      <div
-        className="block text-xs font-semibold uppercase tracking-wider mb-1.5"
-        style={{ color: "var(--text-tertiary)" }}
-      >
+      <p className="mb-1.5 text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
         {label}
-      </div>
+      </p>
       {children}
-      {hint && (
-        <div
-          className="text-[11px] mt-1"
-          style={{ color: "var(--text-muted)" }}
-        >
-          {hint}
-        </div>
-      )}
+      {hint && <p className="mt-1 text-[11px]" style={{ color:"var(--text-muted)" }}>{hint}</p>}
     </div>
   );
 }
 
+/* ─── Carte de règle ─────────────────────────────────────────────────────*/
+function CarteRegle({ rule, active, onClick }) {
+  const t = useTranslations("automation");
+  const resumePlanning = useResumePlanning();
+  const nbMedia = rule.num_media?.mode === "range"
+    ? t("mediaRange", { min: rule.num_media.min, max: rule.num_media.max })
+    : t("mediaCount", { n: rule.num_media?.count ?? 1 });
+  return (
+    <button type="button" onClick={onClick}
+      className="w-full rounded-2xl p-4 text-left transition-all duration-150"
+      style={{
+        background: active ? "rgba(29,63,190,.08)"    : "var(--bg-tertiary)",
+        border:     `1.5px solid ${active ? "var(--accent-primary)" : "var(--border-default)"}`,
+        cursor:"pointer",
+      }}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+            style={{
+              background: rule.active ? "rgba(34,197,94,.15)"   : "rgba(100,116,139,.12)",
+              color:      rule.active ? "var(--status-approved)" : "var(--text-muted)",
+            }}>
+            <Radio size={13} />
+          </span>
+          <span className="truncate text-sm font-bold" style={{ color:"var(--text-primary)" }}>
+            {rule.name}
+          </span>
+        </div>
+        <span className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold"
+          style={{
+            background: rule.active ? "rgba(34,197,94,.15)"   : "rgba(100,116,139,.12)",
+            color:      rule.active ? "var(--status-approved)" : "var(--text-muted)",
+          }}>
+          {rule.active ? t("activeShort") : t("inactive")}
+        </span>
+      </div>
+      <div className="mt-2 flex items-center gap-1.5 text-[11px]" style={{ color:"var(--text-muted)" }}>
+        <Clock size={10} />
+        <span className="truncate">{resumePlanning(rule)}</span>
+      </div>
+      <div className="mt-1 flex items-center gap-1.5 text-[11px]" style={{ color:"var(--text-muted)" }}>
+        <ListChecks size={10} />
+        {rule.content_type ? t(rule.content_type) : "—"} · {nbMedia}
+      </div>
+    </button>
+  );
+}
+
+/* ─── État vide ──────────────────────────────────────────────────────────*/
+function EtatVide() {
+  const t = useTranslations("automation");
+  return (
+    <div className="flex h-full flex-col items-center justify-center py-20 text-center">
+      <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl"
+        style={{ background:"rgba(29,63,190,.08)", border:"1px solid rgba(29,63,190,.2)" }}>
+        <Bot size={32} style={{ color:"var(--accent-primary)" }} />
+      </div>
+      <p className="text-base font-bold" style={{ color:"var(--text-primary)" }}>
+        {t("emptyStateTitle")}
+      </p>
+      <p className="mt-2 max-w-xs text-sm" style={{ color:"var(--text-muted)" }}>
+        {t("emptyStateDesc")}
+      </p>
+    </div>
+  );
+}
+
+/* ─── Composant principal ────────────────────────────────────────────────*/
 export default function AutomationView() {
   const dispatch = useDispatch();
-  const [rules, setRules] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedId, setSelectedId] = useState(null); // null = no edit; "new" = create form
-  const [draft, setDraft] = useState(DEFAULT_AUTOMATION_RULE);
-  const [saving, setSaving] = useState(false);
+  const t = useTranslations("automation");
+  const tCommon = useTranslations("common");
+  const { CONTENT_TYPES, OBJECTIVES, FREQUENCIES, WEEKDAY_LABELS } = useStaticData();
+  const [rules,      setRules]      = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [selectedId, setSelectedId] = useState(null);
+  const [draft,      setDraft]      = useState(DEFAULT_AUTOMATION_RULE);
+  const [saving,     setSaving]     = useState(false);
+  const [onglet,     setOnglet]     = useState("contenu");
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const items = await listAutomationRules();
-      setRules(items);
+      setRules(await listAutomationRules());
     } catch (err) {
-      dispatch(
-        addNotification({
-          message: `Couldn't load automation rules: ${err.message}`,
-          type: "error",
-        })
-      );
+      dispatch(addNotification({ message: t("loadRulesFailed", { error: err.message }), type:"error" }));
     } finally {
       setLoading(false);
     }
-  }, [dispatch]);
+  }, [dispatch, t]);
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   const selected = useMemo(
-    () =>
-      selectedId && selectedId !== "new"
-        ? rules.find((r) => r.id === selectedId) || null
-        : null,
+    () => selectedId && selectedId !== "new" ? rules.find((r) => r.id === selectedId) || null : null,
     [selectedId, rules]
   );
 
   useEffect(() => {
-    if (selectedId === "new") {
-      setDraft({ ...DEFAULT_AUTOMATION_RULE, name: "New rule" });
-    } else if (selected) {
-      // Merge with defaults so older saved rules with missing fields don't crash the form.
-      setDraft({ ...DEFAULT_AUTOMATION_RULE, ...selected });
-    }
-  }, [selectedId, selected]);
+    if (selectedId === "new") setDraft({ ...DEFAULT_AUTOMATION_RULE, name: t("newRuleDraftName") });
+    else if (selected)        setDraft({ ...DEFAULT_AUTOMATION_RULE, ...selected });
+  }, [selectedId, selected, t]);
 
-  const updateDraft = (patch) => setDraft((d) => ({ ...d, ...patch }));
+  const upd         = (patch) => setDraft((d) => ({ ...d, ...patch }));
+  const updPlanning = (patch) => setDraft((d) => ({ ...d, schedule:  { ...d.schedule, ...patch } }));
+  const updMédias   = (patch) => setDraft((d) => ({ ...d, num_media: { ...d.num_media, ...patch } }));
 
-  const updateSchedule = (patch) =>
-    setDraft((d) => ({ ...d, schedule: { ...d.schedule, ...patch } }));
+  const togglePlateforme = (id) =>
+    setDraft((d) => ({ ...d, platforms: { ...d.platforms, [id]: !d.platforms?.[id] } }));
 
-  const updateNumMedia = (patch) =>
-    setDraft((d) => ({ ...d, num_media: { ...d.num_media, ...patch } }));
-
-  const togglePlatform = (id) =>
-    setDraft((d) => ({
-      ...d,
-      platforms: { ...d.platforms, [id]: !d.platforms?.[id] },
-    }));
-
-  const toggleWeekday = (day) => {
-    const current = draft.schedule?.weekdays || [];
-    const next = current.includes(day)
-      ? current.filter((x) => x !== day)
-      : [...current, day].sort((a, b) => a - b);
-    updateSchedule({ weekdays: next });
+  const toggleJour = (day) => {
+    const cur  = draft.schedule?.weekdays || [];
+    const next = cur.includes(day) ? cur.filter((x) => x !== day) : [...cur, day].sort((a,b)=>a-b);
+    updPlanning({ weekdays: next });
   };
 
-  const updateTimeAt = (idx, value) => {
+  const majHeure    = (idx, val) => {
     const next = [...(draft.schedule?.times || [])];
-    next[idx] = value;
-    updateSchedule({ times: next });
+    next[idx] = val;
+    updPlanning({ times: next });
   };
-
-  const addTime = () =>
-    updateSchedule({ times: [...(draft.schedule?.times || []), "12:00"] });
-
-  const removeTime = (idx) =>
-    updateSchedule({
-      times: (draft.schedule?.times || []).filter((_, i) => i !== idx),
-    });
+  const ajouterHeure  = () => updPlanning({ times: [...(draft.schedule?.times || []), "12:00"] });
+  const supprimerHeure = (idx) => updPlanning({ times: (draft.schedule?.times || []).filter((_,i) => i!==idx) });
 
   const handleSave = async () => {
     if (!draft.name?.trim()) {
-      dispatch(
-        addNotification({ message: "Rule name is required.", type: "error" })
-      );
+      dispatch(addNotification({ message: t("ruleNameRequired"), type:"error" }));
       return;
     }
     setSaving(true);
@@ -232,650 +237,416 @@ export default function AutomationView() {
       if (selectedId === "new") {
         const created = await createAutomationRule(draft);
         await refresh();
-        dispatch(
-          addNotification({
-            message: `Rule created: ${created.name}`,
-            type: "success",
-          })
-        );
+        dispatch(addNotification({ message: t("ruleCreated", { name: created.name }), type:"success" }));
       } else if (selected) {
         await updateAutomationRule(selected.id, draft);
         await refresh();
-        dispatch(
-          addNotification({ message: "Rule updated.", type: "success" })
-        );
+        dispatch(addNotification({ message: t("ruleUpdated"), type:"success" }));
       }
-      // Close the editor on successful save — the list now reflects the
-      // saved state and a fresh save shouldn't keep the form expanded.
       setSelectedId(null);
     } catch (err) {
-      dispatch(
-        addNotification({ message: `Save failed: ${err.message}`, type: "error" })
-      );
+      dispatch(addNotification({ message: t("saveFailed", { error: err.message }), type:"error" }));
     } finally {
       setSaving(false);
     }
   };
 
-  const handleToggleActive = async (rule) => {
+  const handleToggleActif = async (rule) => {
     try {
       await updateAutomationRule(rule.id, { ...rule, active: !rule.active });
       refresh();
     } catch (err) {
-      dispatch(addNotification({ message: `Failed: ${err.message}`, type: "error" }));
+      dispatch(addNotification({ message: t("errorPrefix", { error: err.message }), type:"error" }));
     }
   };
 
-  const handleDelete = async (rule) => {
-    if (!window.confirm(`Delete the rule "${rule.name}"?`)) return;
+  const handleSupprimer = async (rule) => {
+    if (!window.confirm(t("deleteRuleConfirm", { name: rule.name }))) return;
     try {
       await deleteAutomationRule(rule.id);
       if (selectedId === rule.id) setSelectedId(null);
       refresh();
-      dispatch(addNotification({ message: "Rule deleted.", type: "success" }));
+      dispatch(addNotification({ message: t("ruleDeleted"), type:"success" }));
     } catch (err) {
-      dispatch(addNotification({ message: `Failed: ${err.message}`, type: "error" }));
+      dispatch(addNotification({ message: t("errorPrefix", { error: err.message }), type:"error" }));
     }
   };
 
+  const ONGLETS = [
+    { id:"contenu",      label:t("tabContent"),      icon:Sparkles     },
+    { id:"planification",label:t("tabSchedule"),     icon:CalendarDays },
+    { id:"telegram",     label:t("tabTelegram"),     icon:Zap          },
+  ];
+
   return (
-    <div className="h-full overflow-y-auto px-6 py-6">
-      <div className="max-w-6xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
+    <div className="h-full overflow-y-auto" style={{ background:"var(--bg-primary)" }}>
+      <div className="p-4 md:p-6">
+
+        {/* ═ EN-TÊTE ═════════════════════════════════════════════════════ */}
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div
-              className="p-2 rounded-lg"
-              style={{ background: "var(--accent-gradient)" }}
-            >
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl"
+              style={{ background:"var(--accent-gradient)", boxShadow:"0 4px 14px rgba(29,63,190,.35)" }}>
               <Bot size={22} color="white" />
             </div>
             <div>
-              <h1
-                className="text-xl font-bold leading-tight"
-                style={{ color: "var(--text-primary)" }}
-              >
-                Automation
+              <h1 className="text-xl font-extrabold leading-tight" style={{ color:"var(--text-primary)" }}>
+                {t("pageTitle")}
               </h1>
-              <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-                Generation, Telegram validation, scheduled publish
+              <p className="text-xs" style={{ color:"var(--text-muted)" }}>
+                {t("pageSubtitle")}
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => setSelectedId("new")}
-            className="btn-primary inline-flex items-center gap-2"
-          >
-            <Plus size={16} /> New rule
+          <button type="button" onClick={() => { setSelectedId("new"); setOnglet("contenu"); }}
+            className={`${btnPrimary} inline-flex items-center gap-2`}>
+            <Plus size={15} /> {t("newRule")}
           </button>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[320px,1fr] gap-4">
-          {/* List */}
-          <aside className="card" style={{ padding: 12 }}>
-            {loading && (
-              <div
-                className="text-xs flex items-center gap-2 px-2 py-3"
-                style={{ color: "var(--text-muted)" }}
-              >
-                <Loader2 size={12} className="animate-spin" /> Loading…
+        {/* ═ CORPS ════════════════════════════════════════════════════════ */}
+        <div className="flex flex-col md:flex-row gap-4" style={{ minHeight: 560 }}>
+
+          {/* ── Liste des règles ─────────────────────────────────────── */}
+          <aside className="w-full md:w-[300px] md:shrink-0">
+            <div className="rounded-2xl p-4 h-full"
+              style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
+              <p className="mb-3 text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
+                {loading ? tCommon("loading") : t("rulesCount", { n: rules.length })}
+              </p>
+              {loading && (
+                <div className="flex items-center gap-2 text-xs" style={{ color:"var(--text-muted)" }}>
+                  <Loader2 size={12} className="animate-spin" /> {t("loadingRules")}
+                </div>
+              )}
+              {!loading && rules.length === 0 && (
+                <div className="py-8 text-center text-sm" style={{ color:"var(--text-muted)" }}>
+                  {t("noRulesShort")}
+                </div>
+              )}
+              <div className="flex flex-col gap-2">
+                {rules.map((r) => (
+                  <CarteRegle key={r.id} rule={r} active={selectedId === r.id}
+                    onClick={() => { setSelectedId(r.id); setOnglet("contenu"); }} />
+                ))}
               </div>
-            )}
-            {!loading && rules.length === 0 && (
-              <div
-                className="text-xs px-2 py-6 text-center"
-                style={{ color: "var(--text-muted)" }}
-              >
-                No rules yet. Click "New rule" to create one.
-              </div>
-            )}
-            <ul className="flex flex-col gap-1">
-              {rules.map((r) => {
-                const isActive = selectedId === r.id;
-                return (
-                  <li key={r.id}>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedId(r.id)}
-                      className="w-full text-left p-3 rounded-lg transition-colors"
-                      style={{
-                        background: isActive
-                          ? "rgba(99, 102, 241, 0.12)"
-                          : "transparent",
-                        border: `1px solid ${
-                          isActive
-                            ? "var(--accent-primary)"
-                            : "var(--border-default)"
-                        }`,
-                      }}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <span
-                          className="text-sm font-semibold truncate"
-                          style={{ color: "var(--text-primary)" }}
-                        >
-                          {r.name}
-                        </span>
-                        <span
-                          className="shrink-0 w-2 h-2 rounded-full mt-1.5"
-                          style={{
-                            background: r.active
-                              ? "var(--status-published)"
-                              : "var(--text-muted)",
-                          }}
-                          title={r.active ? "Active" : "Inactive"}
-                        />
-                      </div>
-                      <div
-                        className="flex items-center gap-1 text-[11px] mt-1"
-                        style={{ color: "var(--text-muted)" }}
-                      >
-                        <Clock size={10} />
-                        <span className="truncate">{summarizeSchedule(r)}</span>
-                      </div>
-                      <div
-                        className="flex items-center gap-1 text-[11px] mt-0.5"
-                        style={{ color: "var(--text-muted)" }}
-                      >
-                        <ListChecks size={10} />
-                        {r.content_type} · {summarizeNumMedia(r.num_media)} media
-                      </div>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+            </div>
           </aside>
 
-          {/* Editor */}
-          <section className="card" style={{ padding: 20, minHeight: 400 }}>
+          {/* ── Éditeur ─────────────────────────────────────────────── */}
+          <section className="flex min-w-0 flex-1 flex-col rounded-2xl overflow-hidden"
+            style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
             {!selectedId ? (
-              <div className="flex flex-col items-center justify-center h-full text-center py-12">
-                <Bot
-                  size={36}
-                  style={{ color: "var(--text-muted)" }}
-                  className="mb-3"
-                />
-                <p
-                  className="text-sm font-medium mb-1"
-                  style={{ color: "var(--text-secondary)" }}
-                >
-                  Select a rule or create one
-                </p>
-                <p
-                  className="text-xs max-w-md"
-                  style={{ color: "var(--text-muted)" }}
-                >
-                  Rules define what kind of content to generate, on what
-                  schedule, and how to gate it through Telegram validation.
-                </p>
-              </div>
+              <EtatVide />
             ) : (
               <>
-                <div className="flex items-center justify-between mb-4">
-                  <h2
-                    className="text-base font-bold"
-                    style={{ color: "var(--text-primary)" }}
-                  >
-                    {selectedId === "new" ? "New rule" : draft.name}
-                  </h2>
-                  <div className="flex items-center gap-2">
+                {/* en-tête éditeur */}
+                <div className="flex flex-wrap items-center justify-between gap-2 px-4 md:px-6 py-4"
+                  style={{ borderBottom:"1px solid var(--border-default)" }}>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Settings2 size={18} style={{ color:"var(--accent-primary)", flexShrink:0 }} />
+                    <h2 className="truncate text-base font-bold" style={{ color:"var(--text-primary)" }}>
+                      {selectedId === "new" ? t("newRule") : draft.name}
+                    </h2>
+                    {selected && (
+                      <span className="shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-bold"
+                        style={{
+                          background: selected.active ? "rgba(34,197,94,.15)" : "rgba(100,116,139,.12)",
+                          color:      selected.active ? "var(--status-approved)" : "var(--text-muted)",
+                        }}>
+                        {selected.active ? t("activeShort") : t("inactive")}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
                     {selected && (
                       <>
-                        <button
-                          type="button"
-                          onClick={() => handleToggleActive(selected)}
-                          className="btn-secondary text-xs inline-flex items-center gap-1"
-                          title={selected.active ? "Deactivate" : "Activate"}
-                        >
-                          {selected.active ? (
-                            <>
-                              <PowerOff size={13} /> Deactivate
-                            </>
-                          ) : (
-                            <>
-                              <Power size={13} /> Activate
-                            </>
-                          )}
+                        <button type="button" onClick={() => handleToggleActif(selected)}
+                          className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
+                          style={{ padding:"6px 12px" }}>
+                          {selected.active
+                            ? <><PowerOff size={12}/> {t("deactivate")}</>
+                            : <><Power    size={12}/> {t("activate")}</>}
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(selected)}
-                          className="btn-secondary text-xs inline-flex items-center gap-1"
-                          style={{ color: "var(--status-error)" }}
-                        >
-                          <Trash2 size={13} /> Delete
+                        <button type="button" onClick={() => handleSupprimer(selected)}
+                          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold"
+                          style={{ background:"rgba(239,68,68,.1)", color:"var(--status-error)", border:"none", cursor:"pointer" }}>
+                          <Trash2 size={12}/> {tCommon("delete")}
                         </button>
                       </>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => setSelectedId(null)}
-                      className="btn-secondary text-xs inline-flex items-center gap-1"
-                      title="Close"
-                    >
+                    <button type="button" onClick={() => setSelectedId(null)}
+                      className="flex h-7 w-7 items-center justify-center rounded-lg"
+                      style={{ background:"var(--bg-tertiary)", border:"1px solid var(--border-default)", cursor:"pointer", color:"var(--text-secondary)" }}>
                       <X size={13} />
                     </button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
-                  <div>
-                    <Field label="Rule name">
-                      <input
-                        type="text"
-                        className="input-field"
-                        value={draft.name}
-                        onChange={(e) => updateDraft({ name: e.target.value })}
-                        placeholder="e.g. Morning business carousel"
-                      />
-                    </Field>
+                {/* onglets */}
+                <div className="flex gap-0 px-4 md:px-6 pt-4 overflow-x-auto"
+                  style={{ borderBottom:"1px solid var(--border-default)" }}>
+                  {ONGLETS.map(({ id, label, icon: Icon }) => (
+                    <button key={id} type="button" onClick={() => setOnglet(id)}
+                      className="flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold transition-all"
+                      style={{
+                        color:      onglet === id ? "var(--accent-primary)" : "var(--text-muted)",
+                        borderBottom: `2px solid ${onglet === id ? "var(--accent-primary)" : "transparent"}`,
+                        background:"none", border:"none",
+                        borderBottomWidth:2, borderBottomStyle:"solid",
+                        borderBottomColor: onglet === id ? "var(--accent-primary)" : "transparent",
+                        cursor:"pointer", marginBottom:-1,
+                      }}>
+                      <Icon size={13} /> {label}
+                    </button>
+                  ))}
+                </div>
 
-                    <Field label="Content type">
-                      <SegmentedControl
-                        options={CONTENT_TYPES}
-                        value={draft.content_type}
-                        onChange={(v) => updateDraft({ content_type: v })}
-                        ariaLabel="Content type"
-                      />
-                    </Field>
+                {/* contenu de l'onglet */}
+                <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5">
 
-                    <Field
-                      label="Number of media"
-                      hint="Fixed = always N. Range = AI picks within [min, max]."
-                    >
-                      <div className="mb-2">
-                        <SegmentedControl
-                          options={[
-                            { id: "fixed", label: "Fixed" },
-                            { id: "range", label: "Range" },
-                          ]}
-                          value={draft.num_media?.mode || "fixed"}
-                          onChange={(v) => updateNumMedia({ mode: v })}
-                          ariaLabel="Media count mode"
-                        />
-                      </div>
-                      {draft.num_media?.mode === "fixed" ? (
-                        <input
-                          type="number"
-                          min={1}
-                          max={10}
-                          className="input-field"
-                          style={{ width: 96 }}
-                          value={draft.num_media?.count ?? 1}
-                          onChange={(e) =>
-                            updateNumMedia({ count: parseInt(e.target.value || 1, 10) })
-                          }
-                        />
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            min={1}
-                            max={10}
-                            className="input-field"
-                            style={{ width: 76 }}
-                            value={draft.num_media?.min ?? 2}
-                            onChange={(e) =>
-                              updateNumMedia({ min: parseInt(e.target.value || 1, 10) })
-                            }
-                          />
-                          <span
-                            className="text-xs"
-                            style={{ color: "var(--text-muted)" }}
-                          >
-                            to
-                          </span>
-                          <input
-                            type="number"
-                            min={1}
-                            max={10}
-                            className="input-field"
-                            style={{ width: 76 }}
-                            value={draft.num_media?.max ?? 4}
-                            onChange={(e) =>
-                              updateNumMedia({ max: parseInt(e.target.value || 1, 10) })
-                            }
-                          />
-                        </div>
-                      )}
-                    </Field>
-
-                    <Field label="Domain / topic">
-                      <input
-                        type="text"
-                        className="input-field"
-                        value={draft.domain}
-                        onChange={(e) => updateDraft({ domain: e.target.value })}
-                        placeholder="business, real estate, marketing, health…"
-                      />
-                    </Field>
-
-                    <Field label="Target audience">
-                      <input
-                        type="text"
-                        className="input-field"
-                        value={draft.target_audience}
-                        onChange={(e) =>
-                          updateDraft({ target_audience: e.target.value })
-                        }
-                        placeholder="CEOs, startups, investors…"
-                      />
-                    </Field>
-
-                    <Field label="Tone">
-                      <div className="flex flex-wrap gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => updateDraft({ tone: "" })}
-                          className="text-xs font-medium px-3 py-1.5 rounded-md"
-                          style={{
-                            background:
-                              !draft.tone
-                                ? "var(--accent-primary)"
-                                : "var(--bg-tertiary)",
-                            color:
-                              !draft.tone ? "white" : "var(--text-secondary)",
-                          }}
-                        >
-                          Auto
-                        </button>
-                        {TONES.map((t) => {
-                          const active = draft.tone === t.id;
-                          return (
-                            <button
-                              key={t.id}
-                              type="button"
-                              onClick={() => updateDraft({ tone: t.id })}
-                              className="text-xs font-medium px-3 py-1.5 rounded-md"
-                              title={t.hint}
-                              style={{
-                                background: active
-                                  ? "var(--accent-primary)"
-                                  : "var(--bg-tertiary)",
-                                color: active
-                                  ? "white"
-                                  : "var(--text-secondary)",
-                              }}
-                            >
-                              {t.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </Field>
-
-                    <Field label="Objective">
-                      <SegmentedControl
-                        options={OBJECTIVES}
-                        value={draft.objective}
-                        onChange={(v) => updateDraft({ objective: v })}
-                        ariaLabel="Objective"
-                      />
-                    </Field>
-
-                    <Field label="Description style">
-                      <input
-                        type="text"
-                        className="input-field"
-                        value={draft.description_style}
-                        onChange={(e) =>
-                          updateDraft({ description_style: e.target.value })
-                        }
-                        placeholder="e.g. concise, factual, no emojis"
-                      />
-                    </Field>
-
-                    <Field label="Extra brief (optional)">
-                      <textarea
-                        className="input-field"
-                        rows={2}
-                        value={draft.extra_brief}
-                        onChange={(e) =>
-                          updateDraft({ extra_brief: e.target.value })
-                        }
-                        placeholder="Any free-form instruction to prepend to the AI prompt."
-                      />
-                    </Field>
-                  </div>
-
-                  <div>
-                    <Field label="Frequency">
-                      <SegmentedControl
-                        options={FREQUENCIES}
-                        value={draft.schedule?.frequency || "daily"}
-                        onChange={(v) => updateSchedule({ frequency: v })}
-                        ariaLabel="Frequency"
-                      />
-                    </Field>
-
-                    {(draft.schedule?.frequency === "weekdays" ||
-                      draft.schedule?.frequency === "weekly") && (
-                      <Field label="Days">
-                        <div className="flex flex-wrap gap-1">
-                          {WEEKDAY_LABELS.map((lbl, i) => {
-                            const on = (draft.schedule?.weekdays || []).includes(i);
-                            return (
-                              <button
-                                key={i}
-                                type="button"
-                                onClick={() => toggleWeekday(i)}
-                                className="text-xs font-medium px-3 py-1.5 rounded-md transition-colors"
-                                style={{
-                                  background: on
-                                    ? "var(--accent-primary)"
-                                    : "var(--bg-tertiary)",
-                                  color: on
-                                    ? "white"
-                                    : "var(--text-secondary)",
-                                }}
-                              >
-                                {lbl}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </Field>
-                    )}
-
-                    {draft.schedule?.frequency === "monthly" && (
-                      <Field
-                        label="Days of month"
-                        hint="Comma-separated numbers (e.g. 1, 15, 28)"
-                      >
-                        <input
-                          type="text"
-                          className="input-field"
-                          value={(draft.schedule?.month_days || []).join(", ")}
-                          onChange={(e) => {
-                            const nums = e.target.value
-                              .split(/[,\s]+/)
-                              .map((s) => parseInt(s, 10))
-                              .filter(
-                                (n) => Number.isInteger(n) && n >= 1 && n <= 31
-                              );
-                            updateSchedule({ month_days: nums });
-                          }}
-                          placeholder="1, 15, 28"
-                        />
-                      </Field>
-                    )}
-
-                    <Field label="Publish times">
-                      <div className="flex flex-col gap-2">
-                        {(draft.schedule?.times || []).map((t, idx) => (
-                          <div key={idx} className="flex items-center gap-2">
-                            <TimePicker
-                              value={t}
-                              onChange={(next) => updateTimeAt(idx, next)}
-                            />
-                            {(draft.schedule?.times || []).length > 1 && (
-                              <button
-                                type="button"
-                                onClick={() => removeTime(idx)}
-                                className="p-1.5 rounded-md transition-colors"
-                                title="Remove this time"
-                                style={{ color: "var(--status-error)" }}
-                              >
-                                <X size={14} />
-                              </button>
-                            )}
+                  {/* ── CONTENU ─────────────────────────────────────── */}
+                  {onglet === "contenu" && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8">
+                      <div>
+                        <Champ label={t("ruleName")}>
+                          <input type="text" className={inputField} value={draft.name}
+                            onChange={(e) => upd({ name: e.target.value })}
+                            placeholder={t("ruleNamePlaceholder")} />
+                        </Champ>
+                        <Champ label={t("contentType")}>
+                          <Chips options={CONTENT_TYPES} value={draft.content_type}
+                            onChange={(v) => upd({ content_type: v })} />
+                        </Champ>
+                        <Champ label={t("numMedia")}
+                          hint={t("numMediaHint")}>
+                          <div className="mb-2">
+                            <Chips
+                              options={[{ id:"fixed", label:t("fixed") }, { id:"range", label:t("range") }]}
+                              value={draft.num_media?.mode || "fixed"}
+                              onChange={(v) => updMédias({ mode: v })} />
                           </div>
-                        ))}
-                        <button
-                          type="button"
-                          onClick={addTime}
-                          className="text-xs self-start inline-flex items-center gap-1 px-2 py-1 rounded"
-                          style={{ color: "var(--accent-primary)" }}
-                        >
-                          <Plus size={12} /> Add a time
-                        </button>
+                          {draft.num_media?.mode === "fixed" ? (
+                            <input type="number" min={1} max={10} className={inputField}
+                              style={{ width:96 }} value={draft.num_media?.count ?? 1}
+                              onChange={(e) => updMédias({ count: parseInt(e.target.value||1,10) })} />
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <input type="number" min={1} max={10} className={inputField} style={{ width:76 }}
+                                value={draft.num_media?.min ?? 2}
+                                onChange={(e) => updMédias({ min: parseInt(e.target.value||1,10) })} />
+                              <span className="text-xs" style={{ color:"var(--text-muted)" }}>{t("rangeTo")}</span>
+                              <input type="number" min={1} max={10} className={inputField} style={{ width:76 }}
+                                value={draft.num_media?.max ?? 4}
+                                onChange={(e) => updMédias({ max: parseInt(e.target.value||1,10) })} />
+                            </div>
+                          )}
+                        </Champ>
+                        <Champ label={t("domain")}>
+                          <input type="text" className={inputField} value={draft.domain}
+                            onChange={(e) => upd({ domain: e.target.value })}
+                            placeholder={t("domainPlaceholderShort")} />
+                        </Champ>
+                        <Champ label={t("audience")}>
+                          <input type="text" className={inputField} value={draft.target_audience}
+                            onChange={(e) => upd({ target_audience: e.target.value })}
+                            placeholder={t("audiencePlaceholderShort")} />
+                        </Champ>
                       </div>
-                    </Field>
+                      <div>
+                        <Champ label={t("communicationTone")}>
+                          <Chips
+                            options={[{ id:"", label:t("toneAuto") }, ...TONES.map((tn) => ({ id:tn.id, label:tn.label }))]}
+                            value={draft.tone || ""}
+                            onChange={(v) => upd({ tone: v })} />
+                        </Champ>
+                        <Champ label={t("objective")}>
+                          <Chips options={OBJECTIVES} value={draft.objective}
+                            onChange={(v) => upd({ objective: v })} />
+                        </Champ>
+                        <Champ label={t("descriptionStyle")}>
+                          <input type="text" className={inputField} value={draft.description_style}
+                            onChange={(e) => upd({ description_style: e.target.value })}
+                            placeholder={t("descriptionStylePlaceholder")} />
+                        </Champ>
+                        <Champ label={t("extraBriefOptional")}>
+                          <textarea className={inputField} rows={3} value={draft.extra_brief}
+                            onChange={(e) => upd({ extra_brief: e.target.value })}
+                            placeholder={t("extraBriefPlaceholder")} />
+                        </Champ>
+                        <Champ label={t("platforms")}>
 
-                    <Field label="Timezone">
-                      <input
-                        type="text"
-                        className="input-field"
-                        value={draft.schedule?.timezone || "UTC"}
-                        onChange={(e) =>
-                          updateSchedule({ timezone: e.target.value })
-                        }
-                        placeholder="e.g. Europe/Paris"
-                      />
-                    </Field>
+                          <div className="flex flex-wrap gap-1.5">
+                            {PLATFORMS.map((p) => {
+                              const Icon = p.icon;
+                              const on   = !!draft.platforms?.[p.id];
+                              return (
+                                <button key={p.id} type="button" onClick={() => togglePlateforme(p.id)}
+                                  className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all"
+                                  style={{
+                                    background: on ? `${p.color}22` : "var(--bg-tertiary)",
+                                    color:      on ? p.color         : "var(--text-secondary)",
+                                    border:     `1px solid ${on ? p.color : "var(--border-default)"}`,
+                                    cursor:"pointer",
+                                  }}>
+                                  <Icon size={12} /> {p.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </Champ>
+                      </div>
+                    </div>
+                  )}
 
-                    <Field
-                      label="Telegram validation lead"
-                      hint="How long before publish the bot asks for approval."
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div
-                          className="inline-flex gap-1 p-1 rounded-lg"
-                          style={{ background: "var(--bg-tertiary)" }}
-                        >
+                  {/* ── PLANIFICATION ─────────────────────────────── */}
+                  {onglet === "planification" && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8">
+                      <div>
+                        <Champ label={t("frequency")}>
+                          <Chips options={FREQUENCIES} value={draft.schedule?.frequency || "daily"}
+                            onChange={(v) => updPlanning({ frequency: v })} />
+                        </Champ>
+
+                        {(draft.schedule?.frequency === "weekdays" || draft.schedule?.frequency === "weekly") && (
+                          <Champ label={t("daysOfWeek")}>
+                            <div className="flex flex-wrap gap-1.5">
+                              {WEEKDAY_LABELS.map((lbl, i) => {
+                                const on = (draft.schedule?.weekdays || []).includes(i);
+                                return (
+                                  <button key={i} type="button" onClick={() => toggleJour(i)}
+                                    className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-all"
+                                    style={{
+                                      background: on ? "var(--accent-primary)" : "var(--bg-tertiary)",
+                                      color:      on ? "#fff"                  : "var(--text-secondary)",
+                                      border:     `1px solid ${on ? "transparent" : "var(--border-default)"}`,
+                                      cursor:"pointer",
+                                    }}>
+                                    {lbl}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </Champ>
+                        )}
+
+                        {draft.schedule?.frequency === "monthly" && (
+                          <Champ label={t("daysOfMonth")} hint={t("daysOfMonthHint")}>
+                            <input type="text" className={inputField}
+                              value={(draft.schedule?.month_days || []).join(", ")}
+                              onChange={(e) => {
+                                const nums = e.target.value.split(/[,\s]+/)
+                                  .map((s) => parseInt(s,10))
+                                  .filter((n) => Number.isInteger(n) && n >= 1 && n <= 31);
+                                updPlanning({ month_days: nums });
+                              }}
+                              placeholder={t("rulePromptDaysPlaceholder")} />
+                          </Champ>
+                        )}
+
+                        <Champ label={t("publishTimes")}>
+                          <div className="flex flex-col gap-2">
+                            {(draft.schedule?.times || []).map((time, idx) => (
+                              <div key={idx} className="flex items-center gap-2">
+                                <TimePicker value={time} onChange={(next) => majHeure(idx, next)} />
+                                {(draft.schedule?.times || []).length > 1 && (
+                                  <button type="button" onClick={() => supprimerHeure(idx)}
+                                    className="rounded-lg p-1.5"
+                                    style={{ color:"var(--status-error)", background:"rgba(239,68,68,.08)", border:"none", cursor:"pointer" }}>
+                                    <X size={13} />
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                            <button type="button" onClick={ajouterHeure}
+                              className="self-start text-xs font-semibold inline-flex items-center gap-1"
+                              style={{ color:"var(--accent-primary)", background:"none", border:"none", cursor:"pointer" }}>
+                              <Plus size={12} /> {t("addTime")}
+                            </button>
+                          </div>
+                        </Champ>
+                      </div>
+                      <div>
+                        <Champ label={t("timezone")}>
+                          <input type="text" className={inputField}
+                            value={draft.schedule?.timezone || "UTC"}
+                            onChange={(e) => updPlanning({ timezone: e.target.value })}
+                            placeholder={t("timezonePlaceholder")} />
+                        </Champ>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── TELEGRAM ──────────────────────────────────── */}
+                  {onglet === "telegram" && (
+                    <div className="max-w-md">
+                      <div className="mb-5 rounded-2xl p-4"
+                        style={{ background:"rgba(29,63,190,.06)", border:"1px solid rgba(29,63,190,.2)" }}>
+                        <p className="text-xs font-semibold" style={{ color:"var(--accent-primary)" }}>
+                          {t("howItWorks")}
+                        </p>
+                        <p className="mt-1 text-xs leading-relaxed" style={{ color:"var(--text-muted)" }}>
+                          {t("howItWorksDesc")}
+                        </p>
+                      </div>
+
+                      <Champ label={t("validationLead")} hint={t("leadHint")}>
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
                           {LEAD_PRESETS.map((m) => {
                             const on = draft.validation_lead_minutes === m;
                             return (
-                              <button
-                                key={m}
-                                type="button"
-                                onClick={() =>
-                                  updateDraft({ validation_lead_minutes: m })
-                                }
-                                className="text-xs font-medium px-3 py-1.5 rounded-md transition-colors"
+                              <button key={m} type="button"
+                                onClick={() => upd({ validation_lead_minutes: m })}
+                                className="rounded-lg px-3 py-1.5 text-xs font-semibold transition-all"
                                 style={{
-                                  background: on
-                                    ? "var(--accent-primary)"
-                                    : "transparent",
-                                  color: on ? "white" : "var(--text-secondary)",
-                                }}
-                              >
-                                {m < 60 ? `${m} min` : `${m / 60} h`}
+                                  background: on ? "var(--accent-primary)" : "var(--bg-tertiary)",
+                                  color:      on ? "#fff"                  : "var(--text-secondary)",
+                                  border:     `1px solid ${on ? "transparent" : "var(--border-default)"}`,
+                                  cursor:"pointer",
+                                }}>
+                                {m < 60 ? t("minutesShort", { n: m }) : t("hoursShort", { n: m/60 })}
                               </button>
                             );
                           })}
+                          <input type="number" min={1} max={1440} className={inputField} style={{ width:88 }}
+                            value={draft.validation_lead_minutes || 30}
+                            onChange={(e) => upd({ validation_lead_minutes: parseInt(e.target.value||30,10) })} />
+                          <span className="text-xs" style={{ color:"var(--text-muted)" }}>{t("minLabel")}</span>
                         </div>
-                        <input
-                          type="number"
-                          min={1}
-                          max={1440}
-                          className="input-field"
-                          style={{ width: 96 }}
-                          value={draft.validation_lead_minutes || 30}
-                          onChange={(e) =>
-                            updateDraft({
-                              validation_lead_minutes: parseInt(
-                                e.target.value || 30,
-                                10
-                              ),
-                            })
-                          }
-                        />
-                        <span
-                          className="text-[11px]"
-                          style={{ color: "var(--text-muted)" }}
-                        >
-                          min
-                        </span>
-                      </div>
-                    </Field>
+                      </Champ>
 
-                    <Field
-                      label="Telegram chat (optional)"
-                      hint="Empty = use the backend's default chat."
-                    >
-                      <input
-                        type="text"
-                        className="input-field"
-                        value={draft.validation_chat_id || ""}
-                        onChange={(e) =>
-                          updateDraft({
-                            validation_chat_id: e.target.value || null,
-                          })
-                        }
-                        placeholder="Numeric chat ID"
-                      />
-                    </Field>
-
-                    <Field label="Platforms">
-                      <div className="flex flex-wrap gap-1.5">
-                        {PLATFORMS.map((p) => {
-                          const Icon = p.icon;
-                          const on = !!draft.platforms?.[p.id];
-                          return (
-                            <button
-                              key={p.id}
-                              type="button"
-                              onClick={() => togglePlatform(p.id)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
-                              style={{
-                                background: on
-                                  ? `${p.color}22`
-                                  : "var(--bg-tertiary)",
-                                color: on ? p.color : "var(--text-secondary)",
-                                border: `1px solid ${
-                                  on ? p.color : "transparent"
-                                }`,
-                              }}
-                            >
-                              <Icon size={12} />
-                              {p.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </Field>
-                  </div>
+                      <Champ label={t("telegramChatLabel")}
+                        hint={t("validationChatHint")}>
+                        <input type="text" className={inputField}
+                          value={draft.validation_chat_id || ""}
+                          onChange={(e) => upd({ validation_chat_id: e.target.value || null })}
+                          placeholder={t("telegramChatPlaceholder")} />
+                      </Champ>
+                    </div>
+                  )}
                 </div>
 
-                <div
-                  className="mt-4 pt-4 flex items-center justify-end gap-2"
-                  style={{ borderTop: "1px solid var(--border-default)" }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setSelectedId(null)}
-                    className="btn-secondary inline-flex items-center gap-2"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSave}
-                    disabled={saving}
-                    className="btn-primary inline-flex items-center gap-2"
-                  >
-                    {saving ? (
-                      <>
-                        <Loader2 size={13} className="animate-spin" /> Saving…
-                      </>
-                    ) : (
-                      <>
-                        <Save size={13} /> Save
-                      </>
-                    )}
-                  </button>
+                {/* pied de page */}
+                <div className="flex flex-wrap items-center justify-between gap-3 px-4 md:px-6 py-4"
+                  style={{ borderTop:"1px solid var(--border-default)" }}>
+                  <div className="flex gap-1">
+                    {ONGLETS.map(({ id }) => (
+                      <span key={id} className="h-1.5 w-1.5 rounded-full transition-all"
+                        style={{ background: onglet === id ? "var(--accent-primary)" : "var(--border-default)" }} />
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={() => setSelectedId(null)}
+                      className={`${btnSecondary} inline-flex items-center gap-2`}>
+                      {tCommon("cancel")}
+                    </button>
+                    <button type="button" onClick={handleSave} disabled={saving}
+                      className={`${btnPrimary} inline-flex items-center gap-2`}>
+                      {saving
+                        ? <><Loader2 size={13} className="animate-spin"/> {t("saving")}</>
+                        : <><Save size={13}/> {tCommon("save")}</>}
+                    </button>
+                  </div>
                 </div>
               </>
             )}

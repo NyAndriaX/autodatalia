@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { useSelector, useDispatch } from "react-redux";
+import { useTranslations } from "next-intl";
 import {
   ChevronLeft,
   ChevronRight,
@@ -36,6 +37,7 @@ import {
   PLATFORM_MAP,
   STATUSES,
   STATUS_META,
+  STATUS_LABEL_KEYS,
   activePlatformIds,
 } from "../../lib/platforms";
 import {
@@ -74,6 +76,7 @@ function buildSeed() {
 
 /* ——— A single scheduled-post chip (draggable + editable + cancellable) ——— */
 function PostChip({ post, onEdit, onCancel, compact }) {
+  const t = useTranslations("calendar");
   const activeIds = activePlatformIds(post.platforms);
   const primary = activeIds[0] ? PLATFORM_MAP[activeIds[0]] : null;
   const status = STATUS_META[post.status] ?? STATUS_META.draft;
@@ -134,8 +137,8 @@ function PostChip({ post, onEdit, onCancel, compact }) {
           onClick={(e) => e.stopPropagation()}
           className="shrink-0 rounded"
           style={{ color: "var(--accent-primary)" }}
-          title="Open the live post"
-          aria-label="Open the live post"
+          title={t("openLive") || "Open the live post"}
+          aria-label={t("openLive") || "Open the live post"}
         >
           <ExternalLink size={11} />
         </a>
@@ -147,8 +150,8 @@ function PostChip({ post, onEdit, onCancel, compact }) {
         }}
         className="opacity-0 group-hover/chip:opacity-100 transition-opacity shrink-0 rounded"
         style={{ color: "var(--text-muted)" }}
-        title="Edit post"
-        aria-label="Edit post"
+        title={t("editPost") || "Edit post"}
+        aria-label={t("editPost") || "Edit post"}
       >
         <Pencil size={11} />
       </button>
@@ -159,8 +162,8 @@ function PostChip({ post, onEdit, onCancel, compact }) {
         }}
         className="opacity-0 group-hover/chip:opacity-100 transition-opacity shrink-0 rounded"
         style={{ color: "var(--text-muted)" }}
-        title="Cancel schedule"
-        aria-label="Cancel schedule"
+        title={t("cancelSchedule") || "Cancel schedule"}
+        aria-label={t("cancelSchedule") || "Cancel schedule"}
       >
         <X size={12} />
       </button>
@@ -170,6 +173,7 @@ function PostChip({ post, onEdit, onCancel, compact }) {
 
 /* ——— A day cell: drop target + quick-create affordance ——— */
 function DayCell({ day, posts, isWeek, onDropPost, onEdit, onCancel, onQuickCreate, flashToday }) {
+  const t = useTranslations("calendar");
   const [isOver, setIsOver] = useState(false);
 
   const overflow = !isWeek && posts.length > MAX_CHIPS_PER_DAY;
@@ -237,8 +241,8 @@ function DayCell({ day, posts, isWeek, onDropPost, onEdit, onCancel, onQuickCrea
           // the chrome stays calm.
           className="opacity-30 group-hover/cell:opacity-100 transition-opacity rounded"
           style={{ color: "var(--text-muted)" }}
-          title="Schedule a post on this day"
-          aria-label="Schedule a post on this day"
+          title={t("addPost")}
+          aria-label={t("addPost")}
         >
           <Plus size={13} />
         </button>
@@ -296,6 +300,8 @@ function FilterChip({ active, color, label, onClick }) {
 
 export default function CalendarView() {
   const dispatch = useDispatch();
+  const t = useTranslations("calendar");
+  const tDashboard = useTranslations("dashboard");
   const { scheduledPosts, view, cursor, filters, seeded } = useSelector(
     (s) => s.calendar
   );
@@ -380,20 +386,20 @@ export default function CalendarView() {
           arrows + view toggle don't end up squeezed against each other. */}
       {isMobile ? (
         <div className="shrink-0 mb-3 flex flex-col gap-2">
-          <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <button
               className="btn-secondary text-sm"
               style={{ padding: "6px 12px" }}
               onClick={onTodayClick}
             >
-              Today
+              {t("today")}
             </button>
             <div className="flex items-center gap-1">
               <button
                 className="btn-ghost"
                 style={{ padding: 8 }}
                 onClick={() => navigate(-1)}
-                aria-label="Previous"
+                aria-label={t("previous")}
               >
                 <ChevronLeft size={18} />
               </button>
@@ -401,7 +407,7 @@ export default function CalendarView() {
                 className="btn-ghost"
                 style={{ padding: 8 }}
                 onClick={() => navigate(1)}
-                aria-label="Next"
+                aria-label={t("next")}
               >
                 <ChevronRight size={18} />
               </button>
@@ -411,8 +417,8 @@ export default function CalendarView() {
               style={{ background: "var(--bg-secondary)" }}
             >
               {[
-                { id: "month", label: "M", Icon: CalendarDays, full: "Month" },
-                { id: "week", label: "W", Icon: CalendarRange, full: "Week" },
+                { id: "month", label: "M", Icon: CalendarDays, full: t("month") },
+                { id: "week", label: "W", Icon: CalendarRange, full: t("week") },
               ].map(({ id, label, Icon, full }) => {
                 const on = view === id;
                 return (
@@ -445,14 +451,14 @@ export default function CalendarView() {
       ) : (
         <div className="flex flex-wrap items-center gap-3 shrink-0 mb-4">
           <button className="btn-secondary" onClick={onTodayClick}>
-            Today
+            {t("today")}
           </button>
           <div className="flex items-center gap-1">
             <button
               className="btn-ghost"
               style={{ padding: 8 }}
               onClick={() => navigate(-1)}
-              aria-label="Previous"
+              aria-label={t("previous")}
             >
               <ChevronLeft size={18} />
             </button>
@@ -460,7 +466,7 @@ export default function CalendarView() {
               className="btn-ghost"
               style={{ padding: 8 }}
               onClick={() => navigate(1)}
-              aria-label="Next"
+              aria-label={t("next")}
             >
               <ChevronRight size={18} />
             </button>
@@ -479,8 +485,8 @@ export default function CalendarView() {
             style={{ background: "var(--bg-secondary)" }}
           >
             {[
-              { id: "month", label: "Month", Icon: CalendarDays },
-              { id: "week", label: "Week", Icon: CalendarRange },
+              { id: "month", label: t("month"), Icon: CalendarDays },
+              { id: "week", label: t("week"), Icon: CalendarRange },
             ].map(({ id, label, Icon }) => {
               const on = view === id;
               return (
@@ -541,7 +547,7 @@ export default function CalendarView() {
                 key={s}
                 active={filters.statuses[s]}
                 color={STATUS_META[s].colorVar}
-                label={STATUS_META[s].label}
+                label={tDashboard(STATUS_LABEL_KEYS[s] ?? "statusDraft")}
                 onClick={() => dispatch(toggleStatusFilter(s))}
               />
             ))}
@@ -553,7 +559,7 @@ export default function CalendarView() {
             className="text-xs font-semibold uppercase tracking-wider mr-1"
             style={{ color: "var(--text-tertiary)" }}
           >
-            Platforms
+            {t("platforms")}
           </span>
           {PLATFORMS.map((p) => (
             <FilterChip
@@ -568,14 +574,14 @@ export default function CalendarView() {
             className="text-xs font-semibold uppercase tracking-wider mx-1"
             style={{ color: "var(--text-tertiary)" }}
           >
-            Status
+            {t("status")}
           </span>
           {STATUSES.map((s) => (
             <FilterChip
               key={s}
               active={filters.statuses[s]}
               color={STATUS_META[s].colorVar}
-              label={STATUS_META[s].label}
+              label={tDashboard(STATUS_LABEL_KEYS[s] ?? "statusDraft")}
               onClick={() => dispatch(toggleStatusFilter(s))}
             />
           ))}

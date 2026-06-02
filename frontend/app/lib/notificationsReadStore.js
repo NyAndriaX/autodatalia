@@ -62,11 +62,3 @@ export function addReadIds(ids) {
   if (changed) writeStored(set);
 }
 
-export function clearReadIds() {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    /* ignore */
-  }
-}

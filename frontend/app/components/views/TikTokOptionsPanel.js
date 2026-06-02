@@ -2,21 +2,23 @@
 
 import { useEffect, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
+import { useTranslations } from "next-intl";
 import { Music, UserCheck } from "lucide-react";
 import { fetchConnections } from "../../lib/oauthService";
 import { setTiktokOptions } from "../../store/editorSlice";
 
-const TIKTOK_PRIVACY_LEVELS = [
-  { value: "PUBLIC_TO_EVERYONE", label: "Public — everyone" },
-  { value: "MUTUAL_FOLLOW_FRIENDS", label: "Mutual followers only" },
-  { value: "FOLLOWER_OF_CREATOR", label: "Followers only" },
-  { value: "SELF_ONLY", label: "Only me" },
-];
-
 export default function TikTokOptionsPanel() {
+  const t = useTranslations("tiktokOptions");
   const dispatch = useDispatch();
   const tiktok = useSelector((s) => s.editor.currentPost.tiktok || {});
   const [providers, setProviders] = useState(null);
+
+  const TIKTOK_PRIVACY_LEVELS = [
+    { value: "PUBLIC_TO_EVERYONE", label: t("visibilityPublic") },
+    { value: "MUTUAL_FOLLOW_FRIENDS", label: t("visibilityFriends") },
+    { value: "FOLLOWER_OF_CREATOR", label: t("visibilityFollowers") },
+    { value: "SELF_ONLY", label: t("visibilitySelf") },
+  ];
 
   useEffect(() => {
     let cancelled = false;
@@ -44,7 +46,7 @@ export default function TikTokOptionsPanel() {
         className="text-[10px] uppercase tracking-wider"
         style={{ color: "var(--text-muted)" }}
       >
-        TikTok options
+        {t("title")}
       </p>
 
       {/* Creator card */}
@@ -70,13 +72,13 @@ export default function TikTokOptionsPanel() {
             className="text-xs font-semibold"
             style={{ color: "var(--text-primary)" }}
           >
-            {tiktokTarget?.display_name || "Connect a TikTok account"}
+            {tiktokTarget?.display_name || t("connectAccount")}
           </span>
           <span
             className="text-[10px]"
             style={{ color: "var(--text-muted)" }}
           >
-            Publishing as {tiktokTarget?.label || "—"}
+            {t("publishingAs")} {tiktokTarget?.label || "—"}
           </span>
         </div>
       </div>
@@ -87,7 +89,7 @@ export default function TikTokOptionsPanel() {
           className="text-[10px] uppercase tracking-wider"
           style={{ color: "var(--text-muted)" }}
         >
-          Who can view
+          {t("visibility")}
         </span>
         <select
           value={tiktok.privacy_level || "SELF_ONLY"}
@@ -116,12 +118,12 @@ export default function TikTokOptionsPanel() {
           className="mt-0.5"
         />
         <span style={{ color: "var(--text-primary)" }}>
-          Disclose branded content
+          {t("brandedContent")}
           <span
             className="block text-[10px]"
             style={{ color: "var(--text-muted)" }}
           >
-            Promotes a third-party brand, product, or service.
+            {t("brandedContentDescription")}
           </span>
         </span>
       </label>
@@ -133,12 +135,12 @@ export default function TikTokOptionsPanel() {
           className="mt-0.5"
         />
         <span style={{ color: "var(--text-primary)" }}>
-          Your brand
+          {t("yourBrand")}
           <span
             className="block text-[10px]"
             style={{ color: "var(--text-muted)" }}
           >
-            Promotes yourself, your business, or your product.
+            {t("yourBrandDescription")}
           </span>
         </span>
       </label>
@@ -171,12 +173,12 @@ export default function TikTokOptionsPanel() {
           className="mt-0.5"
         />
         <span style={{ color: "var(--text-primary)" }}>
-          I confirm the music used in this video does not violate any third-party rights.
+          {t("musicConsent")}
           <span
             className="block text-[10px]"
             style={{ color: "var(--text-muted)" }}
           >
-            Required by TikTok before publishing.
+            {t("musicConsentRequired")}
           </span>
         </span>
       </label>

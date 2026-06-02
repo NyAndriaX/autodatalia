@@ -12,8 +12,14 @@ from .models import (
     AutomationRulesResponse,
     CaptionRequest,
     ContentItem,
+    CostLogResponse,
+    CostSummary,
+    SettingsKeysResponse,
+    SettingsKeysUpdateRequest,
     GenerateRequest,
     GenerateResponse,
+    HashtagsRequest,
+    HashtagsResponse,
     Post,
     PostCreate,
     PostUpdate,
@@ -34,6 +40,7 @@ from .publish import publish_to_targets
 from .services import (
     build_image_data_uri,
     generate_captions,
+    generate_hashtags,
     automation_create,
     automation_delete,
     automation_get,
@@ -73,8 +80,123 @@ auth_required = Depends(require_token)
 # ── Utility endpoints ──────────────────────────────────────────────────
 
 @router.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, Any]:
+    """Liveness + dependency check.
+
+    Returns 200 only when both the API process AND Postgres are reachable.
+    Caddy / Docker healthchecks fail when this is non-200, so a Postgres
+    outage now actually surfaces as an unhealthy container instead of a
+    "200 OK" lie that masks the real problem until the first /auth call.
+    """
+    from fastapi import HTTPException
+    deps: dict[str, str] = {}
+    try:
+        from .db import _connect
+        conn = _connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        finally:
+            conn.close()
+        deps["postgres"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        deps["postgres"] = f"down: {type(exc).__name__}"
+        raise HTTPException(
+            status_code=503,
+            detail={"status": "degraded", "dependencies": deps},
+        )
+    return {"status": "ok", "dependencies": deps}
+
+
+@router.get("/stats")
+async def get_stats() -> dict[str, Any]:
+    """Aggregated content statistics for the dashboard KPI strip.
+
+    Returns counts broken down by post status so the frontend never has
+    to load the full posts list just to paint four numbers.
+    """
+    from .services import posts_list as _posts_list, messages_list
+
+    all_posts = _posts_list()
+    by_status: dict[str, int] = {
+        "draft": 0,
+        "scheduled": 0,
+        "pending": 0,
+        "approved": 0,
+        "published": 0,
+        "error": 0,
+        "awaiting_validation": 0,
+        "rejected": 0,
+    }
+    for post in all_posts:
+        s = post.get("status", "draft")
+        if s in by_status:
+            by_status[s] += 1
+
+    recent_messages = messages_list()[:5]
+
+    # Media asset count
+    media_count = sum(
+        1
+        for f in settings.content_dir.rglob("*")
+        if f.is_file() and not f.name.startswith(".")
+    )
+
+    return {
+        "total_posts": len(all_posts),
+        "by_status": by_status,
+        "media_assets": media_count,
+        "recent_activity_count": len(recent_messages),
+    }
+
+
+@router.get("/dashboard-summary")
+async def dashboard_summary() -> dict[str, Any]:
+    """Rich summary payload for the dashboard view.
+
+    Combines post stats, recent activity and connection status so the
+    dashboard page can prime itself with a single request on mount.
+    """
+    from .services import posts_list as _posts_list, messages_list
+    from .oauth import _load_tokens
+
+    all_posts = _posts_list()
+
+    by_status: dict[str, int] = {}
+    for post in all_posts:
+        s = post.get("status", "draft")
+        by_status[s] = by_status.get(s, 0) + 1
+
+    recent_activity = messages_list()[:10]
+
+    token_data = _load_tokens()
+    connected_providers = [
+        provider
+        for provider, data in token_data.items()
+        if data.get("access_token")
+    ]
+
+    media_count = sum(
+        1
+        for f in settings.content_dir.rglob("*")
+        if f.is_file() and not f.name.startswith(".")
+    )
+
+    return {
+        "posts": {
+            "total": len(all_posts),
+            "by_status": by_status,
+        },
+        "connections": {
+            "connected_providers": connected_providers,
+            "total_connected": len(connected_providers),
+        },
+        "media": {
+            "total_assets": media_count,
+        },
+        "recent_activity": recent_activity,
+    }
 
 
 @router.get("/tunnel-status")
@@ -102,43 +224,156 @@ async def messages() -> dict[str, list[Any]]:
 @router.post(
     "/generate",
     response_model=GenerateResponse,
-    dependencies=[auth_required],
 )
-async def generate(request: Request, body: GenerateRequest) -> GenerateResponse:
+async def generate(
+    request: Request,
+    body: GenerateRequest,
+    user_id: int = Depends(require_token),
+) -> GenerateResponse:
     """Prompt-driven generation for the editor's "Generate via AI" button."""
     client = _client_id(request)
     rate_guard(client)
-    variants, usage = await generate_post_variants(
+    variants, usage, model = await generate_post_variants(
         prompt=body.prompt,
         platforms=body.platforms,
         template=body.template,
         n=body.variants,
         image_filename=body.image_filename,
+        quality=body.quality,
+        user_id=user_id,
     )
     if usage["total_tokens"] > 0:  # don't count free cache hits
         rate_tick(client)
-    return GenerateResponse(variants=variants, usage=usage)
+    return GenerateResponse(
+        variants=variants,
+        usage=usage,
+        model=model,
+        tier=_tier_from_quality(body.quality, body.variants),
+    )
+
+
+def _tier_from_quality(quality: str, n: int) -> str:
+    if quality == "fast":
+        return "fast"
+    if quality == "premium":
+        return "premium"
+    if quality == "standard":
+        return "standard"
+    return "premium" if n >= 3 else "standard"
 
 
 @router.post(
     "/transform",
     response_model=TransformResponse,
-    dependencies=[auth_required],
 )
-async def transform(request: Request, body: TransformRequest) -> TransformResponse:
+async def transform(
+    request: Request,
+    body: TransformRequest,
+    user_id: int = Depends(require_token),
+) -> TransformResponse:
     """Quick AI actions (shorten / expand / tone) on existing content."""
     client = _client_id(request)
     rate_guard(client)
-    text, usage = await transform_content(body.content, body.action)
+    text, usage, _model = await transform_content(
+        body.content, body.action, user_id=user_id
+    )
     if usage["total_tokens"] > 0:
         rate_tick(client)
     return TransformResponse(text=text, usage=usage)
 
 
+@router.post(
+    "/hashtags",
+    response_model=HashtagsResponse,
+)
+async def hashtags(
+    request: Request,
+    body: HashtagsRequest,
+    user_id: int = Depends(require_token),
+) -> HashtagsResponse:
+    """Suggest hashtags for a post — fast-tier (cheap) by design."""
+    client = _client_id(request)
+    rate_guard(client)
+    tags, usage = await generate_hashtags(
+        body.content, max_tags=body.max_tags, user_id=user_id
+    )
+    if usage["total_tokens"] > 0:
+        rate_tick(client)
+    from .config import settings as _settings
+    return HashtagsResponse(
+        hashtags=tags, usage=usage, model=_settings.ai_model_fast
+    )
+
+
+# ── Cost dashboard ────────────────────────────────────────────────────
+
+
+@router.get("/costs/summary", response_model=CostSummary)
+async def costs_summary(period: str = "30d") -> CostSummary:
+    """Aggregate AI/media spend over the chosen window.
+
+    Periods: ``session`` (all-time, treated equivalently for now),
+    ``24h``, ``7d``, ``30d``, ``all``.
+    """
+    from .cost_tracking import summarize
+    seconds_by_label = {
+        "24h": 24 * 3600.0,
+        "7d": 7 * 24 * 3600.0,
+        "30d": 30 * 24 * 3600.0,
+        "all": None,
+        "session": None,
+    }
+    secs = seconds_by_label.get(period, 30 * 24 * 3600.0)
+    return CostSummary(**summarize(secs))
+
+
+@router.get("/costs/log", response_model=CostLogResponse)
+async def costs_log(limit: int = 200) -> CostLogResponse:
+    from .cost_tracking import list_logs
+    return CostLogResponse(entries=list_logs(limit=limit))
+
+
+# ── Runtime-editable API keys ────────────────────────────────────────
+
+
+@router.get("/settings/keys", response_model=SettingsKeysResponse)
+async def settings_keys_get() -> SettingsKeysResponse:
+    """Snapshot of every editable key for the Settings page.
+
+    Secrets are returned masked (``abcd••••WXYZ``); model ids and base
+    URLs ship in clear. See runtime_config.EDITABLE_KEYS for the full
+    allowlist.
+    """
+    from .runtime_config import snapshot_for_ui
+    return SettingsKeysResponse(keys=snapshot_for_ui())
+
+
+@router.patch(
+    "/settings/keys",
+    response_model=SettingsKeysResponse,
+    dependencies=[auth_required],
+)
+async def settings_keys_patch(
+    body: SettingsKeysUpdateRequest,
+) -> SettingsKeysResponse:
+    """Persist new values into runtime_settings.json AND hot-update the
+    live ``settings`` object so the next AI call uses the new key
+    without a container restart. Empty strings clear the override.
+    """
+    from .runtime_config import (
+        save_overrides,
+        apply_overrides_to_settings,
+        snapshot_for_ui,
+    )
+    save_overrides(body.updates)
+    apply_overrides_to_settings()
+    return SettingsKeysResponse(keys=snapshot_for_ui())
+
+
 # ── Publishing — fan post out to real social networks ────────────────
 
 
-@router.post("/publish", response_model=PublishResponse)
+@router.post("/publish", response_model=PublishResponse, dependencies=[auth_required])
 async def publish(body: PublishRequest) -> PublishResponse:
     """Publish `content` to every selected target.
 
@@ -589,9 +824,11 @@ async def list_content(request: Request) -> dict[str, Any]:
     return {"count": len(items), "items": items}
 
 
-@router.post("/captions/generate", dependencies=[auth_required])
+@router.post("/captions/generate")
 async def generate_content_captions(
-    request: Request, body: CaptionRequest
+    request: Request,
+    body: CaptionRequest,
+    user_id: int = Depends(require_token),
 ) -> dict[str, Any]:
     url = await tunnel.wait_for_tunnel(timeout=30.0)
     base = url or str(request.base_url).rstrip("/")
@@ -612,7 +849,9 @@ async def generate_content_captions(
 
     results: list[ContentItem] = []
     for item in items:
-        captions = await generate_captions(item, include_image=include_image)
+        captions = await generate_captions(
+            item, include_image=include_image, user_id=user_id
+        )
 
         if body.save_results:
             save_caption_file(item, captions)

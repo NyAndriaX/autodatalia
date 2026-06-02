@@ -191,7 +191,7 @@ def test_fire_post_writes_error_when_no_targets(client, monkeypatch):
     post = _make_scheduled(client, date="2020-01-01", time_s="09:00")
 
     async def empty_targets(**kwargs):
-        return []
+        return [], []
 
     monkeypatch.setattr(sched, "build_targets_from_post", empty_targets)
     asyncio.run(sched.fire_post(post))
@@ -208,7 +208,7 @@ def test_fire_post_marks_published_when_at_least_one_target_succeeds(client, mon
 
     async def one_target(**kwargs):
         return [{"platform": "facebook", "id": "pg1", "label": "Page 1",
-                 "access_token": "tok", "media_url": None}]
+                 "access_token": "tok", "media_url": None}], []
 
     async def publish_ok(*, content, targets):
         return [{
@@ -240,7 +240,7 @@ def test_fire_post_writes_bell_messages_for_each_target(client, monkeypatch):
         return [
             {"platform": "facebook", "id": "pg1", "label": "Page 1", "access_token": "t"},
             {"platform": "instagram", "id": "ig1", "label": "@ig", "access_token": "t"},
-        ]
+        ], []
 
     async def mixed_results(*, content, targets):
         return [
@@ -275,7 +275,7 @@ def test_fire_post_writes_bell_message_when_no_targets(client, monkeypatch):
     post = _make_scheduled(client, date="2020-01-01", time_s="09:00")
 
     async def empty_targets(**kwargs):
-        return []
+        return [], []
 
     monkeypatch.setattr(sched, "build_targets_from_post", empty_targets)
     asyncio.run(sched.fire_post(post))
@@ -292,7 +292,7 @@ def test_messages_endpoint_returns_appended_events(client, monkeypatch):
     post = _make_scheduled(client, date="2020-01-01", time_s="09:00")
 
     async def one_target(**kwargs):
-        return [{"platform": "facebook", "id": "pg1", "label": "Page 1", "access_token": "t"}]
+        return [{"platform": "facebook", "id": "pg1", "label": "Page 1", "access_token": "t"}], []
 
     async def publish_ok(*, content, targets):
         return [{
@@ -317,7 +317,7 @@ def test_fire_post_marks_error_when_all_targets_fail(client, monkeypatch):
 
     async def one_target(**kwargs):
         return [{"platform": "facebook", "id": "pg1", "label": "Page 1",
-                 "access_token": "tok", "media_url": None}]
+                 "access_token": "tok", "media_url": None}], []
 
     async def publish_fail(*, content, targets):
         return [{

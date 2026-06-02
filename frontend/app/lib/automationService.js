@@ -34,10 +34,6 @@ export async function listAutomationRules() {
   return data?.rules || [];
 }
 
-export async function getAutomationRule(id) {
-  return apiFetch(`/automation-rules/${encodeURIComponent(id)}`);
-}
-
 export async function createAutomationRule(rule) {
   return apiFetch("/automation-rules", {
     method: "POST",
