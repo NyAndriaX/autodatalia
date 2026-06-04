@@ -35,6 +35,7 @@ from typing import Any
 import httpx
 
 from .config import settings
+from .runtime_config import resolved_settings
 
 log = logging.getLogger("datalia.video_jobs")
 
@@ -139,7 +140,7 @@ def delete_job(job_id: str) -> bool:
 # ── Provider selection ────────────────────────────────────────────────
 
 
-def _pick_provider(requested: str | None) -> str:
+def _pick_provider(requested: str | None, *, user_id: str | int | None = None) -> str:
     """Resolve the effective provider for a job.
 
     Datalia is wired to **fal.ai as the sole real provider** — same LTX
@@ -152,18 +153,19 @@ def _pick_provider(requested: str | None) -> str:
     User-requested overrides honour the explicit choice when configured;
     Replicate must be requested by id to be reached.
     """
+    cfg = resolved_settings(user_id)
     configured = {
-        "ltx": bool(settings.ltx_api_key),
-        "fal": bool(settings.fal_api_key),
+        "ltx": bool(cfg.ltx_api_key),
+        "fal": bool(cfg.fal_api_key),
         # Kept for explicit opt-in: a caller can still pass
         # provider="replicate" if they want the version-pinned route.
         "replicate": bool(
-            settings.replicate_api_token
+            cfg.replicate_api_token
             # Replicate community models (which LTX-Video is) 404 on the
-            # bare /v1/models/{owner}/{name}/predictions URL — you must
+            # bare /v1/models/{owner}/{name}/predictions URL - you must
             # pin a version hash for /v1/predictions to work. Only treat
             # replicate as "configured" once that hash is set.
-            and bool(settings.replicate_video_version)
+            and bool(cfg.replicate_video_version)
         ),
         "fallback": True,
     }
@@ -178,13 +180,14 @@ def _pick_provider(requested: str | None) -> str:
     return "fallback"
 
 
-def _model_for_provider(provider: str) -> str:
+def _model_for_provider(provider: str, *, user_id: str | int | None = None) -> str:
+    cfg = resolved_settings(user_id)
     if provider == "ltx":
-        return settings.ltx_video_model
+        return cfg.ltx_video_model
     if provider == "replicate":
-        return settings.replicate_video_model
+        return cfg.replicate_video_model
     if provider == "fal":
-        return settings.fal_video_model
+        return cfg.fal_video_model
     return "ken-burns-ffmpeg"
 
 
@@ -218,14 +221,15 @@ def create_job(
 
     Returns the created Job dict — caller responds to the client with this.
     """
-    chosen = _pick_provider(provider)
+    cfg = resolved_settings(user_id)
+    chosen = _pick_provider(provider, user_id=user_id)
     # Resolve the effective model label shown on the job record. For
     # the fal provider this prefers the per-job override; for others it
     # falls back to the provider's configured default.
     effective_model = (
-        fal_model or settings.fal_video_model
+        fal_model or cfg.fal_video_model
         if chosen == "fal"
-        else _model_for_provider(chosen)
+        else _model_for_provider(chosen, user_id=user_id)
     )
     job = {
         "id": f"vid-{uuid.uuid4().hex[:10]}",
@@ -265,7 +269,8 @@ async def _run_replicate_job(job: dict[str, Any]) -> dict[str, Any]:
          ``version`` hash. We use this whenever ``REPLICATE_VIDEO_VERSION``
          is set, and fall back to (1) otherwise.
     """
-    token = settings.replicate_api_token
+    cfg = resolved_settings(job.get("user_id"))
+    token = cfg.replicate_api_token
     if not token:
         raise RuntimeError("REPLICATE_API_TOKEN not configured")
 
@@ -298,22 +303,22 @@ async def _run_replicate_job(job: dict[str, Any]) -> dict[str, Any]:
 
     # 1. Create the prediction — version-based endpoint when we have
     # one (works for community models), model-based otherwise.
-    if settings.replicate_video_version:
+    if cfg.replicate_video_version:
         create_url = "https://api.replicate.com/v1/predictions"
-        body = {"version": settings.replicate_video_version, "input": inputs}
+        body = {"version": cfg.replicate_video_version, "input": inputs}
     else:
         create_url = (
             "https://api.replicate.com/v1/models/"
-            + settings.replicate_video_model
+            + cfg.replicate_video_model
             + "/predictions"
         )
         body = {"input": inputs}
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(create_url, headers=headers, json=body)
-    if resp.status_code == 404 and not settings.replicate_video_version:
+    if resp.status_code == 404 and not cfg.replicate_video_version:
         raise RuntimeError(
-            f"Replicate model '{settings.replicate_video_model}' has no "
+            f"Replicate model '{cfg.replicate_video_model}' has no "
             "official endpoint. Set REPLICATE_VIDEO_VERSION to a version "
             "hash from the model page, or switch to FAL_API_KEY for the "
             "free LTX path."
@@ -372,7 +377,7 @@ async def _run_replicate_job(job: dict[str, Any]) -> dict[str, Any]:
     out_path.write_bytes(d.content)
 
     public_url = _public_url_for_local(out_path.name, subdir="generated")
-    cost_usd = round(job["duration_seconds"] * settings.video_cost_per_second_usd, 4)
+    cost_usd = round(job["duration_seconds"] * cfg.video_cost_per_second_usd, 4)
 
     # 4. Persist + log cost
     try:
@@ -380,7 +385,7 @@ async def _run_replicate_job(job: dict[str, Any]) -> dict[str, Any]:
         record_media_job(
             workflow="video",
             provider="replicate",
-            model=settings.replicate_video_model,
+            model=cfg.replicate_video_model,
             cost_usd=cost_usd,
             user_id=job.get("user_id"),
             metadata={
@@ -426,7 +431,8 @@ async def _run_ltx_job(job: dict[str, Any]) -> dict[str, Any]:
     whether the job carries an image_filename — we resolve that to a
     public URL Lightricks can fetch.
     """
-    key = settings.ltx_api_key
+    cfg = resolved_settings(job.get("user_id"))
+    key = cfg.ltx_api_key
     if not key:
         raise RuntimeError("LTX_API_KEY not configured")
 
@@ -439,7 +445,7 @@ async def _run_ltx_job(job: dict[str, Any]) -> dict[str, Any]:
 
     body: dict[str, Any] = {
         "prompt": job["prompt"],
-        "model": settings.ltx_video_model,
+        "model": cfg.ltx_video_model,
         "duration": duration,
         "resolution": resolution,
     }
@@ -452,7 +458,7 @@ async def _run_ltx_job(job: dict[str, Any]) -> dict[str, Any]:
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
-    url = f"{settings.ltx_api_base_url}/{endpoint}"
+    url = f"{cfg.ltx_api_base_url}/{endpoint}"
 
     _update_job(job["id"], {
         "started_at": time.time(),
@@ -481,14 +487,14 @@ async def _run_ltx_job(job: dict[str, Any]) -> dict[str, Any]:
     out_path.write_bytes(resp.content)
 
     public_url = _public_url_for_local(out_path.name, subdir="generated")
-    cost_usd = round(duration * settings.video_cost_per_second_usd, 4)
+    cost_usd = round(duration * cfg.video_cost_per_second_usd, 4)
 
     try:
         from .cost_tracking import record_media_job
         record_media_job(
             workflow="video",
             provider="ltx",
-            model=settings.ltx_video_model,
+            model=cfg.ltx_video_model,
             cost_usd=cost_usd,
             user_id=job.get("user_id"),
             metadata={
@@ -766,7 +772,11 @@ def list_fal_models() -> list[dict[str, Any]]:
     ]
 
 
-async def _expand_video_prompt(prompt: str) -> str:
+async def _expand_video_prompt(
+    prompt: str,
+    *,
+    user_id: str | int | None = None,
+) -> str:
     """Use standard LLM to expand a short video prompt into a rich cinematic description."""
     # If the prompt is already highly detailed and long (e.g. > 45 words), keep it as is.
     if len(prompt.split()) > 45:
@@ -782,8 +792,9 @@ async def _expand_video_prompt(prompt: str) -> str:
         "Do NOT include any preamble, introductory text, or quotes. Output ONLY the expanded prompt."
     )
 
+    cfg = resolved_settings(user_id)
     payload = {
-        "model": settings.ai_model_fast,
+        "model": cfg.ai_model_fast,
         "temperature": 0.7,
         "max_tokens": 150,
         "messages": [
@@ -798,6 +809,7 @@ async def _expand_video_prompt(prompt: str) -> str:
             payload,
             workflow="video_prompt_expansion",
             tier="fast",
+            user_id=user_id,
             log_cost=True,
         )
         expanded = expanded.strip().strip('"').strip("'")
@@ -817,7 +829,8 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
     they hand out enough credit on signup (no card) to render ~25
     seconds of LTX video. Same model the CEO asked for, real free tier.
     """
-    key = settings.fal_api_key
+    cfg = resolved_settings(job.get("user_id"))
+    key = cfg.fal_api_key
     if not key:
         raise RuntimeError("FAL_API_KEY not configured")
 
@@ -828,7 +841,7 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
     # The job carries either an explicit model override (job["fal_model"])
     # or falls back to settings.fal_video_model. Pick the spec from the
     # registry so the right body shape + endpoint get used per model.
-    requested_model = job.get("fal_model") or settings.fal_video_model
+    requested_model = job.get("fal_model") or cfg.fal_video_model
     spec = FAL_MODEL_SPECS.get(requested_model) or FAL_MODEL_SPECS["fal-ai/ltx-video"]
     # Image-to-video endpoint when a reference image is supplied AND the
     # model supports it; otherwise text-to-video.
@@ -852,7 +865,10 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
     # For Veo models, automatically expand short prompts into detailed cinematic director-style descriptions
     prompt_to_use = job["prompt"]
     if "veo3" in requested_model:
-        prompt_to_use = await _expand_video_prompt(job["prompt"])
+        prompt_to_use = await _expand_video_prompt(
+            job["prompt"],
+            user_id=job.get("user_id"),
+        )
         if prompt_to_use != job["prompt"]:
             # Update the job prompt so the user can see it in the UI and dashboard!
             _update_job(job["id"], {"prompt": prompt_to_use})
@@ -945,7 +961,7 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
     # very different amounts per second of output. Falls back to the
     # global VIDEO_COST_PER_SECOND_USD when the model isn't in the
     # registry (e.g. user pasted a custom fal model id via env).
-    per_sec = spec.get("cost_per_second_usd") or settings.video_cost_per_second_usd
+    per_sec = spec.get("cost_per_second_usd") or cfg.video_cost_per_second_usd
     cost_usd = round(job["duration_seconds"] * per_sec, 4)
 
     try:

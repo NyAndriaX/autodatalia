@@ -47,12 +47,13 @@ services:
     environment:
       AI_API_BASE_URL: ${AI_API_BASE_URL:-https://openrouter.ai/api/v1}
       AI_API_KEY: ${AI_API_KEY:-}
-      AI_MODEL: ${AI_MODEL:-google/gemini-2.0-flash-lite-001}
-      AI_MODEL_FAST: ${AI_MODEL_FAST:-google/gemini-2.0-flash-lite-001}
+      AI_MODEL: ${AI_MODEL:-google/gemini-3.1-flash-lite}
+      AI_MODEL_FAST: ${AI_MODEL_FAST:-google/gemini-3.1-flash-lite}
       AI_MODEL_PREMIUM: ${AI_MODEL_PREMIUM:-}
       AI_INCLUDE_IMAGES: ${AI_INCLUDE_IMAGES:-false}
       AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-200}
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://localhost:3005,http://127.0.0.1:3005}
+      DATALIA_DEFAULT_TZ: ${DATALIA_DEFAULT_TZ:-Europe/Paris}
       BACKEND_AUTH_TOKEN: ${BACKEND_AUTH_TOKEN:-}
       TUNNEL_ENABLED: ${TUNNEL_ENABLED:-false}
       NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
@@ -104,6 +105,7 @@ services:
       CONTENT_DIR: /app/content
     volumes:
       - ../backend/content:/app/content
+      - ../backend/app:/home/app/app
 
   frontend:
     build:

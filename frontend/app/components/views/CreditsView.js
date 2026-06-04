@@ -102,9 +102,10 @@ export default function CreditsView() {
   }
 
   useEffect(() => {
-    reload(period);
+    const run = () => reload(period);
+    queueMicrotask(run);
     // Actualiser every 30s so the credit view tracks live spend.
-    const t = setInterval(() => reload(period), 30_000);
+    const t = setInterval(run, 30_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period]);

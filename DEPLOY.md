@@ -113,7 +113,8 @@ Fill in **every line that has an `=` followed by nothing**. The minimum required
 | Variable | What to put |
 |---|---|
 | `API_DOMAIN` | Your bare domain — `api.your-domain.com` (no `https://`, no path) |
-| `CORS_ALLOW_ORIGINS` | Frontend URL(s), comma-separated: `https://your-domain.com,https://www.your-domain.com` |
+| `FRONTEND_DOMAIN` | Dashboard domain: `your-domain.com` or `app.your-domain.com` (no `https://`, no path) |
+| `CORS_ALLOW_ORIGINS` | Frontend URL(s), comma-separated: `https://your-domain.com` |
 | `BACKEND_AUTH_TOKEN` | The hex from Part 2 |
 | `JWT_SECRET` | The hex from Part 2 |
 | `AI_API_KEY` | Your OpenRouter key |
@@ -128,7 +129,7 @@ Save and exit (`Ctrl+O`, Enter, `Ctrl+X` in nano).
 
 ---
 
-## Part 5 — Start the backend
+## Part 5 — Start the production stack
 
 ```bash
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
@@ -139,12 +140,12 @@ First build takes 2–4 min. Watch progress with:
 docker compose -f docker-compose.prod.yml --env-file .env.production logs -f
 ```
 
-Caddy automatically provisions a Let's Encrypt certificate on the first request to your domain — no manual `certbot` setup, no renewal cron, it handles renewal ~30 days before expiry.
+Caddy automatically provisions Let's Encrypt certificates on the first requests to `API_DOMAIN` and `FRONTEND_DOMAIN` — no manual `certbot` setup, no renewal cron, it handles renewal ~30 days before expiry.
 
 **Verify it's up:**
 ```bash
 curl https://api.your-domain.com/health
-# → {"ok":true}
+# → {"status":"ok","dependencies":{"postgres":"ok"}}
 ```
 
 If you see a TLS error, wait 30 seconds and retry (Caddy is still
@@ -197,35 +198,14 @@ When LTX runs out of credits or is overloaded, the backend **automatically falls
 
 ---
 
-## Part 7 — Start the frontend
+## Part 7 — Verify the frontend
 
-Still on the same server:
+The frontend is built by `docker-compose.prod.yml` and served by Caddy at `https://your-domain.com` using `FRONTEND_DOMAIN`. No separate `npm install`, pm2 process, or exposed `:3000` port is needed.
 
 ```bash
-cd ~/datalia/frontend
-npm install
+curl -I https://your-domain.com
+# → HTTP/2 200
 ```
-
-Create the frontend env file:
-```bash
-cat > .env.local <<EOF
-NEXT_PUBLIC_API_BASE_URL=https://api.your-domain.com
-NEXT_PUBLIC_BACKEND_AUTH_TOKEN=$(grep '^BACKEND_AUTH_TOKEN=' ~/datalia/infra/.env.production | cut -d= -f2-)
-EOF
-```
-
-Build and start, kept alive by pm2:
-```bash
-npm run build
-npx pm2 start npm --name datalia-frontend -- start -- -p 3000
-npx pm2 save
-npx pm2 startup     # follow the printed command so pm2 survives reboot
-```
-
-The dashboard is now on **http://server-ip:3000**. To expose it on a clean URL (e.g. `https://your-domain.com`), either:
-
-1. **Deploy frontend to Vercel** instead (point the Vercel project at this repo's `frontend/` dir, set `NEXT_PUBLIC_API_BASE_URL=https://api.your-domain.com`, deploy). Simpler.
-2. **Or add a second Caddy block** on the same server that reverse-proxies `https://your-domain.com` to `localhost:3000`. See [`infra/caddy/Caddyfile`](infra/caddy/Caddyfile) and copy the existing block.
 
 > ⚠️ `NEXT_PUBLIC_BACKEND_AUTH_TOKEN` ships to the browser. Fine for an internal-only tool with a known user list; if the dashboard becomes public-facing, switch to a proxy auth flow.
 
@@ -233,7 +213,7 @@ The dashboard is now on **http://server-ip:3000**. To expose it on a clean URL (
 
 ## Part 8 — Smoke-test the deploy
 
-Open the dashboard, sign in (it bootstraps the first admin user on first registration), then:
+Open the dashboard, register the first admin user, then sign in. Registration closes automatically after the first local user exists.
 
 1. **Settings → Social connections** → Connect Facebook. You should land on Meta's OAuth screen and come back to the app with both a Facebook Page + Instagram Business target listed. ✅
 2. **Settings → Social connections** → Connect TikTok. Same flow. ✅
@@ -258,9 +238,9 @@ docker compose -f docker-compose.prod.yml --env-file .env.production up -d
 git -C ~/datalia pull
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 
-# restart the frontend after a code pull
-cd ~/datalia/frontend && git pull && npm install && npm run build
-pm2 restart datalia-frontend
+# rebuild backend + frontend after a code pull
+git -C ~/datalia pull
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 ```
 
 ---

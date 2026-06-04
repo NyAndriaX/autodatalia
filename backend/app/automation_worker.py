@@ -24,7 +24,7 @@ import random
 import time
 from datetime import datetime, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from .config import settings
 from .services import (
@@ -36,13 +36,14 @@ from .services import (
     posts_list,
     posts_update,
 )
+from .timezones import get_default_timezone_name, resolve_zoneinfo
 
 log = logging.getLogger("datalia.automation")
 
 # Tick once a minute. Worker is light (one AI call per fire, no per-tick
 # upstream hits unless something is actually due).
 TICK_SECONDS = 60
-DEFAULT_TZ_NAME = os.environ.get("DEFAULT_TIMEZONE", "Europe/Paris")
+DEFAULT_TZ_NAME = get_default_timezone_name()
 
 _TASK: asyncio.Task | None = None
 _STOP = False
@@ -52,13 +53,7 @@ _STOP = False
 
 
 def _resolve_tz(name: str | None) -> ZoneInfo:
-    try:
-        return ZoneInfo(name or DEFAULT_TZ_NAME)
-    except ZoneInfoNotFoundError:
-        try:
-            return ZoneInfo(DEFAULT_TZ_NAME)
-        except ZoneInfoNotFoundError:
-            return ZoneInfo("UTC")
+    return resolve_zoneinfo(name)
 
 
 def _parse_hhmm(s: str) -> tuple[int, int] | None:
@@ -274,6 +269,7 @@ async def generate_candidate(rule: dict[str, Any], fire_epoch: float) -> dict[st
         "tiktok": rule.get("tiktok"),
         "source_rule_id": rule.get("id"),
         "source_rule_name": rule.get("name"),
+        "source_rule_updated_at": rule.get("updated_at"),
         "scheduled_for": fire_epoch,
         "auto_generated_at": time.time(),
     }
@@ -367,6 +363,7 @@ async def regenerate_for_post(post: dict[str, Any]) -> dict[str, Any]:
         "timeout_prompt_sent_at": None,
         "timeout_prompt_message_id": None,
         "regenerated_at": time.time(),
+        "source_rule_updated_at": rule.get("updated_at"),
     }) or post
 
     chat_id = post.get("telegram_chat_id") or (
@@ -440,6 +437,52 @@ async def _scan_timeouts(now: float) -> list[str]:
     return prompted
 
 
+def _reconcile_open_posts() -> list[str]:
+    """Cancel open automation posts that no longer match their source rule."""
+    touched: list[str] = []
+    rules = {str(rule.get("id")): rule for rule in automation_list()}
+    for post in posts_list():
+        if post.get("status") not in {"awaiting_validation", "scheduled"}:
+            continue
+        rule_id = str(post.get("source_rule_id") or "")
+        if not rule_id:
+            continue
+        rule = rules.get(rule_id)
+        current_updated_at = float((rule or {}).get("updated_at") or 0)
+        generated_from_updated_at = float(post.get("source_rule_updated_at") or 0)
+        stale = (
+            (not rule)
+            or (not rule.get("active", True))
+            or (
+                current_updated_at
+                and generated_from_updated_at
+                and current_updated_at != generated_from_updated_at
+            )
+        )
+        if not stale:
+            continue
+        posts_update(
+            post["id"],
+            {
+                "status": "cancelled",
+                "error": "rule_changed_after_generation",
+                "validated_at": time.time(),
+            },
+        )
+        messages_append(
+            {
+                "kind": "automation",
+                "post_id": post["id"],
+                "message": (
+                    f"Auto-generated post {post['id']} was cancelled because "
+                    "its source rule changed or no longer exists."
+                ),
+            }
+        )
+        touched.append(post["id"])
+    return touched
+
+
 async def tick(now: float | None = None) -> dict[str, list[str]]:
     """One scan pass.
 
@@ -448,6 +491,7 @@ async def tick(now: float | None = None) -> dict[str, list[str]]:
     """
     if now is None:
         now = time.time()
+    reconciled = _reconcile_open_posts()
     fired: list[str] = []
     for rule in automation_list():
         if not rule.get("active"):
@@ -504,7 +548,11 @@ async def tick(now: float | None = None) -> dict[str, list[str]]:
         fired.append(rule["id"])
 
     timeouts_prompted = await _scan_timeouts(now)
-    return {"fired": fired, "timeouts_prompted": timeouts_prompted}
+    return {
+        "fired": fired,
+        "timeouts_prompted": timeouts_prompted,
+        "reconciled": reconciled,
+    }
 
 
 async def _loop() -> None:

@@ -43,13 +43,42 @@ services:
       retries: 5
       start_period: 10s
 
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      API_DOMAIN: ${API_DOMAIN}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN}
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    depends_on:
+      - caption-api
+      - frontend
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   caption-api:
     build:
       context: ../backend
     container_name: caption-api
     restart: always
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -65,14 +94,14 @@ services:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 30s
       timeout: 5s
-      start_period: 30s   # bumped: imageio-ffmpeg unpacks its binary on first run
+      start_period: 30s
       retries: 3
     environment:
       # AI
       AI_API_BASE_URL: ${AI_API_BASE_URL:-https://openrouter.ai/api/v1}
       AI_API_KEY: ${AI_API_KEY:-}
-      AI_MODEL: ${AI_MODEL:-google/gemini-2.0-flash-lite-001}
-      AI_MODEL_FAST: ${AI_MODEL_FAST:-google/gemini-2.0-flash-lite-001}
+      AI_MODEL: ${AI_MODEL:-google/gemini-3.1-flash-lite}
+      AI_MODEL_FAST: ${AI_MODEL_FAST:-google/gemini-3.1-flash-lite}
       AI_MODEL_PREMIUM: ${AI_MODEL_PREMIUM:-}
       AI_INCLUDE_IMAGES: ${AI_INCLUDE_IMAGES:-false}
       AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-200}
@@ -149,20 +178,23 @@ services:
       # explicitly with `docker volume rm`. Holds uploaded media,
       # cropped variants, posts.json, messages.json, oauth_tokens.json.
       - caption-content:/home/app/content
+
   frontend:
     build:
       context: ../frontend
       args:
-        - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
+        - NEXT_PUBLIC_API_BASE_URL=https://${API_DOMAIN}
         - NEXT_PUBLIC_BACKEND_AUTH_TOKEN=${BACKEND_AUTH_TOKEN}
     container_name: datalia-frontend
     restart: always
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     depends_on:
       caption-api:
         condition: service_healthy
 
 volumes:
   caption-content:
+  caddy-data:
+  caddy-config:
   postgres-data:

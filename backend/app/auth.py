@@ -1,4 +1,4 @@
-"""Authentication logic using JWT and SQLite."""
+"""Authentication logic using JWT and Postgres."""
 
 import hmac
 import time
@@ -9,7 +9,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from .config import settings
-from .db import create_user, get_user_by_email, get_user_by_id, verify_password, get_password_hash
+from .db import (
+    count_users,
+    create_user,
+    get_user_by_email,
+    get_user_by_id,
+    verify_password,
+    get_password_hash,
+)
+from .runtime_config import set_active_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -51,25 +59,36 @@ def require_token(request: Request) -> int:
 
     # Fallback to the global token for backward compatibility if configured
     if settings.backend_auth_token and hmac.compare_digest(presented, settings.backend_auth_token):
-        return 1  # Dummy user ID for global token usage
+        set_active_user(None)
+        return 0  # Global/shared runtime settings scope
 
     if not presented:
         if not settings.backend_auth_token:
-            return 1  # Open mode fallback to dummy user
+            set_active_user(None)
+            return 0  # Open mode uses the shared runtime settings scope
+        set_active_user(None)
         raise HTTPException(status_code=401, detail="Missing authorization token.")
 
     try:
         payload = jwt.decode(presented, settings.jwt_secret, algorithms=["HS256"])
         user_id = int(payload["sub"])
+        set_active_user(user_id)
         return user_id
     except jwt.ExpiredSignatureError:
+        set_active_user(None)
         raise HTTPException(status_code=401, detail="Token has expired.")
     except (jwt.InvalidTokenError, ValueError):
+        set_active_user(None)
         raise HTTPException(status_code=401, detail="Invalid token.")
 
 
 @router.post("/register", response_model=AuthResponse)
 async def register(req: RegisterRequest) -> dict[str, Any]:
+    if count_users() > 0:
+        raise HTTPException(
+            status_code=403,
+            detail="Registration is closed after the first admin user.",
+        )
     if get_user_by_email(req.email):
         raise HTTPException(status_code=400, detail="Email already registered.")
     
@@ -110,7 +129,7 @@ async def login(req: LoginRequest) -> dict[str, Any]:
 
 @router.get("/me")
 async def get_me(user_id: int = Depends(require_token)) -> dict[str, Any]:
-    if user_id == 1 and settings.backend_auth_token:
+    if user_id <= 0 and settings.backend_auth_token:
         # Global dummy user
         return {"id": "1", "email": "team@datalia.app", "name": "Global Admin", "role": "admin"}
     

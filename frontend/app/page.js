@@ -133,7 +133,7 @@ export default function AuthPage() {
 
   return (
     <div
-      className="flex flex-col md:flex-row min-h-screen md:h-screen overflow-hidden"
+      className="flex min-h-screen max-w-full min-w-0 flex-col overflow-x-hidden md:h-screen md:flex-row"
       style={{
         fontFamily:
           "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -161,11 +161,13 @@ function BrandPanel({ isDark }) {
       style={{
         background: "linear-gradient(145deg, #0b1638 0%, #1d3fbe 60%, #3b5be3 100%)",
         position: "relative",
+        minWidth: 0,
+        overflowX: "hidden",
         overflowY: "auto",
         flexDirection: "column",
         color: "#fff",
       }}
-      className="hidden md:flex md:basis-[48%] lg:basis-[52%] md:shrink-0 md:grow-0 p-6 md:p-8 lg:p-12"
+      className="hidden p-6 md:flex md:basis-[48%] md:shrink md:grow-0 md:min-w-0 md:p-8 lg:basis-[52%] lg:p-12"
     >
       {/* Decorative blobs */}
       <div
@@ -442,9 +444,10 @@ function AuthPanel({ isDark, dispatch, resolved }) {
 
   return (
     <div
-      className="px-4 py-6 sm:px-6 md:px-8 overflow-y-auto h-full w-full"
+      className="h-full w-full min-w-0 overflow-x-hidden overflow-y-auto px-4 py-6 sm:px-6 md:px-8"
       style={{
         flex: 1,
+        minWidth: 0,
         background: bg,
         display: "flex",
         flexDirection: "column",
@@ -477,7 +480,7 @@ function AuthPanel({ isDark, dispatch, resolved }) {
         {isDark ? <SunOutlined /> : <MoonOutlined />}
       </button>
 
-      <div style={{ width: "100%", maxWidth: 420 }}>
+      <div style={{ width: "100%", maxWidth: 420, minWidth: 0 }}>
         {/* Card header */}
         <div style={{ marginBottom: 24, textAlign: "center" }}>
           <Title

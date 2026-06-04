@@ -1,4 +1,5 @@
 import { apiFetch } from "./apiClient";
+import { getScheduleTimezone } from "./timezone";
 
 // Sensible defaults for a brand-new rule so the form opens populated. The
 // CEO requirements mention the four objectives + a tone, so we seed with
@@ -20,7 +21,7 @@ export const DEFAULT_AUTOMATION_RULE = {
     times: ["10:00"],
     weekdays: null,
     month_days: null,
-    timezone: "UTC",
+    timezone: "",
   },
   validation_lead_minutes: 30,
   validation_chat_id: null,
@@ -28,6 +29,39 @@ export const DEFAULT_AUTOMATION_RULE = {
   ratios: null,
   tiktok: null,
 };
+
+export function buildDefaultAutomationRule(overrides = {}) {
+  const schedule = {
+    ...DEFAULT_AUTOMATION_RULE.schedule,
+    timezone: getScheduleTimezone(),
+    ...(overrides.schedule || {}),
+  };
+  return {
+    ...DEFAULT_AUTOMATION_RULE,
+    ...overrides,
+    num_media: {
+      ...DEFAULT_AUTOMATION_RULE.num_media,
+      ...(overrides.num_media || {}),
+    },
+    schedule,
+    platforms: {
+      ...DEFAULT_AUTOMATION_RULE.platforms,
+      ...(overrides.platforms || {}),
+    },
+  };
+}
+
+function normalizeAutomationRule(rule) {
+  const timezone = (rule?.schedule?.timezone || "").trim() || getScheduleTimezone();
+  return {
+    ...rule,
+    schedule: {
+      ...DEFAULT_AUTOMATION_RULE.schedule,
+      ...(rule?.schedule || {}),
+      timezone,
+    },
+  };
+}
 
 export async function listAutomationRules() {
   const data = await apiFetch("/automation-rules");
@@ -37,14 +71,14 @@ export async function listAutomationRules() {
 export async function createAutomationRule(rule) {
   return apiFetch("/automation-rules", {
     method: "POST",
-    body: JSON.stringify(rule),
+    body: JSON.stringify(normalizeAutomationRule(rule)),
   });
 }
 
 export async function updateAutomationRule(id, rule) {
   return apiFetch(`/automation-rules/${encodeURIComponent(id)}`, {
     method: "PATCH",
-    body: JSON.stringify(rule),
+    body: JSON.stringify(normalizeAutomationRule(rule)),
   });
 }
 

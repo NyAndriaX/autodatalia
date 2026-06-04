@@ -1,7 +1,6 @@
 // Lightweight localStorage mirror for the Settings view. Same pattern as
-// calendarStorage / theme — survives a refresh until the config backend
-// (CG-T01) takes over. Secret-ish fields (bot token, API keys) live only
-// on the current device; we never ship them to a third party.
+// calendarStorage / theme. Brand and timezone preferences stay local;
+// backend/API keys persist through the authenticated runtime-settings API.
 
 const KEY = "datalia.settings";
 

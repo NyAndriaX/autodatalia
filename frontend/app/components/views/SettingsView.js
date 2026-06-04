@@ -33,16 +33,32 @@ function formatCompact(n) {
 }
 
 /* ─── Champ générique ────────────────────────────────────────────────────*/
-function Champ({ label, name, value, onChange, placeholder, type = "text", hint }) {
+function Champ({
+  label,
+  name,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+  hint,
+  secret = false,
+}) {
   return (
     <label className="block mb-4">
       <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-widest"
         style={{ color:"var(--text-muted)" }}>
         {label}
       </span>
-      <input className={inputField} type={type} name={name} value={value ?? ""}
+      <input className={inputField} type={secret ? "text" : type} name={name} value={value ?? ""}
         onChange={(e) => onChange(name, e.target.value)}
-        placeholder={placeholder} autoComplete="off" />
+        placeholder={placeholder}
+        autoComplete="off"
+        spellCheck="false"
+        data-1p-ignore={secret ? "true" : undefined}
+        data-lpignore={secret ? "true" : undefined}
+        data-bwignore={secret ? "true" : undefined}
+        data-form-type={secret ? "other" : undefined}
+        style={secret ? { WebkitTextSecurity: "disc" } : undefined} />
       {hint && <p className="mt-1 text-[11px]" style={{ color:"var(--text-muted)" }}>{hint}</p>}
     </label>
   );
@@ -214,7 +230,8 @@ function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconn
 }
 
 /* ─── Backend API keys editor ────────────────────────────────────────────
-   Lives in backend/content/runtime_settings.json. Overrides infra/.env
+   Lives in backend/content/runtime_settings*.json. JWT users get a
+   personal override file; shared/open mode uses the global file.
    at runtime — no container restart needed. Secrets come back masked
    (abcd••••WXYZ); typing a new value replaces, empty clears the override
    so the env default kicks back in. PATCH only sends fields the user
@@ -267,7 +284,11 @@ function BackendKeysSection() {
     }
   }, []);
 
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => {
+    queueMicrotask(() => {
+      reload();
+    });
+  }, [reload]);
 
   async function handleSave() {
     if (Object.keys(edits).length === 0) return;
@@ -291,6 +312,13 @@ function BackendKeysSection() {
   }
 
   const dirty = Object.keys(edits).length > 0;
+
+  const KEY_LINKS = {
+    AI_API_KEY: "https://openrouter.ai/keys",
+    AI_IMAGE_API_KEY: "https://aistudio.google.com/app/apikey",
+    FAL_API_KEY: "https://fal.ai/dashboard/keys",
+    REPLICATE_API_TOKEN: "https://replicate.com/account/api-tokens",
+  };
 
   if (loading) {
     return <p className="text-xs" style={{ color: "var(--text-muted)" }}>{t("backendKeysLoading")}</p>;
@@ -317,6 +345,16 @@ function BackendKeysSection() {
                 <span className="mb-1 flex items-center gap-2 text-[10px] font-semibold tracking-wider"
                   style={{ color: "var(--text-tertiary)" }}>
                   {id}
+                  {KEY_LINKS[id] && (
+                    <a
+                      href={KEY_LINKS[id]}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-auto inline-flex items-center gap-0.5 text-[9px] font-bold text-sky-500 hover:text-sky-600 transition-colors uppercase tracking-normal"
+                    >
+                      Get Key ↗
+                    </a>
+                  )}
                   {entry.set && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-normal"
                       style={{ color: "var(--status-approved)" }}>
@@ -327,7 +365,7 @@ function BackendKeysSection() {
                 </span>
                 <input
                   className={inputField}
-                  type={isSecret ? "password" : "text"}
+                  type="text"
                   value={isSecret ? editValue : (id in edits ? editValue : entry.value)}
                   onChange={(e) => setEdits((prev) => ({ ...prev, [id]: e.target.value }))}
                   placeholder={
@@ -336,6 +374,12 @@ function BackendKeysSection() {
                       : t("backendKeysEnvDefault")
                   }
                   autoComplete="off"
+                  spellCheck="false"
+                  data-1p-ignore={isSecret ? "true" : undefined}
+                  data-lpignore={isSecret ? "true" : undefined}
+                  data-bwignore={isSecret ? "true" : undefined}
+                  data-form-type={isSecret ? "other" : undefined}
+                  style={isSecret ? { WebkitTextSecurity: "disc" } : undefined}
                 />
               </label>
             );
@@ -380,10 +424,16 @@ export default function SettingsView() {
   const [pendingProvider, setPendingProvider] = useState(null);
   const [refreshing,      setRefreshing]      = useState(false);
   const [telegramStatus,  setTelegramStatus]  = useState(null);
+  const [telegramBackend, setTelegramBackend] = useState({ tokenSet:false, tokenMasked:"", chatId:"" });
   const [testingTelegram, setTestingTelegram] = useState(false);
+  const [savingTelegram,  setSavingTelegram]  = useState(false);
   const [onglet,          setOnglet]          = useState("plateformes");
 
-  useEffect(() => { setS(loadSettings()); }, []);
+  useEffect(() => {
+    queueMicrotask(() => {
+      setS(loadSettings());
+    });
+  }, []);
 
   const actualiserConnexions = useCallback(async ({ force = false } = {}) => {
     setRefreshing(true);
@@ -396,18 +446,48 @@ export default function SettingsView() {
   }, []);
 
   useEffect(() => {
-    const cached = readCachedConnections();
-    if (cached?.providers) setConnections(cached.providers);
-    actualiserConnexions();
+    queueMicrotask(() => {
+      const cached = readCachedConnections();
+      if (cached?.providers) setConnections(cached.providers);
+      actualiserConnexions();
+    });
   }, [actualiserConnexions]);
 
-  useEffect(() => {
-    fetchTelegramStatus()
-      .then((d) => setTelegramStatus(d))
-      .catch(() => setTelegramStatus({
+  const reloadTelegramConfig = useCallback(async () => {
+    try {
+      const [status, keysData] = await Promise.all([
+        fetchTelegramStatus(),
+        fetchBackendKeys(),
+      ]);
+      const savedChatId = keysData?.keys?.TELEGRAM_DEFAULT_CHAT_ID?.value || "";
+      const savedTokenMasked = keysData?.keys?.TELEGRAM_BOT_TOKEN?.masked || "";
+      const savedTokenSet = !!keysData?.keys?.TELEGRAM_BOT_TOKEN?.set;
+      setTelegramStatus(status);
+      setTelegramBackend({
+        tokenSet: savedTokenSet,
+        tokenMasked: savedTokenMasked,
+        chatId: savedChatId,
+      });
+      setS((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          telegramChatId: savedChatId || prev.telegramChatId || "",
+        };
+      });
+    } catch {
+      setTelegramStatus({
         configured:false, default_chat_configured:false, webhook_secret_configured:false,
-      }));
+      });
+      setTelegramBackend({ tokenSet:false, tokenMasked:"", chatId:"" });
+    }
   }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      reloadTelegramConfig();
+    });
+  }, [reloadTelegramConfig]);
 
   if (s === null) return null;
 
@@ -447,17 +527,41 @@ export default function SettingsView() {
     dispatch(addNotification({ message: t("saved"), type:"success" }));
   };
 
-  const handlePairTelegram = () => {
-    if (!telegramStatus?.configured) {
-      dispatch(addNotification({ message: t("telegramBotNotConfigured"), type:"error" }));
-      return;
-    }
+  const handlePairTelegram = async () => {
     if (!s.telegramChatId) {
       dispatch(addNotification({ message: t("telegramChatIdRequired"), type:"error" }));
       return;
     }
-    saveSettings(s);
-    dispatch(addNotification({ message: t("telegramChatIdSaved"), type:"info" }));
+    setSavingTelegram(true);
+    try {
+      const updates = {
+        TELEGRAM_DEFAULT_CHAT_ID: s.telegramChatId.trim(),
+      };
+      if ((s.telegramBotToken || "").trim()) {
+        updates.TELEGRAM_BOT_TOKEN = s.telegramBotToken.trim();
+      }
+      const data = await patchBackendKeys(updates);
+      const nextChatId = data?.keys?.TELEGRAM_DEFAULT_CHAT_ID?.value || s.telegramChatId.trim();
+      const tokenSet = !!data?.keys?.TELEGRAM_BOT_TOKEN?.set;
+      const tokenMasked = data?.keys?.TELEGRAM_BOT_TOKEN?.masked || "";
+      setTelegramBackend({ tokenSet, tokenMasked, chatId: nextChatId });
+      const nextSettings = {
+        ...s,
+        telegramBotToken: "",
+        telegramChatId: nextChatId,
+      };
+      setS(nextSettings);
+      saveSettings(nextSettings);
+      await reloadTelegramConfig();
+      dispatch(addNotification({ message: t("telegramChatIdSaved"), type:"info" }));
+    } catch (err) {
+      dispatch(addNotification({
+        message: t("backendKeysSaveFailed", { error: err.message || String(err) }),
+        type:"error",
+      }));
+    } finally {
+      setSavingTelegram(false);
+    }
   };
 
   const handleTestTelegram = async () => {
@@ -614,15 +718,20 @@ export default function SettingsView() {
           </div>
 
           <Champ label={t("telegramBotTokenLabel")} name="telegramBotToken" value={s.telegramBotToken}
-            onChange={update} placeholder="123456:ABC-DEF…" type="password"
-            hint={t("telegramBotTokenHint")} />
+            onChange={update} placeholder="123456:ABC-DEF…" secret
+            hint={
+              telegramBackend.tokenSet
+                ? `${t("telegramBotTokenHint")} Saved on backend: ${telegramBackend.tokenMasked}.`
+                : t("telegramBotTokenHint")
+            } />
           <Champ label={t("telegramChatIdLabel")} name="telegramChatId" value={s.telegramChatId}
             onChange={update} placeholder={t("telegramChatIdPlaceholder")} />
 
           <div className="flex flex-wrap gap-2 mt-2">
             <button type="button" onClick={handlePairTelegram}
-              className={`${btnPrimary} text-sm`}>
-              {t("telegramPairBot")}
+              disabled={savingTelegram}
+              className={`${btnPrimary} text-sm inline-flex items-center gap-2`}>
+              {savingTelegram ? <><Loader2 size={13} className="animate-spin" /> {t("backendKeysSave")}</> : t("telegramPairBot")}
             </button>
             <button type="button" onClick={handleTestTelegram}
               disabled={testingTelegram || !telegramStatus?.configured}

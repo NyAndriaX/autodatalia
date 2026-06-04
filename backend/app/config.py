@@ -111,26 +111,74 @@ def _resolve_jwt_secret() -> str:
 def load_settings() -> Settings:
     """Read environment variables and return a validated Settings instance."""
     content_dir = Path(os.getenv("CONTENT_DIR", "/app/content")).resolve()
+    
+    ai_image_api_key = os.getenv(
+        "AI_IMAGE_API_KEY",
+        os.getenv("AI_API_KEY", ""),
+    ).strip()
+    if not ai_image_api_key or "PASTE_YOUR_GOOGLE" in ai_image_api_key:
+        ai_image_api_key = os.getenv("AI_API_KEY", "").strip()
+    ai_image_api_base_url = os.getenv(
+        "AI_IMAGE_API_BASE_URL",
+        os.getenv("AI_API_BASE_URL", "https://openrouter.ai/api/v1"),
+    ).rstrip("/")
+    ai_image_model = os.getenv("AI_IMAGE_MODEL", "").strip()
+
+    # Self-healing key & URL/model mismatch resolution for image generation!
+    if ai_image_api_key.startswith(("AIzaSy", "AQ.")):
+        if "openrouter.ai" in ai_image_api_base_url or not ai_image_api_base_url:
+            ai_image_api_base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+        if not ai_image_model or "gemini" not in ai_image_model.lower() or "-preview" in ai_image_model:
+            ai_image_model = "gemini-2.5-flash-image"
+    else:
+        if "generativelanguage.googleapis.com" in ai_image_api_base_url:
+            ai_image_api_base_url = "https://openrouter.ai/api/v1"
+            if not ai_image_model or "gemini-2.5-flash-image" in ai_image_model:
+                ai_image_model = "google/gemini-2.5-flash-image"
+
+    # Load and self-heal standard text generation configurations
+    ai_api_key = os.getenv("AI_API_KEY", "").strip()
+    ai_api_base_url = os.getenv(
+        "AI_API_BASE_URL", "https://openrouter.ai/api/v1"
+    ).rstrip("/")
+    
+    ai_model = os.getenv("AI_MODEL", "google/gemini-2.5-flash").strip()
+    ai_model_fast = os.getenv("AI_MODEL_FAST", "").strip()
+    ai_model_premium = os.getenv("AI_MODEL_PREMIUM", "").strip()
+
+    if ai_api_key.startswith(("AIzaSy", "AQ.")):
+        # Google AI Studio Mode
+        if "openrouter.ai" in ai_api_base_url or not ai_api_base_url:
+            ai_api_base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+        if not ai_model or "gemini" not in ai_model.lower() or "google/" in ai_model or "-001" in ai_model or "-lite" in ai_model:
+            ai_model = "gemini-2.5-flash"
+        if not ai_model_fast or "gemini" not in ai_model_fast.lower() or "google/" in ai_model_fast or "-001" in ai_model_fast:
+            ai_model_fast = "gemini-2.5-flash"
+        if not ai_model_premium or "gemini" not in ai_model_premium.lower() or "google/" in ai_model_premium or "-001" in ai_model_premium:
+            ai_model_premium = "gemini-2.5-pro"
+    else:
+        # OpenRouter Mode
+        if "generativelanguage.googleapis.com" in ai_api_base_url:
+            ai_api_base_url = "https://openrouter.ai/api/v1"
+        if not ai_model or "gemini-3.1" in ai_model or "gemini-2.0-flash-lite-001" in ai_model:
+            ai_model = "google/gemini-2.5-flash"
+        if not ai_model_fast or "gemini-3.1" in ai_model_fast or "gemini-2.0-flash-lite-001" in ai_model_fast:
+            ai_model_fast = "google/gemini-2.5-flash"
+        if not ai_model_premium or "gemini-3.1" in ai_model_premium or "gemini-2.0-flash-lite-001" in ai_model_premium or "claude" in ai_model_premium.lower():
+            ai_model_premium = "google/gemini-2.5-pro"
+
+    if not ai_model_fast:
+        ai_model_fast = ai_model
+    if not ai_model_premium:
+        ai_model_premium = ai_model
+
     return Settings(
         content_dir=content_dir,
-        ai_api_base_url=os.getenv(
-            "AI_API_BASE_URL", "https://openrouter.ai/api/v1"
-        ).rstrip("/"),
-        ai_api_key=os.getenv("AI_API_KEY", ""),
-        ai_model=os.getenv("AI_MODEL", "google/gemini-2.0-flash-lite-001"),
-        # Cheap/fast model for quick actions & low-stakes calls (LLM Router
-        # cost strategy). Defaults to the main model if unset.
-        ai_model_fast=os.getenv(
-            "AI_MODEL_FAST",
-            os.getenv("AI_MODEL", "google/gemini-2.0-flash-lite-001"),
-        ),
-        # Premium model reserved for the rare complex jobs where the
-        # default model produces obviously worse output. Defaults to the
-        # standard model so unset env never escalates spend silently.
-        ai_model_premium=os.getenv(
-            "AI_MODEL_PREMIUM",
-            os.getenv("AI_MODEL", "google/gemini-2.0-flash-lite-001"),
-        ),
+        ai_api_base_url=ai_api_base_url,
+        ai_api_key=ai_api_key,
+        ai_model=ai_model,
+        ai_model_fast=ai_model_fast,
+        ai_model_premium=ai_model_premium,
         # Default OFF — sending image bytes to a vision model is the single
         # most expensive input. Opt in per-request or via this env.
         ai_include_images=os.getenv("AI_INCLUDE_IMAGES", "false").lower()
@@ -158,15 +206,9 @@ def load_settings() -> Settings:
         telegram_default_chat_id=os.getenv("TELEGRAM_DEFAULT_CHAT_ID", "").strip(),
         telegram_webhook_secret=os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip(),
         linkedin_api_version=os.getenv("LINKEDIN_API_VERSION", "202603").strip(),
-        ai_image_api_base_url=os.getenv(
-            "AI_IMAGE_API_BASE_URL",
-            os.getenv("AI_API_BASE_URL", "https://openrouter.ai/api/v1"),
-        ).rstrip("/"),
-        ai_image_api_key=os.getenv(
-            "AI_IMAGE_API_KEY",
-            os.getenv("AI_API_KEY", ""),
-        ).strip(),
-        ai_image_model=os.getenv("AI_IMAGE_MODEL", "").strip(),
+        ai_image_api_base_url=ai_image_api_base_url,
+        ai_image_api_key=ai_image_api_key,
+        ai_image_model=ai_image_model,
         ai_video_api_base_url=os.getenv(
             "AI_VIDEO_API_BASE_URL",
             os.getenv("AI_API_BASE_URL", "https://openrouter.ai/api/v1"),

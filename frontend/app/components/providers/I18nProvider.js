@@ -46,7 +46,7 @@ export default function I18nProvider({ children }) {
   useEffect(() => {
     const picked = pickInitialLocale();
     if (picked !== reduxLocale) dispatch(setLocale(picked));
-    setMounted(true);
+    queueMicrotask(() => setMounted(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

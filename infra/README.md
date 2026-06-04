@@ -11,12 +11,12 @@ compose stack.
 ```text
 infra/
 |-- docker-compose.yml           # Local dev: caption-api only
-|-- docker-compose.prod.yml      # Production: Caddy + caption-api
+|-- docker-compose.prod.yml      # Production: Caddy + caption-api + frontend
 |-- .env.example                 # Safe local env template
 |-- .env                         # Local secrets, git-ignored
 |-- .env.production.example      # Safe production env template
 `-- caddy/
-    `-- Caddyfile                # HTTPS reverse proxy for production API
+    `-- Caddyfile                # HTTPS reverse proxy for production API + dashboard
 ```
 
 The local `caption-api` service builds from `../backend` and bind-mounts
@@ -79,7 +79,7 @@ PUBLIC_BASE_URL=https://<public-host>
 The same host must serve uploaded media under `/content/*` so social platforms
 can fetch media during publish.
 
-## Production Backend
+## Production Stack
 
 Production uses:
 
@@ -93,9 +93,12 @@ The production compose runs:
 |---|---|
 | `caddy` | HTTPS reverse proxy and Let's Encrypt certificate management |
 | `caption-api` | FastAPI backend, exposed only on the Docker network |
+| `frontend` | Next.js dashboard, exposed only through Caddy |
 
-Persistent data lives in the `caption-content` named volume. It holds uploads,
-cropped media, posts, messages, AI caches, and OAuth tokens.
+Set `API_DOMAIN` for the API host and `FRONTEND_DOMAIN` for the dashboard host
+in `infra/.env.production`. Persistent app data lives in the `caption-content`
+named volume. It holds uploads, cropped media, posts, messages, AI caches, and
+OAuth tokens.
 
 ## Backend Endpoints
 

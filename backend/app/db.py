@@ -141,6 +141,17 @@ def create_user(
         conn.close()
 
 
+def count_users() -> int:
+    """Return how many local dashboard users exist."""
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users")
+        return int(cur.fetchone()[0])
+    finally:
+        conn.close()
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
