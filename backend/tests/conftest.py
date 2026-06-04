@@ -34,10 +34,18 @@ def client():
 @pytest.fixture(autouse=True)
 def _isolate_state():
     """Wipe per-test artefacts: posts file, messages file, AI cache."""
-    for f in ("posts.json", "messages.json", ".ai_cache.json", "automation_rules.json"):
+    for f in (
+        "posts.json",
+        "messages.json",
+        ".ai_cache.json",
+        "automation_rules.json",
+        "runtime_settings.json",
+    ):
         p = TEST_CONTENT / f
         if p.exists():
             p.unlink()
+    for p in TEST_CONTENT.glob("runtime_settings_user_*.json"):
+        p.unlink()
     _AI_CACHE.clear()
     # Reset auth to open mode between tests; individual tests can opt in.
     settings.backend_auth_token = ""

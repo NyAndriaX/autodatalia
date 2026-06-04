@@ -15,7 +15,15 @@ from .models import (
     ValidationSubmitRequest,
     ValidationSubmitResponse,
 )
-from .services import _post_chat, messages_append, posts_create, posts_list, posts_update
+from .services import (
+    _post_chat,
+    automation_get,
+    messages_append,
+    posts_create,
+    posts_list,
+    posts_update,
+)
+from .runtime_config import resolved_settings
 
 # fire_post lives in scheduler — re-used here so a manual Telegram
 # approval publishes immediately without waiting for the scheduler tick.
@@ -24,8 +32,8 @@ import asyncio  # noqa: E402
 router = APIRouter(tags=["telegram-validation"])
 
 
-def _telegram_configured() -> bool:
-    return bool(settings.telegram_bot_token)
+def _telegram_configured(user_id: str | int | None = None) -> bool:
+    return bool(resolved_settings(user_id).telegram_bot_token)
 
 
 def _find_post(post_id: str) -> dict[str, Any] | None:
@@ -109,12 +117,18 @@ def _validation_text(post: dict[str, Any]) -> str:
     )
 
 
-async def _telegram_call(method: str, payload: dict[str, Any]) -> dict[str, Any]:
-    if not _telegram_configured():
+async def _telegram_call(
+    method: str,
+    payload: dict[str, Any],
+    *,
+    user_id: str | int | None = None,
+) -> dict[str, Any]:
+    cfg = resolved_settings(user_id)
+    if not cfg.telegram_bot_token:
         raise HTTPException(409, "Telegram bot is not configured.")
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(
-            f"https://api.telegram.org/bot{settings.telegram_bot_token}/{method}",
+            f"https://api.telegram.org/bot{cfg.telegram_bot_token}/{method}",
             json=payload,
         )
     if resp.status_code >= 400:
@@ -295,11 +309,17 @@ async def _publish_manual(post: dict[str, Any], chat_id: str, fire_post) -> None
             pass  # never re-raise from the background task
 
 
-async def _regenerate_from_feedback(original: str, feedback: str) -> str:
-    if not settings.ai_api_key:
+async def _regenerate_from_feedback(
+    original: str,
+    feedback: str,
+    *,
+    user_id: str | int | None = None,
+) -> str:
+    cfg = resolved_settings(user_id)
+    if not cfg.ai_api_key:
         return original
     payload = {
-        "model": settings.ai_model,
+        "model": cfg.ai_model,
         "temperature": 0.7,
         "max_tokens": 700,
         "messages": [
@@ -321,14 +341,18 @@ async def _regenerate_from_feedback(original: str, feedback: str) -> str:
         ],
     }
     try:
-        text, _usage = await _post_chat(payload)
+        text, _usage = await _post_chat(payload, user_id=user_id)
     except HTTPException:
         return original
     text = (text or "").strip()
     return text or original
 
 
-def _pending_post_payload(body: ValidationSubmitRequest) -> dict[str, Any]:
+def _pending_post_payload(
+    body: ValidationSubmitRequest,
+    *,
+    user_id: str | int | None = None,
+) -> dict[str, Any]:
     return {
         "id": body.post_id,
         "content": body.content.strip(),
@@ -341,27 +365,32 @@ def _pending_post_payload(body: ValidationSubmitRequest) -> dict[str, Any]:
         "ratios": body.ratios,
         "tiktok": body.tiktok,
         "validation_requested_at": time.time(),
+        "user_id": str(user_id) if user_id not in (None, "", 0) else None,
     }
 
 
 @router.get("/telegram/status", response_model=TelegramStatusResponse)
-async def telegram_status() -> TelegramStatusResponse:
+async def telegram_status(
+    user_id: int = Depends(require_token),
+) -> TelegramStatusResponse:
+    cfg = resolved_settings(user_id)
     return TelegramStatusResponse(
-        configured=_telegram_configured(),
-        default_chat_configured=bool(settings.telegram_default_chat_id),
+        configured=bool(cfg.telegram_bot_token),
+        default_chat_configured=bool(cfg.telegram_default_chat_id),
         webhook_secret_configured=bool(settings.telegram_webhook_secret),
     )
 
 
 @router.post("/telegram/test")
-async def telegram_test_message(chat_id: str | None = None) -> dict[str, Any]:
-    """Send a one-shot test message to confirm the bot can reach a chat.
-    No auth on this — same posture as /telegram/status — so the Settings
-    page can call it directly without juggling a backend bearer token.
-    """
-    if not _telegram_configured():
+async def telegram_test_message(
+    chat_id: str | None = None,
+    user_id: int = Depends(require_token),
+) -> dict[str, Any]:
+    """Send a one-shot test message to confirm the bot can reach a chat."""
+    cfg = resolved_settings(user_id)
+    if not cfg.telegram_bot_token:
         raise HTTPException(409, "Telegram bot is not configured (TELEGRAM_BOT_TOKEN missing).")
-    target = (chat_id or settings.telegram_default_chat_id or "").strip()
+    target = (chat_id or cfg.telegram_default_chat_id or "").strip()
     if not target:
         raise HTTPException(
             409,
@@ -377,6 +406,7 @@ async def telegram_test_message(chat_id: str | None = None) -> dict[str, Any]:
                 "You can now wire it as the validation_chat_id on automation rules."
             ),
         },
+        user_id=user_id,
     )
     return {
         "ok": True,
@@ -390,15 +420,19 @@ async def telegram_test_message(chat_id: str | None = None) -> dict[str, Any]:
     response_model=ValidationSubmitResponse,
     dependencies=[Depends(require_token)],
 )
-async def submit_for_validation(body: ValidationSubmitRequest) -> ValidationSubmitResponse:
-    if not _telegram_configured():
+async def submit_for_validation(
+    body: ValidationSubmitRequest,
+    user_id: int = Depends(require_token),
+) -> ValidationSubmitResponse:
+    cfg = resolved_settings(user_id)
+    if not cfg.telegram_bot_token:
         raise HTTPException(409, "Telegram bot is not configured.")
-    chat_id = (body.chat_id or settings.telegram_default_chat_id).strip()
+    chat_id = (body.chat_id or cfg.telegram_default_chat_id).strip()
     if not chat_id:
         raise HTTPException(409, "No Telegram chat ID provided or configured.")
 
     existing = _find_post(body.post_id) if body.post_id else None
-    payload = _pending_post_payload(body)
+    payload = _pending_post_payload(body, user_id=user_id)
     if existing:
         post = posts_update(existing["id"], payload) or existing
     else:
@@ -462,6 +496,39 @@ async def telegram_webhook(
                 #   so manual approvals silently never published.
                 is_automation = bool(post.get("source_rule_id"))
                 if is_automation:
+                    rule = automation_get(str(post.get("source_rule_id") or ""))
+                    current_updated_at = float((rule or {}).get("updated_at") or 0)
+                    generated_from_updated_at = float(
+                        post.get("source_rule_updated_at") or 0
+                    )
+                    if (not rule) or (not rule.get("active", True)) or (
+                        current_updated_at and generated_from_updated_at
+                        and current_updated_at != generated_from_updated_at
+                    ):
+                        posts_update(
+                            post_id,
+                            {
+                                "status": "cancelled",
+                                "error": "rule_changed_after_generation",
+                                "validated_at": time.time(),
+                            },
+                        )
+                        messages_append(
+                            {
+                                "kind": "automation",
+                                "post_id": post_id,
+                                "message": (
+                                    f"Auto-generated post {post_id} could not be "
+                                    "approved because its rule changed after "
+                                    "generation."
+                                ),
+                            }
+                        )
+                        await _answer_callback(
+                            callback_id,
+                            "Rule changed. Wait for a fresh validation card.",
+                        )
+                        return {"ok": True}
                     posts_update(
                         post_id,
                         {
@@ -620,7 +687,11 @@ async def telegram_webhook(
             None,
         )
         if target:
-            rewritten = await _regenerate_from_feedback(target.get("content", ""), text)
+            rewritten = await _regenerate_from_feedback(
+                target.get("content", ""),
+                text,
+                user_id=target.get("user_id"),
+            )
             updated = posts_update(
                 target["id"],
                 {

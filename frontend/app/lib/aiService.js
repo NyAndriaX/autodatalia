@@ -77,7 +77,16 @@ function saveGenCache() {
 
 /** True when generate() would return a cached result (no tokens). */
 export function isGenerationCached(args) {
-  return _genCache.sig !== null && _genCache.sig === generationSignature(args);
+  if (_genCache.sig === null || _genCache.sig !== generationSignature(args)) {
+    return false;
+  }
+  if (_genCache.variants) {
+    const isMock = _genCache.variants.some(v =>
+      MOCK_VARIANTS.some(mv => mv.text === v.text)
+    );
+    if (isMock) return false;
+  }
+  return true;
 }
 
 // Prompt-driven generation. Short-circuits to the cached result for an
@@ -108,7 +117,12 @@ export async function generateContent({
     tone,
   });
   if (!force && _genCache.sig === sig && _genCache.variants) {
-    return { variants: _genCache.variants, usage: ZERO_USAGE, cached: true };
+    const isMock = _genCache.variants.some(v =>
+      MOCK_VARIANTS.some(mv => mv.text === v.text)
+    );
+    if (!isMock) {
+      return { variants: _genCache.variants, usage: ZERO_USAGE, cached: true };
+    }
   }
 
   let variants;

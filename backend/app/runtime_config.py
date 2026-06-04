@@ -1,28 +1,26 @@
 """Runtime-editable settings persisted as JSON.
 
-The Settings page lets the team rotate API keys / model ids without
-SSH-ing into the VM and editing ``infra/.env``. Edits land here in
-``runtime_settings.json`` next to the other JSON stores on the content
-volume. Lookup order at boot:
+The Settings page lets a user rotate API keys and model ids without
+editing ``infra/.env``. Overrides are stored beside the other JSON
+stores on the content volume.
 
-   environment variable  →  runtime_settings.json  →  hardcoded default
+Lookup order for an authenticated user is:
 
-…meaning a key set both in env and via the UI uses the UI value. After
-PATCH /settings/keys we also hot-update the live ``settings`` object so
-modules that already imported it pick up the new value without a
-container restart.
+   environment -> global runtime_settings.json -> runtime_settings_user_<id>.json
 
-Only a hand-picked allowlist is editable — random env vars (like the
-Postgres connection string) would brick the app if mistyped.
+User overrides win over global ones, but users still inherit any shared
+fallbacks they did not override themselves.
 """
 
 from __future__ import annotations
 
 import json
+import os
+from contextvars import ContextVar
+from pathlib import Path
 from typing import Any
 
-from .config import settings, _resolve_jwt_secret  # noqa: F401
-from .services import atomic_write_text
+from .config import Settings, load_settings, settings, _resolve_jwt_secret  # noqa: F401
 
 
 # Keys the Settings page is allowed to read + edit. Each entry maps the
@@ -30,6 +28,7 @@ from .services import atomic_write_text
 EDITABLE_KEYS: dict[str, str] = {
     # LLM (text)
     "AI_API_KEY": "ai_api_key",
+    "AI_API_BASE_URL": "ai_api_base_url",
     "AI_MODEL": "ai_model",
     "AI_MODEL_FAST": "ai_model_fast",
     "AI_MODEL_PREMIUM": "ai_model_premium",
@@ -52,7 +51,7 @@ EDITABLE_KEYS: dict[str, str] = {
 
 
 # Which keys must be masked when read back (treat the entire string as
-# secret). The model-id ones don't need masking — they're not secrets.
+# secret). The model-id ones do not need masking because they are not secrets.
 SECRET_KEYS: set[str] = {
     "AI_API_KEY",
     "AI_IMAGE_API_KEY",
@@ -63,67 +62,232 @@ SECRET_KEYS: set[str] = {
 }
 
 
-def _overrides_path():
+_ACTIVE_USER_ID: ContextVar[int | None] = ContextVar(
+    "runtime_settings_active_user_id",
+    default=None,
+)
+
+
+def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding=encoding) as handle:
+        handle.write(content)
+        handle.flush()
+        try:
+            os.fsync(handle.fileno())
+        except OSError:
+            pass
+    os.replace(tmp, path)
+
+
+def _normalize_user_id(user_id: int | None) -> int | None:
+    if user_id is None:
+        user_id = _ACTIVE_USER_ID.get()
+    if user_id is None:
+        return None
+    normalized = int(user_id)
+    if normalized <= 0:
+        return None
+    return normalized
+
+
+def set_active_user(user_id: int | None) -> None:
+    _ACTIVE_USER_ID.set(_normalize_user_id(user_id))
+
+
+def get_active_user() -> int | None:
+    return _normalize_user_id(_ACTIVE_USER_ID.get())
+
+
+def _global_overrides_path() -> Path:
     return settings.content_dir / "runtime_settings.json"
 
 
-def load_overrides() -> dict[str, str]:
-    """Return the persisted overrides (or empty dict if none yet)."""
+def _user_overrides_path(user_id: int) -> Path:
+    return settings.content_dir / f"runtime_settings_user_{user_id}.json"
+
+
+def _overrides_path(user_id: int | None = None) -> Path:
+    runtime_user_id = _normalize_user_id(user_id)
+    if runtime_user_id is None:
+        return _global_overrides_path()
+    return _user_overrides_path(runtime_user_id)
+
+
+def _read_overrides(path: Path) -> dict[str, str]:
     try:
-        return json.loads(_overrides_path().read_text(encoding="utf-8")) or {}
+        payload = json.loads(path.read_text(encoding="utf-8")) or {}
+        return payload if isinstance(payload, dict) else {}
     except FileNotFoundError:
         return {}
     except Exception:
-        # Corrupt JSON — log and start fresh rather than crash the API.
         return {}
 
 
-def save_overrides(updates: dict[str, str]) -> dict[str, str]:
-    """Merge ``updates`` into the overrides file. Empty strings clear
-    that key. Unknown keys are silently dropped — defense in depth so
-    a typo in the request doesn't smuggle in arbitrary settings."""
-    current = load_overrides()
+def _normalize_overrides(values: dict[str, str]) -> dict[str, str]:
+    current = {
+        key: str(value).strip()
+        for key, value in (values or {}).items()
+        if key in EDITABLE_KEYS and value not in (None, "")
+    }
+
+    # Auto-wrap for Google AI Studio image keys.
+    if current.get("AI_IMAGE_API_KEY", "").startswith(("AIzaSy", "AQ.")):
+        current_base = current.get("AI_IMAGE_API_BASE_URL", "")
+        if not current_base or "openrouter.ai" in current_base:
+            current["AI_IMAGE_API_BASE_URL"] = (
+                "https://generativelanguage.googleapis.com/v1beta/openai"
+            )
+        current_model = current.get("AI_IMAGE_MODEL", "")
+        if not current_model or "gemini" not in current_model.lower():
+            current["AI_IMAGE_MODEL"] = "gemini-2.5-flash-image"
+    else:
+        if (
+            current.get("AI_IMAGE_API_BASE_URL")
+            == "https://generativelanguage.googleapis.com/v1beta/openai"
+        ):
+            current.pop("AI_IMAGE_API_BASE_URL", None)
+        if current.get("AI_IMAGE_MODEL") == "gemini-2.5-flash-image":
+            current.pop("AI_IMAGE_MODEL", None)
+
+    # Auto-wrap for Google AI Studio text keys.
+    if current.get("AI_API_KEY", "").startswith(("AIzaSy", "AQ.")):
+        current_base = current.get("AI_API_BASE_URL", "")
+        if not current_base or "openrouter.ai" in current_base:
+            current["AI_API_BASE_URL"] = (
+                "https://generativelanguage.googleapis.com/v1beta/openai"
+            )
+
+        current_model = current.get("AI_MODEL", "")
+        if (
+            not current_model
+            or "gemini" not in current_model.lower()
+            or "google/" in current_model
+            or "-lite" in current_model
+        ):
+            current["AI_MODEL"] = "gemini-2.5-flash"
+
+        current_fast = current.get("AI_MODEL_FAST", "")
+        if (
+            not current_fast
+            or "gemini" not in current_fast.lower()
+            or "google/" in current_fast
+            or "-lite" in current_fast
+        ):
+            current["AI_MODEL_FAST"] = "gemini-2.5-flash"
+
+        current_premium = current.get("AI_MODEL_PREMIUM", "")
+        if (
+            not current_premium
+            or "gemini" not in current_premium.lower()
+            or "google/" in current_premium
+            or "-lite" in current_premium
+        ):
+            current["AI_MODEL_PREMIUM"] = "gemini-2.5-pro"
+    else:
+        if (
+            current.get("AI_API_BASE_URL")
+            == "https://generativelanguage.googleapis.com/v1beta/openai"
+        ):
+            current.pop("AI_API_BASE_URL", None)
+        if current.get("AI_MODEL") == "gemini-2.5-flash":
+            current.pop("AI_MODEL", None)
+        if current.get("AI_MODEL_FAST") == "gemini-2.5-flash":
+            current.pop("AI_MODEL_FAST", None)
+        if current.get("AI_MODEL_PREMIUM") == "gemini-2.5-pro":
+            current.pop("AI_MODEL_PREMIUM", None)
+
+    return current
+
+
+def load_overrides(
+    user_id: int | None = None,
+    *,
+    merge_global: bool = True,
+) -> dict[str, str]:
+    """Return persisted overrides for the active user context."""
+    runtime_user_id = _normalize_user_id(user_id)
+    if runtime_user_id is None:
+        return _normalize_overrides(_read_overrides(_global_overrides_path()))
+    if not merge_global:
+        return _normalize_overrides(_read_overrides(_user_overrides_path(runtime_user_id)))
+    merged = {
+        **_normalize_overrides(_read_overrides(_global_overrides_path())),
+        **_normalize_overrides(_read_overrides(_user_overrides_path(runtime_user_id))),
+    }
+    return _normalize_overrides(merged)
+
+
+def save_overrides(
+    updates: dict[str, str],
+    *,
+    user_id: int | None = None,
+) -> dict[str, str]:
+    """Merge ``updates`` into the scoped overrides file.
+
+    Empty strings clear that key. Unknown keys are silently dropped so a typo
+    in the request cannot smuggle in arbitrary settings.
+    """
+    path = _overrides_path(user_id)
+    current = _read_overrides(path)
     for env_name, value in (updates or {}).items():
         if env_name not in EDITABLE_KEYS:
             continue
         if value is None or value == "":
             current.pop(env_name, None)
         else:
-            current[env_name] = value.strip()
-    atomic_write_text(_overrides_path(), json.dumps(current, indent=2))
+            current[env_name] = str(value).strip()
+    current = _normalize_overrides(current)
+    _atomic_write_text(path, json.dumps(current, indent=2))
     return current
 
 
-def apply_overrides_to_settings() -> None:
-    """Push the overrides into the live ``settings`` object so every
-    module that already imported it picks up the new values without a
-    container restart. Safe to call repeatedly."""
-    overrides = load_overrides()
+def resolved_settings(user_id: int | None = None) -> Settings:
+    """Return a fresh Settings snapshot with runtime overrides applied."""
+    runtime_user_id = _normalize_user_id(user_id)
+    fresh = settings.model_copy(deep=True)
+    overrides = (
+        load_overrides(runtime_user_id, merge_global=False)
+        if runtime_user_id is not None
+        else {}
+    )
     for env_name, attr in EDITABLE_KEYS.items():
         if env_name in overrides:
-            setattr(settings, attr, overrides[env_name])
+            setattr(fresh, attr, overrides[env_name])
+    return fresh
+
+
+def apply_overrides_to_settings(user_id: int | None = None) -> None:
+    """Hot-update the shared settings object from the chosen override scope."""
+    runtime_user_id = _normalize_user_id(user_id)
+    if runtime_user_id is None:
+        resolved = load_settings()
+        overrides = load_overrides(None, merge_global=False)
+        for env_name, attr in EDITABLE_KEYS.items():
+            if env_name in overrides:
+                setattr(resolved, attr, overrides[env_name])
+    else:
+        resolved = resolved_settings(runtime_user_id)
+    for env_name, attr in EDITABLE_KEYS.items():
+        setattr(settings, attr, getattr(resolved, attr))
 
 
 def _mask(value: str) -> str:
-    """Return a previewable representation of a secret: empty if unset,
-    otherwise ``XXXX…last4`` so the user can recognise the key without
-    seeing the whole thing."""
+    """Return a previewable representation of a secret."""
     if not value:
         return ""
     if len(value) <= 8:
-        return "•" * len(value)
-    return f"{value[:4]}{'•' * 6}{value[-4:]}"
+        return "*" * len(value)
+    return f"{value[:4]}{'*' * 6}{value[-4:]}"
 
 
-def snapshot_for_ui() -> dict[str, dict[str, Any]]:
-    """Build the payload the Settings page renders.
-
-    Returns ``{env_name: {set: bool, masked: "...", value: ...}}``. For
-    non-secret keys (like AI_MODEL) the full value is returned in
-    ``value``; secrets only ever expose ``masked``."""
+def snapshot_for_ui(user_id: int | None = None) -> dict[str, dict[str, Any]]:
+    """Build the payload the Settings page renders."""
+    resolved = resolved_settings(user_id)
     out: dict[str, dict[str, Any]] = {}
     for env_name, attr in EDITABLE_KEYS.items():
-        current = getattr(settings, attr, "") or ""
+        current = getattr(resolved, attr, "") or ""
         is_secret = env_name in SECRET_KEYS
         out[env_name] = {
             "set": bool(current),

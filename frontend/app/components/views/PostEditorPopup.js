@@ -100,7 +100,6 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
     return () => {
       for (const m of owned.values()) revokeMediaItem(m);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const togglePlatform = (id) =>

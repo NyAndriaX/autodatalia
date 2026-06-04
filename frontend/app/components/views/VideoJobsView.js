@@ -87,22 +87,24 @@ export default function VideoJobsView() {
 
   // Pop the prefill stashed by the Creation editor's "AI video" button.
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      const raw = sessionStorage.getItem(PREFILL_KEY);
-      if (!raw) return;
-      const pre = JSON.parse(raw);
-      sessionStorage.removeItem(PREFILL_KEY);
-      if (pre.prompt) setPrompt(pre.prompt);
-      if (pre.referenceImage) {
-        setReferenceImage(pre.referenceImage);
-        setMode(pre.mode || "image");
+    queueMicrotask(() => {
+      if (typeof window === "undefined") return;
+      try {
+        const raw = sessionStorage.getItem(PREFILL_KEY);
+        if (!raw) return;
+        const pre = JSON.parse(raw);
+        sessionStorage.removeItem(PREFILL_KEY);
+        if (pre.prompt) setPrompt(pre.prompt);
+        if (pre.referenceImage) {
+          setReferenceImage(pre.referenceImage);
+          setMode(pre.mode || "image");
+        }
+        if (pre.ratio) setRatio(pre.ratio);
+        setPrefilledNotice(true);
+      } catch {
+        /* ignore malformed prefill */
       }
-      if (pre.ratio) setRatio(pre.ratio);
-      setPrefilledNotice(true);
-    } catch {
-      /* ignore malformed prefill */
-    }
+    });
   }, []);
 
   const selectedModelObj = models.find((m) => m.id === selectedModel);
@@ -115,20 +117,24 @@ export default function VideoJobsView() {
 
   // Auto-flip mode when the model doesn't support what's selected.
   useEffect(() => {
-    if (!features.image_to_video && (mode === "image" || mode === "ugc")) {
-      setMode("text");
-      setReferenceImage(null);
-    }
-    if (mode === "ugc" && !features.supports_ugc) {
-      setMode(features.image_to_video ? "image" : "text");
-    }
+    queueMicrotask(() => {
+      if (!features.image_to_video && (mode === "image" || mode === "ugc")) {
+        setMode("text");
+        setReferenceImage(null);
+      }
+      if (mode === "ugc" && !features.supports_ugc) {
+        setMode(features.image_to_video ? "image" : "text");
+      }
+    });
   }, [features.image_to_video, features.supports_ugc, mode]);
 
   // Clamp duration to model max.
   useEffect(() => {
-    if (features.max_duration_seconds && duration > features.max_duration_seconds) {
-      setDuration(features.max_duration_seconds);
-    }
+    queueMicrotask(() => {
+      if (features.max_duration_seconds && duration > features.max_duration_seconds) {
+        setDuration(features.max_duration_seconds);
+      }
+    });
   }, [features.max_duration_seconds, duration]);
 
   const reload = useCallback(async () => {
@@ -144,7 +150,9 @@ export default function VideoJobsView() {
   }, []);
 
   useEffect(() => {
-    reload();
+    queueMicrotask(() => {
+      reload();
+    });
     const id = setInterval(reload, 4000);
     return () => clearInterval(id);
   }, [reload]);
@@ -321,6 +329,7 @@ export default function VideoJobsView() {
                   className="relative rounded-lg overflow-hidden"
                   style={{ aspectRatio: "16/9", background: "var(--bg-tertiary)" }}
                 >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={referenceImage.url}
                     alt="reference"

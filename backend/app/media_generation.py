@@ -29,6 +29,7 @@ from .models import (
     VideoModel,
     VideoModelsResponse,
 )
+from .runtime_config import resolved_settings
 
 try:
     from imageio_ffmpeg import get_ffmpeg_exe as _get_ffmpeg_exe
@@ -143,30 +144,32 @@ async def _call_image_api(
     The selector is the model id: anything matching ``gemini*image``
     takes path (1); everything else takes path (2).
     """
-    if not settings.ai_image_model:
+    cfg = resolved_settings(user_id)
+    if not cfg.ai_image_model:
         return _render_fallback_poster(prompt, width, height), "fallback-poster"
-    if not settings.ai_image_api_key:
+    if not cfg.ai_image_api_key:
         raise HTTPException(500, "AI_IMAGE_API_KEY is not configured.")
 
-    if _is_gemini_image_model(settings.ai_image_model):
+    if _is_gemini_image_model(cfg.ai_image_model):
         return await _call_gemini_image_api(prompt, width, height, user_id=user_id)
 
     payload = {
-        "model": settings.ai_image_model,
+        "model": cfg.ai_image_model,
         "prompt": prompt,
         "size": f"{width}x{height}",
         "n": 1,
     }
     async with httpx.AsyncClient(timeout=180.0) as client:
         resp = await client.post(
-            f"{settings.ai_image_api_base_url}/images/generations",
+            f"{cfg.ai_image_api_base_url}/images/generations",
             headers={
-                "Authorization": f"Bearer {settings.ai_image_api_key}",
+                "Authorization": f"Bearer {cfg.ai_image_api_key}",
                 "Content-Type": "application/json",
             },
             json=payload,
         )
     if resp.status_code >= 400:
+        print(f"[Classic Image API Error] Status={resp.status_code} Response={resp.text[:1000]}", flush=True)
         raise HTTPException(
             status_code=502,
             detail={
@@ -179,14 +182,14 @@ async def _call_image_api(
     first = (data.get("data") or [{}])[0] or {}
     if first.get("b64_json"):
         _log_image_cost(prompt, user_id)
-        return base64.b64decode(first["b64_json"]), settings.ai_image_model
+        return base64.b64decode(first["b64_json"]), cfg.ai_image_model
     if first.get("url"):
         async with httpx.AsyncClient(timeout=120.0) as client:
             image_resp = await client.get(first["url"])
         if image_resp.status_code >= 400:
             raise HTTPException(502, "Generated image URL could not be fetched.")
         _log_image_cost(prompt, user_id)
-        return image_resp.content, settings.ai_image_model
+        return image_resp.content, cfg.ai_image_model
     raise HTTPException(502, "Image generation returned no asset.")
 
 
@@ -207,9 +210,10 @@ async def _call_gemini_image_api(
     parameter the way DALL·E does — the model is good at honouring an
     aspect-ratio cue in plain English.
     """
+    cfg = resolved_settings(user_id)
     aspect_hint = f"Generate a single {width}x{height} image. {prompt}"
     payload = {
-        "model": settings.ai_image_model,
+        "model": cfg.ai_image_model,
         # OpenRouter routes image-output models when modalities is set.
         # Native Google API ignores it harmlessly.
         "modalities": ["image", "text"],
@@ -223,9 +227,9 @@ async def _call_gemini_image_api(
     }
     async with httpx.AsyncClient(timeout=180.0) as client:
         resp = await client.post(
-            f"{settings.ai_image_api_base_url}/chat/completions",
+            f"{cfg.ai_image_api_base_url}/chat/completions",
             headers={
-                "Authorization": f"Bearer {settings.ai_image_api_key}",
+                "Authorization": f"Bearer {cfg.ai_image_api_key}",
                 "Content-Type": "application/json",
                 "HTTP-Referer": "https://caption-api.local",
                 "X-Title": "Datalia Image Gen",
@@ -233,6 +237,7 @@ async def _call_gemini_image_api(
             json=payload,
         )
     if resp.status_code >= 400:
+        print(f"[Gemini Image API Error] Status={resp.status_code} Response={resp.text[:1000]}", flush=True)
         raise HTTPException(
             status_code=502,
             detail={
@@ -252,7 +257,7 @@ async def _call_gemini_image_api(
             },
         )
     _log_image_cost(prompt, user_id)
-    return img_bytes, settings.ai_image_model
+    return img_bytes, cfg.ai_image_model
 
 
 async def _extract_gemini_image(data: dict) -> bytes | None:
@@ -328,7 +333,7 @@ def _log_image_cost(prompt: str, user_id: str | int | None) -> None:
     """
     try:
         from .cost_tracking import record_media_job
-        model = settings.ai_image_model or "fallback-poster"
+        model = resolved_settings(user_id).ai_image_model or "fallback-poster"
         # Best-effort provider tag — used in the cost dashboard's
         # "by_model" breakdown. Cost per image varies wildly by provider
         # (Nano Banana is ~$0.03, DALL·E 3 ~$0.04, FLUX-schnell free).
@@ -365,11 +370,78 @@ def _write_bytes(prompt: str, suffix: str, payload: bytes) -> Path:
     return path
 
 
+async def _refine_image_prompt(prompt: str, user_id: str | int | None = None) -> str:
+    """Uses the fast model to convert social media captions / text into clean,
+    visual-focused image generation prompts. Removes emojis, hashtags, and social copy,
+    and ensures the generated image will be text-free.
+    """
+    cfg = resolved_settings(user_id)
+    cleaned = prompt.strip()
+    if not cleaned:
+        return cleaned
+
+    # If the prompt is a brief visual description, don't need to run it through LLM
+    if len(cleaned) < 40 and not any(x in cleaned for x in ["#", "@", "http"]):
+        return cleaned
+
+    if not cfg.ai_api_key or not cfg.ai_model_fast:
+        return cleaned
+
+    payload = {
+        "model": cfg.ai_model_fast,
+        "temperature": 0.3,
+        "max_tokens": 150,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are an expert AI image prompt engineer. Convert the following social media post or caption "
+                    "into a clean, concise, highly-detailed visual description for a text-to-image generator.\n"
+                    "CRITICAL RULES:\n"
+                    "1. Focus ONLY on describing the physical scene, subject, setting, colors, and lighting.\n"
+                    "2. The description must be completely text-free. Do NOT include any words, letters, logos, labels, captions, or typography.\n"
+                    "3. Remove all emojis, hashtags, links, and direct calls to action.\n"
+                    "4. Keep the output under 100 words. Return ONLY the refined visual prompt without any intro or outro."
+                ),
+            },
+            {"role": "user", "content": cleaned},
+        ],
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{cfg.ai_api_base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {cfg.ai_api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://caption-api.local",
+                    "X-Title": "Caption API - Image Prompt Refiner",
+                },
+                json=payload,
+            )
+        if response.status_code == 200:
+            data = response.json()
+            choices = data.get("choices") or []
+            if choices:
+                refined = choices[0].get("message", {}).get("content", "").strip()
+                if refined:
+                    return refined
+    except Exception as exc:
+        logging.getLogger("datalia.media").warning("[media] Failed to refine image prompt: %s", exc)
+
+    return cleaned
+
+
 async def _generate_image_file(
     prompt: str, ratio: str, *, user_id: str | int | None = None
 ) -> tuple[Path, str]:
     width, height = _pick_size(ratio)
-    payload, provider = await _call_image_api(prompt, width, height, user_id=user_id)
+    refined = await _refine_image_prompt(prompt, user_id=user_id)
+    # Append clear, strong negative instructions to guarantee text-free generation across all models
+    final_prompt = f"{refined}. High-quality professional image, clean background, completely text-free with absolutely no words, letters, captions, logos, or typography."
+    
+    payload, provider = await _call_image_api(final_prompt, width, height, user_id=user_id)
     out = _write_bytes(prompt, ".png", payload)
     return out, provider
 

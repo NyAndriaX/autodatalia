@@ -9,7 +9,7 @@ import {
   ListChecks, X, Settings2, Sparkles, Zap, CalendarDays, Radio,
 } from "lucide-react";
 import {
-  DEFAULT_AUTOMATION_RULE,
+  buildDefaultAutomationRule,
   listAutomationRules,
   createAutomationRule,
   updateAutomationRule,
@@ -179,7 +179,7 @@ export default function AutomationView() {
   const [rules,      setRules]      = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [selectedId, setSelectedId] = useState(null);
-  const [draft,      setDraft]      = useState(DEFAULT_AUTOMATION_RULE);
+  const [draft,      setDraft]      = useState(() => buildDefaultAutomationRule());
   const [saving,     setSaving]     = useState(false);
   const [onglet,     setOnglet]     = useState("contenu");
 
@@ -194,7 +194,11 @@ export default function AutomationView() {
     }
   }, [dispatch, t]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    queueMicrotask(() => {
+      refresh();
+    });
+  }, [refresh]);
 
   const selected = useMemo(
     () => selectedId && selectedId !== "new" ? rules.find((r) => r.id === selectedId) || null : null,
@@ -202,8 +206,10 @@ export default function AutomationView() {
   );
 
   useEffect(() => {
-    if (selectedId === "new") setDraft({ ...DEFAULT_AUTOMATION_RULE, name: t("newRuleDraftName") });
-    else if (selected)        setDraft({ ...DEFAULT_AUTOMATION_RULE, ...selected });
+    queueMicrotask(() => {
+      if (selectedId === "new") setDraft(buildDefaultAutomationRule({ name: t("newRuleDraftName") }));
+      else if (selected)        setDraft(buildDefaultAutomationRule(selected));
+    });
   }, [selectedId, selected, t]);
 
   const upd         = (patch) => setDraft((d) => ({ ...d, ...patch }));
@@ -569,7 +575,7 @@ export default function AutomationView() {
                       <div>
                         <Champ label={t("timezone")}>
                           <input type="text" className={inputField}
-                            value={draft.schedule?.timezone || "UTC"}
+                            value={draft.schedule?.timezone || buildDefaultAutomationRule().schedule.timezone}
                             onChange={(e) => updPlanning({ timezone: e.target.value })}
                             placeholder={t("timezonePlaceholder")} />
                         </Champ>

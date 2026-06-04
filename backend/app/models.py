@@ -156,6 +156,7 @@ class Post(BaseModel):
     # candidate distinctly and to skip duplicate fires.
     source_rule_id: str | None = None
     source_rule_name: str | None = None
+    source_rule_updated_at: float | None = None
     scheduled_for: float | None = None
 
 
@@ -544,7 +545,7 @@ class AutomationSchedule(BaseModel):
     weekdays: list[int] | None = None
     # 1–31. Used when frequency == "monthly".
     month_days: list[int] | None = None
-    timezone: str = "UTC"
+    timezone: str | None = None
 
 
 class AutomationRule(BaseModel):

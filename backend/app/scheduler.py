@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 from datetime import datetime
 from typing import Any
@@ -27,6 +26,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .publish import build_targets_from_post, publish_to_targets
 from .services import messages_append, posts_list, posts_update
+from .timezones import get_default_timezone_name
 
 log = logging.getLogger("datalia.scheduler")
 
@@ -35,7 +35,7 @@ log = logging.getLogger("datalia.scheduler")
 # override via the env if the team moves. UTC is wrong as a default here:
 # users picking "09:00" almost never mean 09:00 UTC, and the old fallback
 # meant scheduled posts fired 1–2 hours later than the user expected.
-DEFAULT_TZ_NAME = os.environ.get("DEFAULT_TIMEZONE", "Europe/Paris")
+DEFAULT_TZ_NAME = get_default_timezone_name()
 
 TICK_SECONDS = 30
 # Brief outages (container restart, deploy) shouldn't strand a post that was

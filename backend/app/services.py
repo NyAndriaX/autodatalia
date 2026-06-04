@@ -14,6 +14,7 @@ import httpx
 from fastapi import HTTPException, UploadFile
 
 from .config import settings
+from .runtime_config import resolved_settings
 
 # Optional dependency — falls back to "no transcode" if the package failed
 # to install (e.g. the bundled ffmpeg binary couldn't be unpacked). Upload
@@ -132,7 +133,8 @@ async def generate_captions(
     item: dict[str, Any], *, include_image: bool, user_id: str | int | None = None
 ) -> dict[str, str]:
     """Call the configured AI model and return Instagram + TikTok captions."""
-    if not settings.ai_api_key:
+    cfg = resolved_settings(user_id)
+    if not cfg.ai_api_key:
         raise HTTPException(status_code=500, detail="AI_API_KEY is not configured.")
 
     prompt = (
@@ -158,7 +160,7 @@ async def generate_captions(
         ]
 
     payload = {
-        "model": settings.ai_model,
+        "model": cfg.ai_model,
         "temperature": 0.7,
         # Two short captions — no need for a large completion budget.
         "max_tokens": 320,
@@ -176,9 +178,9 @@ async def generate_captions(
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
-            f"{settings.ai_api_base_url}/chat/completions",
+            f"{cfg.ai_api_base_url}/chat/completions",
             headers={
-                "Authorization": f"Bearer {settings.ai_api_key}",
+                "Authorization": f"Bearer {cfg.ai_api_key}",
                 "Content-Type": "application/json",
                 "HTTP-Referer": "https://caption-api.local",
                 "X-Title": "Caption API",
@@ -212,7 +214,7 @@ async def generate_captions(
         record_call(
             workflow="captions",
             tier="standard",
-            model=settings.ai_model,
+            model=cfg.ai_model,
             prompt_tokens=usage.get("prompt_tokens", 0),
             completion_tokens=usage.get("completion_tokens", 0),
             user_id=user_id,
@@ -333,16 +335,13 @@ _ZERO_USAGE = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 # CEO checklist (#4 "tiered LLM routing") expects: every call labels its
 # tier, and the cost dashboard rolls up spend per tier.
 
-_TIER_TO_MODEL = {
-    "fast": lambda: settings.ai_model_fast,
-    "standard": lambda: settings.ai_model,
-    "premium": lambda: settings.ai_model_premium,
-}
-
-
-def model_for_tier(tier: str) -> str:
-    resolver = _TIER_TO_MODEL.get(tier) or _TIER_TO_MODEL["standard"]
-    return resolver()
+def model_for_tier(tier: str, user_id: str | int | None = None) -> str:
+    cfg = resolved_settings(user_id)
+    if tier == "fast":
+        return cfg.ai_model_fast
+    if tier == "premium":
+        return cfg.ai_model_premium
+    return cfg.ai_model
 
 
 async def _post_chat(
@@ -359,14 +358,15 @@ async def _post_chat(
     so the dashboard can show per-workflow spend. Skip with log_cost=False
     when the caller is going to log a different shape (e.g. media gen).
     """
-    if not settings.ai_api_key:
+    cfg = resolved_settings(user_id)
+    if not cfg.ai_api_key:
         raise HTTPException(status_code=500, detail="AI_API_KEY is not configured.")
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
-            f"{settings.ai_api_base_url}/chat/completions",
+            f"{cfg.ai_api_base_url}/chat/completions",
             headers={
-                "Authorization": f"Bearer {settings.ai_api_key}",
+                "Authorization": f"Bearer {cfg.ai_api_key}",
                 "Content-Type": "application/json",
                 "HTTP-Referer": "https://caption-api.local",
                 "X-Title": "Caption API",
@@ -402,7 +402,7 @@ async def _post_chat(
             record_call(
                 workflow=workflow,
                 tier=tier,
-                model=payload.get("model") or model_for_tier(tier),
+                model=payload.get("model") or model_for_tier(tier, user_id),
                 prompt_tokens=usage["prompt_tokens"],
                 completion_tokens=usage["completion_tokens"],
                 user_id=user_id,
@@ -459,15 +459,21 @@ async def _describe_image(
     references the same image reuses this text — the image bytes never
     go to the model again until the file actually changes.
     """
-    if not settings.ai_api_key:
+    cfg = resolved_settings(user_id)
+    if not cfg.ai_api_key:
         return ""
-    key = _cache_key("describe", _image_hash(image_path))
+    key = _cache_key(
+        "describe",
+        _image_hash(image_path),
+        cfg.ai_api_base_url,
+        cfg.ai_model_fast,
+    )
     cached = _cache_get(key)
     if isinstance(cached, str) and cached:
         record_cache_hit(
             workflow="image_description",
             tier="fast",
-            model=settings.ai_model_fast,
+            model=cfg.ai_model_fast,
             user_id=user_id,
         )
         return cached
@@ -475,7 +481,7 @@ async def _describe_image(
     payload = {
         # Factual image-description is a perfect SIMPLE-tier job — accuracy
         # over creativity, no need to pay the standard model's premium.
-        "model": settings.ai_model_fast,
+        "model": cfg.ai_model_fast,
         "temperature": 0.2,
         "max_tokens": 140,
         "messages": [
@@ -522,21 +528,22 @@ async def generate_hashtags(
     content: str, *, user_id: str | int | None = None, max_tags: int = 8
 ) -> tuple[list[str], dict[str, int]]:
     """Suggest hashtags for a post. Fast tier."""
+    cfg = resolved_settings(user_id)
     content = _compress(content, limit=2000)
     if not content.strip():
         return [], dict(_ZERO_USAGE)
-    cache_key = _cache_key("hashtags", content, max_tags)
+    cache_key = _cache_key("hashtags", content, max_tags, cfg.ai_model_fast)
     cached = _cache_get(cache_key)
     if cached is not None:
         record_cache_hit(
             workflow="hashtags",
             tier="fast",
-            model=settings.ai_model_fast,
+            model=cfg.ai_model_fast,
             user_id=user_id,
         )
         return cached, dict(_ZERO_USAGE)
     payload = {
-        "model": settings.ai_model_fast,
+        "model": cfg.ai_model_fast,
         "temperature": 0.4,
         "max_tokens": 100,
         "messages": [
@@ -562,21 +569,22 @@ async def summarize_post(
     content: str, *, user_id: str | int | None = None, target_chars: int = 240
 ) -> tuple[str, dict[str, int]]:
     """One-paragraph summary of a longer post. Fast tier."""
+    cfg = resolved_settings(user_id)
     content = _compress(content, limit=4000)
     if not content.strip():
         return "", dict(_ZERO_USAGE)
-    cache_key = _cache_key("summary", content, target_chars)
+    cache_key = _cache_key("summary", content, target_chars, cfg.ai_model_fast)
     cached = _cache_get(cache_key)
     if cached is not None:
         record_cache_hit(
             workflow="summary",
             tier="fast",
-            model=settings.ai_model_fast,
+            model=cfg.ai_model_fast,
             user_id=user_id,
         )
         return cached, dict(_ZERO_USAGE)
     payload = {
-        "model": settings.ai_model_fast,
+        "model": cfg.ai_model_fast,
         "temperature": 0.3,
         "max_tokens": 200,
         "messages": [
@@ -656,11 +664,11 @@ async def generate_post_variants(
         tier = "standard"
     else:  # auto
         tier = "premium" if n >= 3 else "standard"
-    chosen_model = model_for_tier(tier)
+    chosen_model = model_for_tier(tier, user_id)
 
     cache_key = _cache_key(
         "generate", prompt, sorted(active), template, n,
-        image_fingerprint, image_description, tier,
+        image_fingerprint, image_description, tier, chosen_model,
     )
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -694,8 +702,8 @@ async def generate_post_variants(
     payload = {
         "model": chosen_model,
         "temperature": 0.85,
-        # Bound output cost: ~110 tokens per variant + JSON overhead.
-        "max_tokens": 110 * n + 80,
+        # Bound output cost: ample token room to prevent truncation on Google free tier
+        "max_tokens": 400 * n + 200,
         "messages": [
             {
                 "role": "system",
@@ -749,6 +757,7 @@ async def transform_content(
     content: str, action: str, *, user_id: str | int | None = None
 ) -> tuple[str, dict[str, int], str]:
     """Apply a quick AI action to existing content; returns (text, usage, model)."""
+    cfg = resolved_settings(user_id)
     instruction = _TRANSFORM_INSTRUCTIONS.get(action)
     if instruction is None:
         # Explicit 422 with the allowed values — better than a silent pass.
@@ -761,20 +770,20 @@ async def transform_content(
         )
 
     content = _compress(content)
-    cache_key = _cache_key("transform", action, content)
+    cache_key = _cache_key("transform", action, content, cfg.ai_model_fast)
     cached = _cache_get(cache_key)
     if cached is not None:
         record_cache_hit(
             workflow="transform",
             tier="fast",
-            model=settings.ai_model_fast,
+            model=cfg.ai_model_fast,
             user_id=user_id,
         )
-        return cached, dict(_ZERO_USAGE), settings.ai_model_fast
+        return cached, dict(_ZERO_USAGE), cfg.ai_model_fast
 
     payload = {
         # Quick actions use the cheap/fast model (LLM Router cost strategy).
-        "model": settings.ai_model_fast,
+        "model": cfg.ai_model_fast,
         # Lower temperature → more deterministic → more cache hits.
         "temperature": 0.4,
         # "expand" needs headroom; others stay tight. Bounded either way.
@@ -795,7 +804,7 @@ async def transform_content(
     )
     text = text.strip()
     _cache_set(cache_key, text)
-    return text, usage, settings.ai_model_fast
+    return text, usage, cfg.ai_model_fast
 
 
 # ── Media upload ───────────────────────────────────────────────────────

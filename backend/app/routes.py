@@ -71,10 +71,78 @@ def _client_id(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 router = APIRouter()
-# Auth dependency applied only to spend-incurring / mutating endpoints
-# (/generate, /transform, /upload, /captions/generate). Read endpoints
-# stay open so the dashboard's health probe still works without a token.
+# Auth dependency applied to spend-incurring, mutating, and business-data
+# endpoints. Health and OAuth callback probes stay open.
 auth_required = Depends(require_token)
+
+_OPEN_AUTOMATION_STATUSES = {"awaiting_validation", "scheduled"}
+
+
+def _rule_schedule_signature(rule: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "active": rule.get("active", True),
+        "schedule": rule.get("schedule"),
+        "validation_lead_minutes": rule.get("validation_lead_minutes"),
+        "validation_chat_id": rule.get("validation_chat_id"),
+    }
+
+
+def _rule_candidate_signature(rule: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "content_type": rule.get("content_type"),
+        "template_id": rule.get("template_id"),
+        "num_media": rule.get("num_media"),
+        "domain": rule.get("domain"),
+        "target_audience": rule.get("target_audience"),
+        "tone": rule.get("tone"),
+        "objective": rule.get("objective"),
+        "description_style": rule.get("description_style"),
+        "extra_brief": rule.get("extra_brief"),
+        "platforms": rule.get("platforms"),
+        "ratios": rule.get("ratios"),
+        "tiktok": rule.get("tiktok"),
+        **_rule_schedule_signature(rule),
+    }
+
+
+def _rule_open_posts(rule_id: str) -> list[dict[str, Any]]:
+    return [
+        post
+        for post in posts_list()
+        if post.get("source_rule_id") == rule_id
+        and post.get("status") in _OPEN_AUTOMATION_STATUSES
+    ]
+
+
+def _cancel_open_rule_posts(
+    rule_id: str,
+    *,
+    reason: str,
+    message: str,
+) -> list[str]:
+    touched: list[str] = []
+    for post in _rule_open_posts(rule_id):
+        posts_update(
+            post["id"],
+            {
+                "status": "cancelled",
+                "error": reason,
+                "validated_at": None,
+            },
+        )
+        messages_append(
+            {
+                "kind": "automation",
+                "post_id": post["id"],
+                "message": message.format(post_id=post["id"]),
+            }
+        )
+        touched.append(post["id"])
+    return touched
+
+
+def _reset_rule_fire_cursor(rule_id: str) -> dict[str, Any] | None:
+    return automation_update(rule_id, {"last_fire_at": 0, "last_error": ""})
 
 
 # ── Utility endpoints ──────────────────────────────────────────────────
@@ -109,7 +177,7 @@ async def health() -> dict[str, Any]:
     return {"status": "ok", "dependencies": deps}
 
 
-@router.get("/stats")
+@router.get("/stats", dependencies=[auth_required])
 async def get_stats() -> dict[str, Any]:
     """Aggregated content statistics for the dashboard KPI strip.
 
@@ -151,7 +219,7 @@ async def get_stats() -> dict[str, Any]:
     }
 
 
-@router.get("/dashboard-summary")
+@router.get("/dashboard-summary", dependencies=[auth_required])
 async def dashboard_summary() -> dict[str, Any]:
     """Rich summary payload for the dashboard view.
 
@@ -207,7 +275,7 @@ async def tunnel_status() -> dict[str, Any]:
     }
 
 
-@router.get("/messages")
+@router.get("/messages", dependencies=[auth_required])
 async def messages() -> dict[str, list[Any]]:
     """Activity feed (publish events, validations…).
 
@@ -299,16 +367,17 @@ async def hashtags(
     )
     if usage["total_tokens"] > 0:
         rate_tick(client)
-    from .config import settings as _settings
+    from .runtime_config import resolved_settings
+    current_settings = resolved_settings(user_id)
     return HashtagsResponse(
-        hashtags=tags, usage=usage, model=_settings.ai_model_fast
+        hashtags=tags, usage=usage, model=current_settings.ai_model_fast
     )
 
 
 # ── Cost dashboard ────────────────────────────────────────────────────
 
 
-@router.get("/costs/summary", response_model=CostSummary)
+@router.get("/costs/summary", response_model=CostSummary, dependencies=[auth_required])
 async def costs_summary(period: str = "30d") -> CostSummary:
     """Aggregate AI/media spend over the chosen window.
 
@@ -327,7 +396,7 @@ async def costs_summary(period: str = "30d") -> CostSummary:
     return CostSummary(**summarize(secs))
 
 
-@router.get("/costs/log", response_model=CostLogResponse)
+@router.get("/costs/log", response_model=CostLogResponse, dependencies=[auth_required])
 async def costs_log(limit: int = 200) -> CostLogResponse:
     from .cost_tracking import list_logs
     return CostLogResponse(entries=list_logs(limit=limit))
@@ -336,8 +405,10 @@ async def costs_log(limit: int = 200) -> CostLogResponse:
 # ── Runtime-editable API keys ────────────────────────────────────────
 
 
-@router.get("/settings/keys", response_model=SettingsKeysResponse)
-async def settings_keys_get() -> SettingsKeysResponse:
+@router.get("/settings/keys", response_model=SettingsKeysResponse, dependencies=[auth_required])
+async def settings_keys_get(
+    user_id: int = Depends(require_token),
+) -> SettingsKeysResponse:
     """Snapshot of every editable key for the Settings page.
 
     Secrets are returned masked (``abcd••••WXYZ``); model ids and base
@@ -345,7 +416,7 @@ async def settings_keys_get() -> SettingsKeysResponse:
     allowlist.
     """
     from .runtime_config import snapshot_for_ui
-    return SettingsKeysResponse(keys=snapshot_for_ui())
+    return SettingsKeysResponse(keys=snapshot_for_ui(user_id))
 
 
 @router.patch(
@@ -355,19 +426,22 @@ async def settings_keys_get() -> SettingsKeysResponse:
 )
 async def settings_keys_patch(
     body: SettingsKeysUpdateRequest,
+    user_id: int = Depends(require_token),
 ) -> SettingsKeysResponse:
-    """Persist new values into runtime_settings.json AND hot-update the
-    live ``settings`` object so the next AI call uses the new key
-    without a container restart. Empty strings clear the override.
+    """Persist new values into the active runtime settings scope.
+
+    JWT users write to their own overrides file. Open mode and the
+    shared backend token keep using the global runtime_settings.json.
     """
     from .runtime_config import (
         save_overrides,
         apply_overrides_to_settings,
         snapshot_for_ui,
     )
-    save_overrides(body.updates)
-    apply_overrides_to_settings()
-    return SettingsKeysResponse(keys=snapshot_for_ui())
+    save_overrides(body.updates, user_id=user_id)
+    if user_id <= 0:
+        apply_overrides_to_settings()
+    return SettingsKeysResponse(keys=snapshot_for_ui(user_id))
 
 
 # ── Publishing — fan post out to real social networks ────────────────
@@ -687,7 +761,7 @@ async def delete_media_route(path: str) -> dict[str, Any]:
     return {"deleted": True, "path": path}
 
 
-@router.get("/search", response_model=SearchResponse)
+@router.get("/search", response_model=SearchResponse, dependencies=[auth_required])
 async def search(request: Request, q: str = "") -> SearchResponse:
     """Search media in the content directory (posts/templates → Airtable TBD).
 
@@ -719,7 +793,7 @@ async def search(request: Request, q: str = "") -> SearchResponse:
 
 # ── Scheduled posts (calendar persistence) ────────────────────────────
 
-@router.get("/posts", response_model=PostsResponse)
+@router.get("/posts", response_model=PostsResponse, dependencies=[auth_required])
 async def list_posts() -> PostsResponse:
     """Return all scheduled posts. Open so the calendar can hydrate on load."""
     return PostsResponse(posts=posts_list())
@@ -758,13 +832,17 @@ async def delete_post(post_id: str) -> dict[str, bool]:
 # generate Posts. Endpoints are CRUD only — no firing logic lives here.
 
 
-@router.get("/automation-rules", response_model=AutomationRulesResponse)
+@router.get("/automation-rules", response_model=AutomationRulesResponse, dependencies=[auth_required])
 async def list_automation_rules() -> AutomationRulesResponse:
     rules = [AutomationRule(**r) for r in automation_list()]
     return AutomationRulesResponse(rules=rules)
 
 
-@router.get("/automation-rules/{rule_id}", response_model=AutomationRule)
+@router.get(
+    "/automation-rules/{rule_id}",
+    response_model=AutomationRule,
+    dependencies=[auth_required],
+)
 async def get_automation_rule(rule_id: str) -> AutomationRule:
     rule = automation_get(rule_id)
     if rule is None:
@@ -791,15 +869,51 @@ async def create_automation_rule(body: AutomationRule) -> AutomationRule:
 async def patch_automation_rule(rule_id: str, body: AutomationRule) -> AutomationRule:
     # Apply the full body as a patch — automation_update treats None as "skip"
     # so callers can omit fields they don't want to overwrite by sending null.
+    existing = automation_get(rule_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Automation rule not found.")
     patch = body.model_dump(exclude={"id", "created_at", "updated_at"})
     updated = automation_update(rule_id, patch)
     if updated is None:
         raise HTTPException(status_code=404, detail="Automation rule not found.")
+    schedule_changed = _rule_schedule_signature(existing) != _rule_schedule_signature(updated)
+    candidate_changed = _rule_candidate_signature(existing) != _rule_candidate_signature(updated)
+    if not updated.get("active", True):
+        _cancel_open_rule_posts(
+            rule_id,
+            reason="rule_deactivated",
+            message=(
+                "Auto-generated post {post_id} was cancelled because its rule "
+                "was deactivated."
+            ),
+        )
+        updated = _reset_rule_fire_cursor(rule_id) or updated
+    else:
+        if schedule_changed:
+            updated = _reset_rule_fire_cursor(rule_id) or updated
+        if candidate_changed:
+            _cancel_open_rule_posts(
+                rule_id,
+                reason="rule_changed_after_generation",
+                message=(
+                    "Auto-generated post {post_id} was cancelled because its "
+                    "rule changed after generation. A fresh validation request "
+                    "will be generated for the new rule state."
+                ),
+            )
     return AutomationRule(**updated)
 
 
 @router.delete("/automation-rules/{rule_id}", dependencies=[auth_required])
 async def delete_automation_rule(rule_id: str) -> dict[str, bool]:
+    _cancel_open_rule_posts(
+        rule_id,
+        reason="rule_deleted",
+        message=(
+            "Auto-generated post {post_id} was cancelled because its rule "
+            "was deleted."
+        ),
+    )
     if not automation_delete(rule_id):
         raise HTTPException(status_code=404, detail="Automation rule not found.")
     return {"deleted": True}
@@ -807,7 +921,7 @@ async def delete_automation_rule(rule_id: str) -> dict[str, bool]:
 
 # ── Content endpoints ─────────────────────────────────────────────────
 
-@router.get("/content-items")
+@router.get("/content-items", dependencies=[auth_required])
 async def list_content(request: Request) -> dict[str, Any]:
     url = await tunnel.wait_for_tunnel(timeout=15.0)
     base = url or str(request.base_url).rstrip("/")
