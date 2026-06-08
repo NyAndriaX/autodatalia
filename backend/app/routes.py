@@ -78,6 +78,15 @@ auth_required = Depends(require_token)
 _OPEN_AUTOMATION_STATUSES = {"awaiting_validation", "scheduled"}
 
 
+def _record_belongs_to_user(record: dict[str, Any] | None, user_id: int) -> bool:
+    if record is None:
+        return False
+    if user_id <= 0:
+        return True
+    owner = str(record.get("user_id") or "")
+    return owner == str(user_id)
+
+
 def _rule_schedule_signature(rule: dict[str, Any]) -> dict[str, Any]:
     return {
         "active": rule.get("active", True),
@@ -108,7 +117,7 @@ def _rule_candidate_signature(rule: dict[str, Any]) -> dict[str, Any]:
 def _rule_open_posts(rule_id: str) -> list[dict[str, Any]]:
     return [
         post
-        for post in posts_list()
+        for post in posts_list(all_users=True)
         if post.get("source_rule_id") == rule_id
         and post.get("status") in _OPEN_AUTOMATION_STATUSES
     ]
@@ -151,8 +160,8 @@ def _reset_rule_fire_cursor(rule_id: str) -> dict[str, Any] | None:
 async def health() -> dict[str, Any]:
     """Liveness + dependency check.
 
-    Returns 200 only when both the API process AND Postgres are reachable.
-    Caddy / Docker healthchecks fail when this is non-200, so a Postgres
+    Returns 200 only when both the API process AND MariaDB are reachable.
+    Caddy / Docker healthchecks fail when this is non-200, so a MariaDB
     outage now actually surfaces as an unhealthy container instead of a
     "200 OK" lie that masks the real problem until the first /auth call.
     """
@@ -167,9 +176,9 @@ async def health() -> dict[str, Any]:
             cur.fetchone()
         finally:
             conn.close()
-        deps["postgres"] = "ok"
+        deps["mariadb"] = "ok"
     except Exception as exc:  # noqa: BLE001
-        deps["postgres"] = f"down: {type(exc).__name__}"
+        deps["mariadb"] = f"down: {type(exc).__name__}"
         raise HTTPException(
             status_code=503,
             detail={"status": "degraded", "dependencies": deps},
@@ -178,7 +187,7 @@ async def health() -> dict[str, Any]:
 
 
 @router.get("/stats", dependencies=[auth_required])
-async def get_stats() -> dict[str, Any]:
+async def get_stats(user_id: int = Depends(require_token)) -> dict[str, Any]:
     """Aggregated content statistics for the dashboard KPI strip.
 
     Returns counts broken down by post status so the frontend never has
@@ -186,7 +195,7 @@ async def get_stats() -> dict[str, Any]:
     """
     from .services import posts_list as _posts_list, messages_list
 
-    all_posts = _posts_list()
+    all_posts = _posts_list(user_id=user_id)
     by_status: dict[str, int] = {
         "draft": 0,
         "scheduled": 0,
@@ -202,7 +211,7 @@ async def get_stats() -> dict[str, Any]:
         if s in by_status:
             by_status[s] += 1
 
-    recent_messages = messages_list()[:5]
+    recent_messages = messages_list(user_id=user_id)[:5]
 
     # Media asset count
     media_count = sum(
@@ -220,7 +229,7 @@ async def get_stats() -> dict[str, Any]:
 
 
 @router.get("/dashboard-summary", dependencies=[auth_required])
-async def dashboard_summary() -> dict[str, Any]:
+async def dashboard_summary(user_id: int = Depends(require_token)) -> dict[str, Any]:
     """Rich summary payload for the dashboard view.
 
     Combines post stats, recent activity and connection status so the
@@ -229,16 +238,16 @@ async def dashboard_summary() -> dict[str, Any]:
     from .services import posts_list as _posts_list, messages_list
     from .oauth import _load_tokens
 
-    all_posts = _posts_list()
+    all_posts = _posts_list(user_id=user_id)
 
     by_status: dict[str, int] = {}
     for post in all_posts:
         s = post.get("status", "draft")
         by_status[s] = by_status.get(s, 0) + 1
 
-    recent_activity = messages_list()[:10]
+    recent_activity = messages_list(user_id=user_id)[:10]
 
-    token_data = _load_tokens()
+    token_data = _load_tokens(user_id if user_id > 0 else None)
     connected_providers = [
         provider
         for provider, data in token_data.items()
@@ -276,7 +285,7 @@ async def tunnel_status() -> dict[str, Any]:
 
 
 @router.get("/messages", dependencies=[auth_required])
-async def messages() -> dict[str, list[Any]]:
+async def messages(user_id: int = Depends(require_token)) -> dict[str, list[Any]]:
     """Activity feed (publish events, validations…).
 
     The scheduler appends one entry per target when a scheduled post fires
@@ -284,7 +293,7 @@ async def messages() -> dict[str, list[Any]]:
     activity. Newest-first, capped at services.MAX_MESSAGES.
     """
     from .services import messages_list
-    return {"items": messages_list()}
+    return {"items": messages_list(user_id=user_id)}
 
 
 # ── Generation endpoints ──────────────────────────────────────────────
@@ -378,7 +387,10 @@ async def hashtags(
 
 
 @router.get("/costs/summary", response_model=CostSummary, dependencies=[auth_required])
-async def costs_summary(period: str = "30d") -> CostSummary:
+async def costs_summary(
+    period: str = "30d",
+    user_id: int = Depends(require_token),
+) -> CostSummary:
     """Aggregate AI/media spend over the chosen window.
 
     Periods: ``session`` (all-time, treated equivalently for now),
@@ -393,13 +405,16 @@ async def costs_summary(period: str = "30d") -> CostSummary:
         "session": None,
     }
     secs = seconds_by_label.get(period, 30 * 24 * 3600.0)
-    return CostSummary(**summarize(secs))
+    return CostSummary(**summarize(secs, user_id=user_id))
 
 
 @router.get("/costs/log", response_model=CostLogResponse, dependencies=[auth_required])
-async def costs_log(limit: int = 200) -> CostLogResponse:
+async def costs_log(
+    limit: int = 200,
+    user_id: int = Depends(require_token),
+) -> CostLogResponse:
     from .cost_tracking import list_logs
-    return CostLogResponse(entries=list_logs(limit=limit))
+    return CostLogResponse(entries=list_logs(limit=limit, user_id=user_id))
 
 
 # ── Runtime-editable API keys ────────────────────────────────────────
@@ -448,7 +463,10 @@ async def settings_keys_patch(
 
 
 @router.post("/publish", response_model=PublishResponse, dependencies=[auth_required])
-async def publish(body: PublishRequest) -> PublishResponse:
+async def publish(
+    body: PublishRequest,
+    user_id: int = Depends(require_token),
+) -> PublishResponse:
     """Publish `content` to every selected target.
 
     The frontend sends a list of target ids ({platform, id}) it gathered
@@ -476,7 +494,8 @@ async def publish(body: PublishRequest) -> PublishResponse:
         # cryptic "param message is required" otherwise.
         raise HTTPException(400, "publish requires either content or media_url")
 
-    tokens = _load_tokens()
+    scoped_user_id = user_id if user_id > 0 else None
+    tokens = _load_tokens(scoped_user_id)
     meta_record = tokens.get("meta") or {}
     user_meta_token = meta_record.get("access_token")
 
@@ -560,10 +579,10 @@ async def publish(body: PublishRequest) -> PublishResponse:
             # Without this, every publish past the first day 401s with
             # access_token_invalid until the user manually reconnects.
             from .oauth import resolve_tiktok_access_token
-            token = await resolve_tiktok_access_token()
+            token = await resolve_tiktok_access_token(scoped_user_id)
             # Re-read the record — resolve_tiktok_access_token may have
             # persisted refreshed token + scope back to the store.
-            tokens = _load_tokens()
+            tokens = _load_tokens(scoped_user_id)
             record = tokens.get("tiktok") or {}
             if not token:
                 resolved.append({
@@ -794,9 +813,9 @@ async def search(request: Request, q: str = "") -> SearchResponse:
 # ── Scheduled posts (calendar persistence) ────────────────────────────
 
 @router.get("/posts", response_model=PostsResponse, dependencies=[auth_required])
-async def list_posts() -> PostsResponse:
-    """Return all scheduled posts. Open so the calendar can hydrate on load."""
-    return PostsResponse(posts=posts_list())
+async def list_posts(user_id: int = Depends(require_token)) -> PostsResponse:
+    """Return scheduled posts visible to the authenticated scope."""
+    return PostsResponse(posts=posts_list(user_id=user_id))
 
 
 @router.post(
@@ -804,8 +823,18 @@ async def list_posts() -> PostsResponse:
     response_model=Post,
     dependencies=[auth_required],
 )
-async def create_post(body: PostCreate) -> Post:
-    return Post(**posts_create(body.model_dump()))
+async def create_post(
+    body: PostCreate,
+    user_id: int = Depends(require_token),
+) -> Post:
+    return Post(
+        **posts_create(
+            {
+                **body.model_dump(),
+                "user_id": str(user_id) if user_id > 0 else None,
+            }
+        )
+    )
 
 
 @router.patch(
@@ -813,7 +842,14 @@ async def create_post(body: PostCreate) -> Post:
     response_model=Post,
     dependencies=[auth_required],
 )
-async def patch_post(post_id: str, body: PostUpdate) -> Post:
+async def patch_post(
+    post_id: str,
+    body: PostUpdate,
+    user_id: int = Depends(require_token),
+) -> Post:
+    existing = next((post for post in posts_list(all_users=True) if post.get("id") == post_id), None)
+    if not _record_belongs_to_user(existing, user_id):
+        raise HTTPException(status_code=404, detail="Post not found.")
     updated = posts_update(post_id, body.model_dump())
     if updated is None:
         raise HTTPException(status_code=404, detail="Post not found.")
@@ -821,7 +857,10 @@ async def patch_post(post_id: str, body: PostUpdate) -> Post:
 
 
 @router.delete("/posts/{post_id}", dependencies=[auth_required])
-async def delete_post(post_id: str) -> dict[str, bool]:
+async def delete_post(post_id: str, user_id: int = Depends(require_token)) -> dict[str, bool]:
+    existing = next((post for post in posts_list(all_users=True) if post.get("id") == post_id), None)
+    if not _record_belongs_to_user(existing, user_id):
+        raise HTTPException(status_code=404, detail="Post not found.")
     if not posts_delete(post_id):
         raise HTTPException(status_code=404, detail="Post not found.")
     return {"deleted": True}
@@ -833,8 +872,10 @@ async def delete_post(post_id: str) -> dict[str, bool]:
 
 
 @router.get("/automation-rules", response_model=AutomationRulesResponse, dependencies=[auth_required])
-async def list_automation_rules() -> AutomationRulesResponse:
-    rules = [AutomationRule(**r) for r in automation_list()]
+async def list_automation_rules(
+    user_id: int = Depends(require_token),
+) -> AutomationRulesResponse:
+    rules = [AutomationRule(**r) for r in automation_list(user_id=user_id)]
     return AutomationRulesResponse(rules=rules)
 
 
@@ -843,9 +884,12 @@ async def list_automation_rules() -> AutomationRulesResponse:
     response_model=AutomationRule,
     dependencies=[auth_required],
 )
-async def get_automation_rule(rule_id: str) -> AutomationRule:
+async def get_automation_rule(
+    rule_id: str,
+    user_id: int = Depends(require_token),
+) -> AutomationRule:
     rule = automation_get(rule_id)
-    if rule is None:
+    if rule is None or not _record_belongs_to_user(rule, user_id):
         raise HTTPException(status_code=404, detail="Automation rule not found.")
     return AutomationRule(**rule)
 
@@ -855,9 +899,16 @@ async def get_automation_rule(rule_id: str) -> AutomationRule:
     response_model=AutomationRule,
     dependencies=[auth_required],
 )
-async def create_automation_rule(body: AutomationRule) -> AutomationRule:
+async def create_automation_rule(
+    body: AutomationRule,
+    user_id: int = Depends(require_token),
+) -> AutomationRule:
     # Discard any client-supplied id/timestamps — the store fills them.
-    payload = body.model_dump(exclude={"id", "created_at", "updated_at"})
+    payload = body.model_dump(
+        exclude={"id", "user_id", "created_at", "updated_at", "last_fire_at", "last_error"}
+    )
+    if user_id > 0:
+        payload["user_id"] = str(user_id)
     return AutomationRule(**automation_create(payload))
 
 
@@ -866,13 +917,20 @@ async def create_automation_rule(body: AutomationRule) -> AutomationRule:
     response_model=AutomationRule,
     dependencies=[auth_required],
 )
-async def patch_automation_rule(rule_id: str, body: AutomationRule) -> AutomationRule:
+async def patch_automation_rule(
+    rule_id: str,
+    body: AutomationRule,
+    user_id: int = Depends(require_token),
+) -> AutomationRule:
     # Apply the full body as a patch — automation_update treats None as "skip"
     # so callers can omit fields they don't want to overwrite by sending null.
     existing = automation_get(rule_id)
-    if existing is None:
+    if existing is None or not _record_belongs_to_user(existing, user_id):
         raise HTTPException(status_code=404, detail="Automation rule not found.")
-    patch = body.model_dump(exclude={"id", "created_at", "updated_at"})
+    patch = body.model_dump(
+        exclude={"id", "user_id", "created_at", "updated_at", "last_fire_at", "last_error"}
+    )
+    patch["user_id"] = existing.get("user_id") or (str(user_id) if user_id > 0 else None)
     updated = automation_update(rule_id, patch)
     if updated is None:
         raise HTTPException(status_code=404, detail="Automation rule not found.")
@@ -905,7 +963,13 @@ async def patch_automation_rule(rule_id: str, body: AutomationRule) -> Automatio
 
 
 @router.delete("/automation-rules/{rule_id}", dependencies=[auth_required])
-async def delete_automation_rule(rule_id: str) -> dict[str, bool]:
+async def delete_automation_rule(
+    rule_id: str,
+    user_id: int = Depends(require_token),
+) -> dict[str, bool]:
+    existing = automation_get(rule_id)
+    if existing is None or not _record_belongs_to_user(existing, user_id):
+        raise HTTPException(status_code=404, detail="Automation rule not found.")
     _cancel_open_rule_posts(
         rule_id,
         reason="rule_deleted",

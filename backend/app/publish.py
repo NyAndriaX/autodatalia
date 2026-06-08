@@ -193,9 +193,7 @@ async def _post_json(
             status_code=502,
             detail={
                 "message": upstream,
-                "url": url,
-                "status_code": resp.status_code,
-                "response": resp.text[:800],
+                "upstream_status": resp.status_code,
             },
         )
     try:
@@ -218,9 +216,7 @@ async def _get_json(
             status_code=502,
             detail={
                 "message": upstream,
-                "url": url,
-                "status_code": resp.status_code,
-                "response": resp.text[:800],
+                "upstream_status": resp.status_code,
             },
         )
     return resp.json()
@@ -1217,8 +1213,7 @@ async def _linkedin_upload_image(
                 502,
                 {
                     "message": "LinkedIn image initializeUpload failed.",
-                    "status_code": init_resp.status_code,
-                    "response": init_resp.text[:800],
+                    "upstream_status": init_resp.status_code,
                 },
             )
         init_data = init_resp.json()
@@ -1246,8 +1241,7 @@ async def _linkedin_upload_image(
                 502,
                 {
                     "message": "LinkedIn binary image upload failed.",
-                    "status_code": upload_resp.status_code,
-                    "response": upload_resp.text[:800],
+                    "upstream_status": upload_resp.status_code,
                 },
             )
 
@@ -1340,12 +1334,17 @@ async def publish_linkedin(
                 raw={"response": resp.text[:800]},
             )
         data = resp.json() if resp.text else {}
+        post_id = data.get("id") or resp.headers.get("x-restli-id")
+        permalink = None
+        if post_id and post_id.startswith("urn:li:ugcPost:"):
+            permalink = f"https://www.linkedin.com/feed/update/{post_id}/"
         return PublishResult(
             target_id=member_or_org_urn,
             target_label=label,
             platform="linkedin",
             ok=True,
-            platform_post_id=data.get("id"),
+            platform_post_id=post_id,
+            permalink_url=permalink,
             raw=data,
         )
     except HTTPException as exc:
@@ -1380,6 +1379,7 @@ async def build_targets_from_post(
     link: str | None = None,
     ratios: dict[str, str] | None = None,
     tiktok_options: dict[str, Any] | None = None,
+    user_id: str | int | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Build a publish-ready target list from a Post's `platforms` toggle map.
 
@@ -1397,7 +1397,7 @@ async def build_targets_from_post(
     from .oauth import _load_tokens, _fetch_meta_pages
     from .images import crop_for_targets
 
-    tokens = _load_tokens()
+    tokens = _load_tokens(int(user_id) if str(user_id or "").isdigit() else user_id)
     meta_record = tokens.get("meta") or {}
     user_meta_token = meta_record.get("access_token")
     enabled = [k for k, v in (platforms or {}).items() if v]
@@ -1468,8 +1468,12 @@ async def build_targets_from_post(
             # Refresh TikTok token if it's expired (24h short-lived).
             # Mirrors what /publish does inline.
             from .oauth import resolve_tiktok_access_token
-            token = await resolve_tiktok_access_token()
-            tokens = _load_tokens()
+            token = await resolve_tiktok_access_token(
+                int(user_id) if str(user_id or "").isdigit() else user_id
+            )
+            tokens = _load_tokens(
+                int(user_id) if str(user_id or "").isdigit() else user_id
+            )
             record = tokens.get("tiktok") or {}
             if not token:
                 _skip(

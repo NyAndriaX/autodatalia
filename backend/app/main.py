@@ -7,12 +7,17 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from pillow_heif import register_avif_opener, register_heif_opener
-register_avif_opener()
-register_heif_opener()
+try:
+    from pillow_heif import register_avif_opener, register_heif_opener
+except ImportError:  # pragma: no cover - depends on host env
+    register_avif_opener = None  # type: ignore[assignment]
+    register_heif_opener = None  # type: ignore[assignment]
+else:
+    register_avif_opener()
+    register_heif_opener()
 
 from .config import settings
 from .legal import router as legal_router
@@ -27,7 +32,7 @@ from .telegram_validation import router as telegram_validation_router
 async def lifespan(app: FastAPI):
     # startup
     # Schema bootstrap — runs the CREATE TABLE IF NOT EXISTS up front
-    # with retry/backoff so a Postgres still booting in the next
+    # with retry/backoff so a MariaDB still booting in the next
     # container doesn't crash the API.
     from .db import init_db
     init_db()
@@ -75,6 +80,7 @@ app = FastAPI(title="Caption API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_allow_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -101,6 +107,19 @@ app.include_router(media_generation_router)
 # require publicly-reachable URLs. Served at /privacy and /terms so
 # they're stable regardless of which deployment target is in front.
 app.include_router(legal_router)
+
+
+@app.middleware("http")
+async def add_security_headers(request, call_next):
+    response: Response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=()",
+    )
+    return response
 
 
 # ── TikTok domain verification ────────────────────────────────────────

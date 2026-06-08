@@ -20,6 +20,19 @@ import { PLATFORMS, TONES } from "../../lib/platforms";
 import TimePicker from "./TimePicker";
 
 const LEAD_PRESETS = [5, 30, 60];
+const MIN_AUTOMATION_FIRE_EPOCH = Date.UTC(2000, 0, 1) / 1000;
+
+function hasMeaningfulAutomationTimestamp(value) {
+  const epoch = Number(value);
+  return Number.isFinite(epoch) && epoch >= MIN_AUTOMATION_FIRE_EPOCH;
+}
+
+function formatAutomationTimestamp(value) {
+  if (!hasMeaningfulAutomationTimestamp(value)) return null;
+  const date = new Date(Number(value) * 1000);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString();
+}
 
 function useStaticData() {
   const t = useTranslations("automation");
@@ -110,6 +123,14 @@ function CarteRegle({ rule, active, onClick }) {
   const nbMedia = rule.num_media?.mode === "range"
     ? t("mediaRange", { min: rule.num_media.min, max: rule.num_media.max })
     : t("mediaCount", { n: rule.num_media?.count ?? 1 });
+  const lastFireText = hasMeaningfulAutomationTimestamp(rule.last_fire_at)
+    ? t("lastFireAt", { time: formatAutomationTimestamp(rule.last_fire_at) || "-" })
+    : t("neverFired");
+  const lastErrorText = rule.last_error
+    ? t("lastError", {
+      error: rule.last_error.length > 110 ? `${rule.last_error.slice(0, 107)}...` : rule.last_error,
+    })
+    : "";
   return (
     <button type="button" onClick={onClick}
       className="w-full rounded-2xl p-4 text-left transition-all duration-150"
@@ -147,6 +168,14 @@ function CarteRegle({ rule, active, onClick }) {
         <ListChecks size={10} />
         {rule.content_type ? t(rule.content_type) : "—"} · {nbMedia}
       </div>
+      <div className="mt-1 text-[11px]" style={{ color:"var(--text-muted)" }}>
+        {lastFireText}
+      </div>
+      {lastErrorText ? (
+        <div className="mt-1 text-[11px]" style={{ color:"var(--status-error)" }}>
+          {lastErrorText}
+        </div>
+      ) : null}
     </button>
   );
 }
@@ -388,6 +417,29 @@ export default function AutomationView() {
                     </button>
                   </div>
                 </div>
+
+                {selected && (selected.last_error || hasMeaningfulAutomationTimestamp(selected.last_fire_at)) ? (
+                  <div
+                    className="px-4 py-3 md:px-6"
+                    style={{
+                      background: selected.last_error ? "rgba(239,68,68,.06)" : "rgba(29,63,190,.05)",
+                      borderBottom:"1px solid var(--border-default)",
+                    }}
+                  >
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                      <span style={{ color:"var(--text-muted)" }}>
+                        {hasMeaningfulAutomationTimestamp(selected.last_fire_at)
+                          ? t("lastFireAt", { time: formatAutomationTimestamp(selected.last_fire_at) || "-" })
+                          : t("neverFired")}
+                      </span>
+                      {selected.last_error ? (
+                        <span style={{ color:"var(--status-error)" }}>
+                          {t("lastError", { error: selected.last_error })}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
 
                 {/* onglets */}
                 <div className="flex gap-0 px-4 md:px-6 pt-4 overflow-x-auto"

@@ -2,21 +2,7 @@ import { config } from "./config";
 
 /** Build the headers to send on every API call. */
 function authHeaders(extra) {
-  const base = { "Content-Type": "application/json", ...extra };
-  let token = config.backendAuthToken;
-  try {
-    if (typeof window !== "undefined") {
-      const session = JSON.parse(window.localStorage.getItem("datalia-session"));
-      if (session && session.token) {
-        token = session.token;
-      }
-    }
-  } catch (e) {}
-
-  if (token) {
-    base.Authorization = `Bearer ${token}`;
-  }
-  return base;
+  return { "Content-Type": "application/json", ...extra };
 }
 
 export async function apiFetch(path, options = {}) {
@@ -24,6 +10,7 @@ export async function apiFetch(path, options = {}) {
   const { headers, ...rest } = options;
   const res = await fetch(`${config.apiBaseUrl}${path}`, {
     headers: authHeaders(headers),
+    credentials: "include",
     ...rest,
   });
   if (!res.ok) {
@@ -47,23 +34,9 @@ export async function apiFetch(path, options = {}) {
 /** Same as apiFetch but for multipart (FormData) bodies — no JSON content-type. */
 export async function apiUpload(path, formData) {
   if (!config.apiBaseUrl) throw new Error("NEXT_PUBLIC_API_BASE_URL not configured");
-  const headers = {};
-  let token = config.backendAuthToken;
-  try {
-    if (typeof window !== "undefined") {
-      const session = JSON.parse(window.localStorage.getItem("datalia-session"));
-      if (session && session.token) {
-        token = session.token;
-      }
-    }
-  } catch (e) {}
-
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
   const res = await fetch(`${config.apiBaseUrl}${path}`, {
     method: "POST",
-    headers,
+    credentials: "include",
     body: formData,
   });
   if (!res.ok) {
@@ -77,7 +50,10 @@ export async function apiUpload(path, formData) {
 export async function apiHealthCheck() {
   if (!config.apiBaseUrl) return null;
   try {
-    const res = await fetch(`${config.apiBaseUrl}/health`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${config.apiBaseUrl}/health`, {
+      credentials: "include",
+      signal: AbortSignal.timeout(5000),
+    });
     return res.ok ? "online" : "offline";
   } catch {
     return "offline";

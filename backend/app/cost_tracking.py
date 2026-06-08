@@ -1,51 +1,29 @@
-"""Persistent per-call cost tracking — the backbone of the cost dashboard.
-
-Every real (non-cached) AI call lands a row here with token counts, the
-workflow it belonged to, the LLM tier used, and a calculated USD cost
-based on a static pricing table. The dashboard reads aggregates from
-``cost_logs.json``; the per-call detail view lists rows newest-first.
-
-Pricing table: USD per 1k tokens (prompt/completion split). Numbers track
-OpenRouter's published prices for the listed models as of 2026-05; if
-the model id isn't in the table we fall back to ``_DEFAULT_PRICE`` and
-flag the row so it shows up in the dashboard as "approximate".
-
-Token cost is independent of the LLM tier label — two rules of thumb:
-- ``tier`` tells the UI **why** we picked the model (Fast/Standard/Premium)
-- ``cost_usd`` tells the user **what** that decision cost
-"""
+"""Persistent per-call cost tracking for the dashboard."""
 
 from __future__ import annotations
 
-import json
-import threading
 import time
 import uuid
 from collections import defaultdict
-from pathlib import Path
 from typing import Any
 
-from .config import settings
-
-# ── Pricing table ─────────────────────────────────────────────────────
-# (prompt_per_1k_usd, completion_per_1k_usd). When a model isn't listed,
-# we use _DEFAULT_PRICE which represents a typical mid-tier model so the
-# dashboard never reports zero cost just because we forgot to add a row.
+from .db import (
+    delete_collection_document,
+    list_collection_documents,
+    upsert_collection_document,
+)
 
 _PRICING_USD_PER_1K: dict[str, tuple[float, float]] = {
-    # Fast tier — cheap models for hashtags, descriptions, transforms.
     "google/gemini-2.0-flash-lite-001": (0.000075, 0.0003),
     "google/gemini-flash-1.5-8b": (0.0000375, 0.00015),
     "openai/gpt-4o-mini": (0.00015, 0.0006),
     "anthropic/claude-3-haiku": (0.00025, 0.00125),
     "meta-llama/llama-3.1-8b-instruct": (0.00005, 0.00005),
     "mistralai/mistral-7b-instruct": (0.00007, 0.00007),
-    # Standard tier — variant generation, post composition.
     "google/gemini-2.0-flash-001": (0.000075, 0.0003),
     "google/gemini-pro-1.5": (0.00125, 0.005),
     "openai/gpt-4o": (0.0025, 0.01),
     "anthropic/claude-3.5-sonnet": (0.003, 0.015),
-    # Premium tier — flagship for the rare hard cases.
     "openai/gpt-4-turbo": (0.01, 0.03),
     "anthropic/claude-3-opus": (0.015, 0.075),
     "anthropic/claude-sonnet-4-5": (0.003, 0.015),
@@ -54,10 +32,10 @@ _PRICING_USD_PER_1K: dict[str, tuple[float, float]] = {
 
 _DEFAULT_PRICE = (0.0005, 0.0015)
 _USD_TO_EUR = 0.92
+MAX_LOGS = 5000
 
 
 def price_for_model(model: str) -> tuple[float, float, bool]:
-    """Return (prompt_per_1k, completion_per_1k, exact_match)."""
     if model in _PRICING_USD_PER_1K:
         p, c = _PRICING_USD_PER_1K[model]
         return p, c, True
@@ -65,34 +43,8 @@ def price_for_model(model: str) -> tuple[float, float, bool]:
 
 
 def usd_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    """Estimated USD spent on one call given the token counts."""
     p, c, _ = price_for_model(model)
     return (prompt_tokens / 1000.0) * p + (completion_tokens / 1000.0) * c
-
-
-# ── Persistence ───────────────────────────────────────────────────────
-# Single JSON file, newest-first ring of MAX_LOGS entries. Same pattern
-# as posts/messages so deploy stays simple — no DB required.
-
-_LOG_FILE = settings.content_dir / "cost_logs.json"
-_LOG_LOCK = threading.Lock()
-MAX_LOGS = 5000
-
-
-def _read_raw() -> list[dict[str, Any]]:
-    try:
-        data = json.loads(_LOG_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
-    except FileNotFoundError:
-        return []
-    except Exception:
-        return []
-
-
-def _write_raw(items: list[dict[str, Any]]) -> None:
-    _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    from .services import atomic_write_text
-    atomic_write_text(_LOG_FILE, json.dumps(items, indent=2))
 
 
 def record_call(
@@ -107,14 +59,6 @@ def record_call(
     provider: str = "openrouter",
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Persist one AI call to the cost log. Cached hits land too — with
-    ``cost_usd=0`` — because the dashboard's "tokens saved" stat needs
-    visibility into them.
-
-    Returns the persisted row so the caller can echo cost data back into
-    the API response (the frontend uses this to update its live meter
-    without a second round-trip).
-    """
     total = (prompt_tokens or 0) + (completion_tokens or 0)
     cost = 0.0 if cached else usd_cost(model, prompt_tokens, completion_tokens)
     _, _, exact = price_for_model(model)
@@ -136,11 +80,7 @@ def record_call(
     }
     if metadata:
         row["metadata"] = metadata
-    with _LOG_LOCK:
-        items = _read_raw()
-        items.insert(0, row)
-        del items[MAX_LOGS:]
-        _write_raw(items)
+    _persist_row(row)
     return row
 
 
@@ -153,10 +93,6 @@ def record_media_job(
     user_id: str | int | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Log a media-generation cost (image/video) — providers charge per
-    asset, not per token. We store the dollar cost directly and leave
-    token fields zero so dashboard aggregations stay sane.
-    """
     row = {
         "id": f"cost-{uuid.uuid4().hex[:10]}",
         "ts": time.time(),
@@ -176,30 +112,37 @@ def record_media_job(
     }
     if metadata:
         row["metadata"] = metadata
-    with _LOG_LOCK:
-        items = _read_raw()
-        items.insert(0, row)
-        del items[MAX_LOGS:]
-        _write_raw(items)
+    _persist_row(row)
     return row
 
 
-def list_logs(limit: int = 200) -> list[dict[str, Any]]:
-    """Return up to `limit` recent log rows (newest first)."""
-    with _LOG_LOCK:
-        items = _read_raw()
-    return items[: max(1, limit)]
+def list_logs(
+    limit: int = 200,
+    *,
+    user_id: str | int | None = None,
+    all_users: bool = False,
+) -> list[dict[str, Any]]:
+    return list_collection_documents(
+        "cost_logs",
+        user_id=user_id,
+        all_scopes=all_users,
+        newest_first=True,
+        limit=max(1, limit),
+    )
 
 
-def summarize(period_seconds: float | None = None) -> dict[str, Any]:
-    """Aggregate cost by workflow, tier, model, user. Set period_seconds
-    to None for all-time. Returns a JSON-safe dict.
-    """
+def summarize(
+    period_seconds: float | None = None,
+    *,
+    user_id: str | int | None = None,
+    all_users: bool = False,
+) -> dict[str, Any]:
     cutoff = (time.time() - period_seconds) if period_seconds else 0
-    with _LOG_LOCK:
-        items = _read_raw()
-
-    in_window = [r for r in items if r.get("ts", 0) >= cutoff]
+    in_window = [
+        r
+        for r in list_logs(MAX_LOGS, user_id=user_id, all_users=all_users)
+        if r.get("ts", 0) >= cutoff
+    ]
     total_tokens = sum(r.get("total_tokens", 0) for r in in_window)
     total_cost_usd = sum(r.get("cost_usd", 0.0) for r in in_window)
     total_cost_eur = sum(r.get("cost_eur", 0.0) for r in in_window)
@@ -215,17 +158,23 @@ def summarize(period_seconds: float | None = None) -> dict[str, Any]:
         groups: dict[str, dict[str, Any]] = defaultdict(
             lambda: {"calls": 0, "tokens": 0, "cost_usd": 0.0}
         )
-        for r in in_window:
-            label = r.get(key) or "(unknown)"
-            g = groups[label]
-            g["calls"] += 0 if r.get("cached") else 1
-            g["tokens"] += r.get("total_tokens", 0)
-            g["cost_usd"] += r.get("cost_usd", 0.0)
+        for row in in_window:
+            label = row.get(key) or "(unknown)"
+            group = groups[label]
+            group["calls"] += 0 if row.get("cached") else 1
+            group["tokens"] += row.get("total_tokens", 0)
+            group["cost_usd"] += row.get("cost_usd", 0.0)
         rows = [
-            {"key": k, **{kk: round(vv, 6) if isinstance(vv, float) else vv for kk, vv in v.items()}}
-            for k, v in groups.items()
+            {
+                "key": name,
+                **{
+                    metric: round(value, 6) if isinstance(value, float) else value
+                    for metric, value in payload.items()
+                },
+            }
+            for name, payload in groups.items()
         ]
-        rows.sort(key=lambda r: r["cost_usd"], reverse=True)
+        rows.sort(key=lambda row: row["cost_usd"], reverse=True)
         return rows
 
     return {
@@ -243,3 +192,25 @@ def summarize(period_seconds: float | None = None) -> dict[str, Any]:
         "by_model": _bucket("model"),
         "by_user": _bucket("user_id"),
     }
+
+
+def _persist_row(row: dict[str, Any]) -> None:
+    upsert_collection_document(
+        "cost_logs",
+        row["id"],
+        row,
+        user_id=row.get("user_id"),
+        sort_ts=row["ts"],
+    )
+    _trim_logs()
+
+
+def _trim_logs() -> None:
+    items = list_collection_documents(
+        "cost_logs", all_scopes=True, newest_first=True, limit=MAX_LOGS + 200
+    )
+    for row in items[MAX_LOGS:]:
+        doc_id = row.get("id")
+        if not doc_id:
+            continue
+        delete_collection_document("cost_logs", str(doc_id), user_id=row.get("user_id"))

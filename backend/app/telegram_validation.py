@@ -32,12 +32,21 @@ import asyncio  # noqa: E402
 router = APIRouter(tags=["telegram-validation"])
 
 
+def _require_webhook_secret() -> str:
+    if settings.telegram_bot_token and not settings.telegram_webhook_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Telegram webhook secret is not configured.",
+        )
+    return settings.telegram_webhook_secret
+
+
 def _telegram_configured(user_id: str | int | None = None) -> bool:
     return bool(resolved_settings(user_id).telegram_bot_token)
 
 
 def _find_post(post_id: str) -> dict[str, Any] | None:
-    for post in posts_list():
+    for post in posts_list(all_users=True):
         if post.get("id") == post_id:
             return post
     return None
@@ -85,7 +94,12 @@ def _timeout_text(post: dict[str, Any]) -> str:
     )
 
 
-async def send_timeout_prompt(post: dict[str, Any], chat_id: str) -> int:
+async def send_timeout_prompt(
+    post: dict[str, Any],
+    chat_id: str,
+    *,
+    user_id: str | int | None = None,
+) -> int:
     """Send the timeout-decision follow-up. Returns the Telegram message id
     so the worker can record it on the post (idempotency)."""
     result = await _telegram_call(
@@ -95,6 +109,7 @@ async def send_timeout_prompt(post: dict[str, Any], chat_id: str) -> int:
             "text": _timeout_text(post),
             "reply_markup": _timeout_keyboard(post["id"]),
         },
+        user_id=user_id,
     )
     return int(result.get("message_id") or 0)
 
@@ -136,8 +151,7 @@ async def _telegram_call(
             status_code=502,
             detail={
                 "message": f"Telegram {method} failed.",
-                "status_code": resp.status_code,
-                "response": resp.text[:800],
+                "upstream_status": resp.status_code,
             },
         )
     data = resp.json()
@@ -172,7 +186,12 @@ def _collect_media_for_telegram(post: dict[str, Any]) -> list[dict[str, str]]:
     return items
 
 
-async def _send_validation_card(post: dict[str, Any], chat_id: str) -> int:
+async def _send_validation_card(
+    post: dict[str, Any],
+    chat_id: str,
+    *,
+    user_id: str | int | None = None,
+) -> int:
     """Send the validation prompt to Telegram. Picks the best transport
     based on what the post carries:
 
@@ -195,6 +214,7 @@ async def _send_validation_card(post: dict[str, Any], chat_id: str) -> int:
         result = await _telegram_call(
             "sendMessage",
             {"chat_id": chat_id, "text": text, "reply_markup": keyboard},
+            user_id=user_id,
         )
         return int(result.get("message_id") or 0)
 
@@ -209,6 +229,7 @@ async def _send_validation_card(post: dict[str, Any], chat_id: str) -> int:
             await _telegram_call(
                 "sendMediaGroup",
                 {"chat_id": chat_id, "media": group},
+                user_id=user_id,
             )
         except HTTPException:
             # If the group send fails (e.g. one URL unreachable), fall
@@ -217,6 +238,7 @@ async def _send_validation_card(post: dict[str, Any], chat_id: str) -> int:
         result = await _telegram_call(
             "sendMessage",
             {"chat_id": chat_id, "text": text, "reply_markup": keyboard},
+            user_id=user_id,
         )
         return int(result.get("message_id") or 0)
 
@@ -235,6 +257,7 @@ async def _send_validation_card(post: dict[str, Any], chat_id: str) -> int:
                 "caption": text,
                 "reply_markup": keyboard,
             },
+            user_id=user_id,
         )
         return int(result.get("message_id") or 0)
 
@@ -244,23 +267,31 @@ async def _send_validation_card(post: dict[str, Any], chat_id: str) -> int:
         await _telegram_call(
             method,
             {"chat_id": chat_id, media_field: item["url"]},
+            user_id=user_id,
         )
     except HTTPException:
         pass
     result = await _telegram_call(
         "sendMessage",
         {"chat_id": chat_id, "text": text, "reply_markup": keyboard},
+        user_id=user_id,
     )
     return int(result.get("message_id") or 0)
 
 
-async def _answer_callback(callback_query_id: str, text: str = "") -> None:
+async def _answer_callback(
+    callback_query_id: str,
+    text: str = "",
+    *,
+    user_id: str | int | None = None,
+) -> None:
     await _telegram_call(
         "answerCallbackQuery",
         {
             "callback_query_id": callback_query_id,
             **({"text": text} if text else {}),
         },
+        user_id=user_id,
     )
 
 
@@ -302,9 +333,14 @@ async def _publish_manual(post: dict[str, Any], chat_id: str, fire_post) -> None
             {"status": "error", "error": f"manual_approve_publish: {exc}"[:300]},
         )
         text = f"⚠ Publishing post {post['id']} crashed: {exc}"
-    if chat_id and _telegram_configured():
+    post_user_id = post.get("user_id")
+    if chat_id and _telegram_configured(post_user_id):
         try:
-            await _telegram_call("sendMessage", {"chat_id": chat_id, "text": text})
+            await _telegram_call(
+                "sendMessage",
+                {"chat_id": chat_id, "text": text},
+                user_id=post_user_id,
+            )
         except Exception:
             pass  # never re-raise from the background task
 
@@ -425,6 +461,7 @@ async def submit_for_validation(
     user_id: int = Depends(require_token),
 ) -> ValidationSubmitResponse:
     cfg = resolved_settings(user_id)
+    _require_webhook_secret()
     if not cfg.telegram_bot_token:
         raise HTTPException(409, "Telegram bot is not configured.")
     chat_id = (body.chat_id or cfg.telegram_default_chat_id).strip()
@@ -438,7 +475,7 @@ async def submit_for_validation(
     else:
         post = posts_create(payload)
 
-    message_id = await _send_validation_card(post, chat_id)
+    message_id = await _send_validation_card(post, chat_id, user_id=user_id)
     post = posts_update(
         post["id"],
         {
@@ -469,8 +506,8 @@ async def telegram_webhook(
     update: dict[str, Any],
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> dict[str, bool]:
-    expected = settings.telegram_webhook_secret
-    if expected and x_telegram_bot_api_secret_token != expected:
+    expected = _require_webhook_secret()
+    if x_telegram_bot_api_secret_token != expected:
         raise HTTPException(401, "Invalid Telegram webhook secret.")
 
     callback = update.get("callback_query") or {}
@@ -486,6 +523,7 @@ async def telegram_webhook(
             if not post:
                 await _answer_callback(callback_id, "Post no longer exists.")
                 return {"ok": True}
+            post_user_id = post.get("user_id")
             if action == "a":
                 # Two paths:
                 #   Automation-sourced (has source_rule_id + scheduled_for
@@ -527,6 +565,7 @@ async def telegram_webhook(
                         await _answer_callback(
                             callback_id,
                             "Rule changed. Wait for a fresh validation card.",
+                            user_id=post_user_id,
                         )
                         return {"ok": True}
                     posts_update(
@@ -546,7 +585,9 @@ async def telegram_webhook(
                             ),
                         }
                     )
-                    await _answer_callback(callback_id, "Approved — scheduled.")
+                    await _answer_callback(
+                        callback_id, "Approved — scheduled.", user_id=post_user_id
+                    )
                 else:
                     posts_update(
                         post_id,
@@ -565,7 +606,9 @@ async def telegram_webhook(
                             ),
                         }
                     )
-                    await _answer_callback(callback_id, "Approved — publishing.")
+                    await _answer_callback(
+                        callback_id, "Approved — publishing.", user_id=post_user_id
+                    )
                     # Fire in the background so the webhook returns fast
                     # (Telegram expects a webhook response within ~15s,
                     # and a publish call can take 30s+ for video). The
@@ -596,7 +639,9 @@ async def telegram_webhook(
                         "message": f"Post {post_id} rejected in Telegram.",
                     }
                 )
-                await _answer_callback(callback_id, "Rejected.")
+                await _answer_callback(
+                    callback_id, "Rejected.", user_id=post_user_id
+                )
             elif action == "e":
                 prompt_msg = await _telegram_call(
                     "sendMessage",
@@ -605,6 +650,7 @@ async def telegram_webhook(
                         "text": "Reply to this message with the changes you want. Datalia will rewrite the post and send it back for approval.",
                         "reply_markup": {"force_reply": True, "input_field_placeholder": "What should change?"},
                     },
+                    user_id=post_user_id,
                 )
                 posts_update(
                     post_id,
@@ -613,7 +659,11 @@ async def telegram_webhook(
                         "telegram_feedback_prompt_message_id": int(prompt_msg.get("message_id") or 0),
                     },
                 )
-                await _answer_callback(callback_id, "Send your edits as a reply.")
+                await _answer_callback(
+                    callback_id,
+                    "Send your edits as a reply.",
+                    user_id=post_user_id,
+                )
         elif len(parts) == 3 and parts[0] == "to":
             # Timeout-prompt callbacks. Only valid for automation-sourced
             # posts still in awaiting_validation — defensive checks so
@@ -623,10 +673,12 @@ async def telegram_webhook(
             if not post:
                 await _answer_callback(callback_id, "Post no longer exists.")
                 return {"ok": True}
+            post_user_id = post.get("user_id")
             if post.get("status") != "awaiting_validation":
                 await _answer_callback(
                     callback_id,
                     f"Already {post.get('status')} — no action taken.",
+                    user_id=post_user_id,
                 )
                 return {"ok": True}
             if action == "s":
@@ -634,7 +686,9 @@ async def telegram_webhook(
                 # missed it and wants another chance to approve. Clears
                 # the timeout marker so the worker can send a new prompt
                 # if it still doesn't get an answer.
-                new_card_id = await _send_validation_card(post, chat_id)
+                new_card_id = await _send_validation_card(
+                    post, chat_id, user_id=post_user_id
+                )
                 posts_update(post_id, {
                     "telegram_chat_id": chat_id,
                     "telegram_message_id": new_card_id,
@@ -646,7 +700,9 @@ async def telegram_webhook(
                     "post_id": post_id,
                     "message": f"Validation card for {post_id} resent after timeout.",
                 })
-                await _answer_callback(callback_id, "Card resent.")
+                await _answer_callback(
+                    callback_id, "Card resent.", user_id=post_user_id
+                )
             elif action == "g":
                 # Trigger a fresh AI generation, replacing the candidate's
                 # caption and media. The new card is sent in-line so the
@@ -655,9 +711,15 @@ async def telegram_webhook(
                 from .automation_worker import regenerate_for_post  # type: ignore
                 try:
                     await regenerate_for_post(post)
-                    await _answer_callback(callback_id, "Regenerating…")
+                    await _answer_callback(
+                        callback_id, "Regenerating…", user_id=post_user_id
+                    )
                 except Exception as exc:
-                    await _answer_callback(callback_id, f"Regen failed: {exc}")
+                    await _answer_callback(
+                        callback_id,
+                        f"Regen failed: {exc}",
+                        user_id=post_user_id,
+                    )
             elif action == "c":
                 posts_update(post_id, {
                     "status": "cancelled",
@@ -669,7 +731,9 @@ async def telegram_webhook(
                     "post_id": post_id,
                     "message": f"Auto-generated post {post_id} cancelled at timeout.",
                 })
-                await _answer_callback(callback_id, "Cancelled.")
+                await _answer_callback(
+                    callback_id, "Cancelled.", user_id=post_user_id
+                )
         return {"ok": True}
 
     message = update.get("message") or {}
@@ -680,7 +744,7 @@ async def telegram_webhook(
         target = next(
             (
                 post
-                for post in posts_list()
+                for post in posts_list(all_users=True)
                 if int(post.get("telegram_feedback_prompt_message_id") or 0) == int(reply_to)
                 and str(post.get("telegram_chat_id") or "") == chat_id
             ),
@@ -696,13 +760,21 @@ async def telegram_webhook(
                 target["id"],
                 {
                     "content": rewritten,
-                    "status": "pending",
+                    "status": (
+                        "awaiting_validation"
+                        if target.get("source_rule_id")
+                        else "pending"
+                    ),
                     "error": "",
                     "validation_feedback": text,
                     "telegram_feedback_prompt_message_id": 0,
                 },
             ) or target
-            new_message_id = await _send_validation_card(updated, chat_id)
+            new_message_id = await _send_validation_card(
+                updated,
+                chat_id,
+                user_id=updated.get("user_id"),
+            )
             posts_update(
                 updated["id"],
                 {

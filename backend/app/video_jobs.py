@@ -35,6 +35,12 @@ from typing import Any
 import httpx
 
 from .config import settings
+from .db import (
+    delete_collection_document,
+    get_collection_document,
+    list_collection_documents,
+    upsert_collection_document,
+)
 from .runtime_config import resolved_settings
 
 log = logging.getLogger("datalia.video_jobs")
@@ -70,42 +76,62 @@ def _write_raw(items: list[dict[str, Any]]) -> None:
     atomic_write_text(_JOBS_FILE, json.dumps(items, indent=2))
 
 
-def list_jobs() -> list[dict[str, Any]]:
+def list_jobs(
+    user_id: str | int | None = None,
+    *,
+    all_users: bool = False,
+) -> list[dict[str, Any]]:
     with _JOBS_LOCK:
-        return list(_read_raw())
+        return list_collection_documents(
+            "video_jobs",
+            user_id=user_id,
+            all_scopes=all_users,
+            newest_first=True,
+        )
 
 
-def get_job(job_id: str) -> dict[str, Any] | None:
+def get_job(
+    job_id: str,
+    *,
+    user_id: str | int | None = None,
+    all_users: bool = False,
+) -> dict[str, Any] | None:
     with _JOBS_LOCK:
-        for job in _read_raw():
-            if job.get("id") == job_id:
-                return dict(job)
-    return None
+        return get_collection_document(
+            "video_jobs",
+            job_id,
+            user_id=user_id,
+            all_scopes=all_users,
+        )
 
 
 def _save_job(job: dict[str, Any]) -> None:
     with _JOBS_LOCK:
-        jobs = _read_raw()
-        for i, existing in enumerate(jobs):
-            if existing.get("id") == job["id"]:
-                jobs[i] = job
-                break
-        else:
-            jobs.insert(0, job)
-            del jobs[MAX_JOBS:]
-        _write_raw(jobs)
+        upsert_collection_document(
+            "video_jobs",
+            job["id"],
+            job,
+            user_id=job.get("user_id"),
+            sort_ts=job.get("created_at") or time.time(),
+        )
+        _trim_jobs()
 
 
 def _update_job(job_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
     with _JOBS_LOCK:
-        jobs = _read_raw()
-        for job in jobs:
-            if job.get("id") == job_id:
-                for k, v in patch.items():
-                    job[k] = v
-                _write_raw(jobs)
-                return dict(job)
-    return None
+        job = get_collection_document("video_jobs", job_id, all_scopes=True)
+        if job is None:
+            return None
+        for k, v in patch.items():
+            job[k] = v
+        upsert_collection_document(
+            "video_jobs",
+            job_id,
+            job,
+            user_id=job.get("user_id"),
+            sort_ts=job.get("created_at") or time.time(),
+        )
+        return dict(job)
 
 
 def _claim_job(job_id: str, *, expected_status: str, patch: dict[str, Any]) -> dict[str, Any] | None:
@@ -115,48 +141,95 @@ def _claim_job(job_id: str, *, expected_status: str, patch: dict[str, Any]) -> d
     match (i.e. someone else already claimed it).
     """
     with _JOBS_LOCK:
-        jobs = _read_raw()
-        for job in jobs:
-            if job.get("id") == job_id:
-                if job.get("status") != expected_status:
-                    return None
-                for k, v in patch.items():
-                    job[k] = v
-                _write_raw(jobs)
-                return dict(job)
-    return None
+        job = get_collection_document("video_jobs", job_id, all_scopes=True)
+        if job is None or job.get("status") != expected_status:
+            return None
+        for k, v in patch.items():
+            job[k] = v
+        upsert_collection_document(
+            "video_jobs",
+            job_id,
+            job,
+            user_id=job.get("user_id"),
+            sort_ts=job.get("created_at") or time.time(),
+        )
+        return dict(job)
 
 
 def delete_job(job_id: str) -> bool:
     with _JOBS_LOCK:
-        jobs = _read_raw()
-        remaining = [j for j in jobs if j.get("id") != job_id]
-        if len(remaining) == len(jobs):
+        job = get_collection_document("video_jobs", job_id, all_scopes=True)
+        if job is None:
             return False
-        _write_raw(remaining)
-        return True
+        return delete_collection_document(
+            "video_jobs",
+            job_id,
+            user_id=job.get("user_id"),
+        )
+
+
+def _trim_jobs() -> None:
+    jobs = list_collection_documents(
+        "video_jobs", all_scopes=True, newest_first=True, limit=MAX_JOBS + 50
+    )
+    for stale in jobs[MAX_JOBS:]:
+        stale_id = stale.get("id")
+        if not stale_id:
+            continue
+        delete_collection_document(
+            "video_jobs",
+            str(stale_id),
+            user_id=stale.get("user_id"),
+        )
 
 
 # ── Provider selection ────────────────────────────────────────────────
 
 
-def _pick_provider(requested: str | None, *, user_id: str | int | None = None) -> str:
-    """Resolve the effective provider for a job.
+def _openrouter_video_config(
+    user_id: str | int | None = None,
+) -> tuple[str, str] | tuple[None, None]:
+    """Return ``(base_url, api_key)`` for OpenRouter video when configured.
 
-    Datalia is wired to **fal.ai as the sole real provider** — same LTX
-    model the CEO asked for, $0.02 per video flat. Replicate code paths
-    stay in the codebase for the historical / fallback option but are
-    not auto-selected. Order on auto:
-      1. fal.ai (if FAL_API_KEY is set)
-      2. fallback (ffmpeg Ken Burns — always works, no external bill)
-
-    User-requested overrides honour the explicit choice when configured;
-    Replicate must be requested by id to be reached.
+    Prefer the dedicated AI_VIDEO_* pair when it points at OpenRouter so
+    a broken general-purpose text key doesn't poison video generation.
+    Fall back to the editable shared AI key/base after that so per-user
+    runtime overrides still apply when no video-specific key is set.
     """
     cfg = resolved_settings(user_id)
+    candidates = (
+        (cfg.ai_video_api_base_url, cfg.ai_video_api_key),
+        (cfg.ai_api_base_url, cfg.ai_api_key),
+    )
+    for base_url, api_key in candidates:
+        if api_key and "openrouter.ai" in (base_url or ""):
+            return base_url.rstrip("/"), api_key
+    return None, None
+
+
+def _pick_provider(
+    requested: str | None,
+    *,
+    model_id: str | None = None,
+    user_id: str | int | None = None,
+) -> str:
+    """Resolve the effective provider for a job.
+
+    Auto order stays cost-conscious and conservative:
+      1. fal.ai (if FAL_API_KEY is set)
+      2. LTX official (if LTX_API_KEY is set)
+      3. fallback (ffmpeg Ken Burns — always works, no external bill)
+
+    OpenRouter is available for explicit model selection but is not
+    auto-picked ahead of fal/LTX so existing deployments keep their
+    current spend/performance profile.
+    """
+    cfg = resolved_settings(user_id)
+    or_base, or_key = _openrouter_video_config(user_id)
     configured = {
         "ltx": bool(cfg.ltx_api_key),
         "fal": bool(cfg.fal_api_key),
+        "openrouter": bool(or_base and or_key),
         # Kept for explicit opt-in: a caller can still pass
         # provider="replicate" if they want the version-pinned route.
         "replicate": bool(
@@ -169,8 +242,12 @@ def _pick_provider(requested: str | None, *, user_id: str | int | None = None) -
         ),
         "fallback": True,
     }
-    if requested in configured and configured[requested]:
+    if requested in configured:
         return requested
+    if model_id in OPENROUTER_MODEL_SPECS:
+        return "openrouter"
+    if model_id in FAL_MODEL_SPECS:
+        return "fal"
     # Auto / unsupported / unconfigured request — fal.ai first (team has
     # a topped-up balance there), then LTX official (100 free credits),
     # then the ffmpeg Ken Burns fallback.
@@ -186,6 +263,8 @@ def _model_for_provider(provider: str, *, user_id: str | int | None = None) -> s
         return cfg.ltx_video_model
     if provider == "replicate":
         return cfg.replicate_video_model
+    if provider == "openrouter":
+        return cfg.ai_video_model or "google/veo-3.1-lite"
     if provider == "fal":
         return cfg.fal_video_model
     return "ken-burns-ffmpeg"
@@ -202,6 +281,7 @@ def create_job(
     image_filename: str | None = None,
     provider: str | None = None,
     user_id: str | int | None = None,
+    model_id: str | None = None,
     fal_model: str | None = None,
     quality: str | None = None,
     mode: str | None = None,
@@ -209,9 +289,9 @@ def create_job(
     """Persist a queued job. The worker loop picks it up on the next tick.
 
     Optional params:
-      * ``fal_model`` — pin a specific fal model id from FAL_MODEL_SPECS
-        (overrides ``settings.fal_video_model``). Only meaningful when the
-        provider resolves to ``fal``.
+      * ``model_id`` — pin a specific provider model id returned by
+        ``/video-models``.
+      * ``fal_model`` — deprecated alias retained for older frontends.
       * ``quality`` — hint passed to the model's ``build_inputs`` callable
         (currently used by Kling/Hailuo to pick standard vs master / pro).
       * ``mode`` — ``text``/``image``/``ugc``. Recorded for analytics; the
@@ -221,23 +301,20 @@ def create_job(
 
     Returns the created Job dict — caller responds to the client with this.
     """
-    cfg = resolved_settings(user_id)
-    chosen = _pick_provider(provider, user_id=user_id)
+    requested_model = model_id or fal_model
+    chosen = _pick_provider(provider, model_id=requested_model, user_id=user_id)
     # Resolve the effective model label shown on the job record. For
-    # the fal provider this prefers the per-job override; for others it
-    # falls back to the provider's configured default.
-    effective_model = (
-        fal_model or cfg.fal_video_model
-        if chosen == "fal"
-        else _model_for_provider(chosen, user_id=user_id)
-    )
+    # providers with a selectable registry this prefers the per-job
+    # override; for others it falls back to the provider default.
+    effective_model = requested_model or _model_for_provider(chosen, user_id=user_id)
     job = {
         "id": f"vid-{uuid.uuid4().hex[:10]}",
         "user_id": str(user_id) if user_id is not None else None,
         "status": "queued",
         "provider": chosen,
         "model": effective_model,
-        "fal_model": fal_model if chosen == "fal" else None,
+        "model_id": requested_model,
+        "fal_model": requested_model if chosen == "fal" else None,
         "quality": quality,
         "mode": mode,
         "prompt": prompt,
@@ -673,6 +750,23 @@ FAL_MODEL_SPECS: dict[str, dict[str, Any]] = {
             "supports_ugc": False,
         },
     },
+    # Veo 3.1 Lite — Google's cheaper practical tier. At our current
+    # silent 1080p settings, fal prices it at ~$0.05/s.
+    "fal-ai/veo3.1/lite": {
+        "label": "Veo 3.1 Lite (Google Practical)",
+        "endpoints": {
+            "text_to_video": "fal-ai/veo3.1/lite",
+            "image_to_video": "fal-ai/veo3.1/lite/image-to-video",
+        },
+        "build_inputs": _veo_common_inputs,
+        "cost_per_second_usd": 0.05,
+        "features": {
+            "image_to_video": True,
+            "audio": True,
+            "max_duration_seconds": 8,
+            "supports_ugc": False,
+        },
+    },
     # Veo 3.1 Standard — Google's flagship high-quality tier ($0.20/s).
     "fal-ai/veo3.1": {
         "label": "Veo 3.1 Standard (Google Flagship)",
@@ -757,18 +851,195 @@ FAL_MODEL_SPECS: dict[str, dict[str, Any]] = {
 }
 
 
-def list_fal_models() -> list[dict[str, Any]]:
-    """Public catalogue exposed via /video-models. Strips the callable
-    so the response is JSON-serializable."""
+def _openrouter_spec(
+    *,
+    label: str,
+    cost_per_second_usd: float,
+    max_duration_seconds: int,
+    audio: bool,
+    image_to_video: bool,
+    supported_aspect_ratios: tuple[str, ...],
+    supported_resolutions: tuple[str, ...],
+) -> dict[str, Any]:
+    return {
+        "label": label,
+        "cost_per_second_usd": cost_per_second_usd,
+        "features": {
+            "image_to_video": image_to_video,
+            "audio": audio,
+            "max_duration_seconds": max_duration_seconds,
+            "supports_ugc": False,
+            "supported_aspect_ratios": list(supported_aspect_ratios),
+        },
+        "supported_resolutions": list(supported_resolutions),
+        "endpoints": {
+            "text_to_video": "videos.create",
+            **({"image_to_video": "videos.create"} if image_to_video else {}),
+        },
+    }
+
+
+OPENROUTER_MODEL_SPECS: dict[str, dict[str, Any]] = {
+    # Pricing/capability values were taken from OpenRouter's official
+    # /api/v1/videos/models catalogue on 2026-06-05. Costs below reflect
+    # our cheapest default render path (silent where supported, lowest
+    # practical resolution) so the picker stays spend-conscious.
+    "google/veo-3.1-lite": _openrouter_spec(
+        label="OpenRouter - Veo 3.1 Lite",
+        cost_per_second_usd=0.03,
+        max_duration_seconds=8,
+        audio=True,
+        image_to_video=True,
+        supported_aspect_ratios=("16:9", "9:16"),
+        supported_resolutions=("720p", "1080p"),
+    ),
+    "google/veo-3.1-fast": _openrouter_spec(
+        label="OpenRouter - Veo 3.1 Fast",
+        cost_per_second_usd=0.08,
+        max_duration_seconds=8,
+        audio=True,
+        image_to_video=True,
+        supported_aspect_ratios=("16:9", "9:16"),
+        supported_resolutions=("720p", "1080p", "4K"),
+    ),
+    "google/veo-3.1": _openrouter_spec(
+        label="OpenRouter - Veo 3.1",
+        cost_per_second_usd=0.20,
+        max_duration_seconds=8,
+        audio=True,
+        image_to_video=True,
+        supported_aspect_ratios=("16:9", "9:16"),
+        supported_resolutions=("720p", "1080p", "4K"),
+    ),
+    "openai/sora-2-pro": _openrouter_spec(
+        label="OpenRouter - Sora 2 Pro",
+        cost_per_second_usd=0.30,
+        max_duration_seconds=20,
+        audio=True,
+        image_to_video=False,
+        supported_aspect_ratios=("16:9", "9:16"),
+        supported_resolutions=("720p", "1080p"),
+    ),
+    "kwaivgi/kling-v3.0-std": _openrouter_spec(
+        label="OpenRouter - Kling v3.0 Standard",
+        cost_per_second_usd=0.084,
+        max_duration_seconds=15,
+        audio=True,
+        image_to_video=True,
+        supported_aspect_ratios=("16:9", "9:16", "1:1"),
+        supported_resolutions=("720p",),
+    ),
+    "kwaivgi/kling-v3.0-pro": _openrouter_spec(
+        label="OpenRouter - Kling v3.0 Pro",
+        cost_per_second_usd=0.112,
+        max_duration_seconds=15,
+        audio=True,
+        image_to_video=True,
+        supported_aspect_ratios=("16:9", "9:16", "1:1"),
+        supported_resolutions=("720p",),
+    ),
+    "kwaivgi/kling-video-o1": _openrouter_spec(
+        label="OpenRouter - Kling Video O1",
+        cost_per_second_usd=0.112,
+        max_duration_seconds=10,
+        audio=True,
+        image_to_video=True,
+        supported_aspect_ratios=("16:9", "9:16", "1:1"),
+        supported_resolutions=("720p",),
+    ),
+    "minimax/hailuo-2.3": _openrouter_spec(
+        label="OpenRouter - Hailuo 2.3",
+        cost_per_second_usd=0.0817,
+        max_duration_seconds=10,
+        audio=False,
+        image_to_video=True,
+        supported_aspect_ratios=("16:9",),
+        supported_resolutions=("1080p",),
+    ),
+    "bytedance/seedance-1-5-pro": _openrouter_spec(
+        label="OpenRouter - Seedance 1.5 Pro",
+        cost_per_second_usd=0.0115,
+        max_duration_seconds=12,
+        audio=True,
+        image_to_video=True,
+        supported_aspect_ratios=("16:9", "9:16", "1:1", "4:3", "3:4"),
+        supported_resolutions=("480p", "720p", "1080p"),
+    ),
+    "bytedance/seedance-2.0-fast": _openrouter_spec(
+        label="OpenRouter - Seedance 2.0 Fast",
+        cost_per_second_usd=0.0538,
+        max_duration_seconds=15,
+        audio=True,
+        image_to_video=True,
+        supported_aspect_ratios=("16:9", "9:16", "1:1", "4:3", "3:4"),
+        supported_resolutions=("480p", "720p"),
+    ),
+    "bytedance/seedance-2.0": _openrouter_spec(
+        label="OpenRouter - Seedance 2.0",
+        cost_per_second_usd=0.0673,
+        max_duration_seconds=15,
+        audio=True,
+        image_to_video=True,
+        supported_aspect_ratios=("16:9", "9:16", "1:1", "4:3", "3:4"),
+        supported_resolutions=("480p", "720p"),
+    ),
+    "alibaba/wan-2.7": _openrouter_spec(
+        label="OpenRouter - Wan 2.7",
+        cost_per_second_usd=0.10,
+        max_duration_seconds=10,
+        audio=True,
+        image_to_video=True,
+        supported_aspect_ratios=("16:9", "9:16", "1:1", "4:3", "3:4"),
+        supported_resolutions=("720p", "1080p"),
+    ),
+    "alibaba/wan-2.6": _openrouter_spec(
+        label="OpenRouter - Wan 2.6",
+        cost_per_second_usd=0.08,
+        max_duration_seconds=10,
+        audio=True,
+        image_to_video=True,
+        supported_aspect_ratios=("16:9", "9:16"),
+        supported_resolutions=("720p", "1080p"),
+    ),
+    "x-ai/grok-imagine-video": _openrouter_spec(
+        label="OpenRouter - Grok Imagine Video",
+        cost_per_second_usd=0.05,
+        max_duration_seconds=15,
+        audio=False,
+        image_to_video=True,
+        supported_aspect_ratios=("16:9", "9:16", "1:1", "4:3", "3:4"),
+        supported_resolutions=("480p", "720p"),
+    ),
+}
+
+
+def _catalog_entry(
+    model_id: str,
+    spec: dict[str, Any],
+    *,
+    provider: str,
+) -> dict[str, Any]:
+    return {
+        "id": model_id,
+        "label": spec["label"],
+        "provider": provider,
+        "features": spec["features"],
+        "cost_per_second_usd": spec["cost_per_second_usd"],
+        "endpoints": list(spec["endpoints"].keys()),
+    }
+
+
+def list_video_models() -> list[dict[str, Any]]:
+    """Public catalogue exposed via /video-models."""
     return [
-        {
-            "id": model_id,
-            "label": spec["label"],
-            "features": spec["features"],
-            "cost_per_second_usd": spec["cost_per_second_usd"],
-            "endpoints": list(spec["endpoints"].keys()),
-        }
-        for model_id, spec in FAL_MODEL_SPECS.items()
+        *[
+            _catalog_entry(model_id, spec, provider="fal")
+            for model_id, spec in FAL_MODEL_SPECS.items()
+        ],
+        *[
+            _catalog_entry(model_id, spec, provider="openrouter")
+            for model_id, spec in OPENROUTER_MODEL_SPECS.items()
+        ],
     ]
 
 
@@ -838,10 +1109,10 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
     if job.get("image_filename"):
         public_image_url = _public_url_for_local(job["image_filename"])
 
-    # The job carries either an explicit model override (job["fal_model"])
+    # The job carries either an explicit model override (job["model_id"])
     # or falls back to settings.fal_video_model. Pick the spec from the
     # registry so the right body shape + endpoint get used per model.
-    requested_model = job.get("fal_model") or cfg.fal_video_model
+    requested_model = job.get("model_id") or job.get("fal_model") or cfg.fal_video_model
     spec = FAL_MODEL_SPECS.get(requested_model) or FAL_MODEL_SPECS["fal-ai/ltx-video"]
     # Image-to-video endpoint when a reference image is supplied AND the
     # model supports it; otherwise text-to-video.
@@ -991,6 +1262,187 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
     }) or job
 
 
+def _openrouter_aspect_ratio(ratio: str, supported: list[str]) -> str:
+    if ratio in supported:
+        return ratio
+    if ratio == "4:5" and "9:16" in supported:
+        return "9:16"
+    if ratio == "1:1" and "1:1" in supported:
+        return "1:1"
+    if ratio == "16:9" and "16:9" in supported:
+        return "16:9"
+    if "9:16" in supported:
+        return "9:16"
+    if "16:9" in supported:
+        return "16:9"
+    return supported[0] if supported else "9:16"
+
+
+def _openrouter_resolution(spec: dict[str, Any]) -> str:
+    supported = list(spec.get("supported_resolutions") or [])
+    for candidate in ("480p", "720p", "1080p", "4K"):
+        if candidate in supported:
+            return candidate
+    return supported[0] if supported else "720p"
+
+
+def _openrouter_duration(duration_seconds: int, spec: dict[str, Any]) -> int:
+    supported = sorted(
+        int(value) for value in (spec.get("features", {}).get("max_duration_seconds"),)
+        if value
+    )
+    if supported:
+        return min(max(1, duration_seconds), supported[-1])
+    return duration_seconds
+
+
+def _openrouter_usage_cost(body: dict[str, Any]) -> float | None:
+    usage = body.get("usage") or {}
+    raw = usage.get("cost")
+    try:
+        return round(float(raw), 4) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def _run_openrouter_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Submit a video job to OpenRouter's async /videos API."""
+    base_url, api_key = _openrouter_video_config(job.get("user_id"))
+    if not base_url or not api_key:
+        raise RuntimeError("OpenRouter video is not configured")
+
+    requested_model = job.get("model_id") or _model_for_provider("openrouter", user_id=job.get("user_id"))
+    spec = OPENROUTER_MODEL_SPECS.get(requested_model)
+    if not spec:
+        raise RuntimeError(f"Unknown OpenRouter video model: {requested_model}")
+
+    public_image_url = None
+    if job.get("image_filename") and spec.get("features", {}).get("image_to_video"):
+        public_image_url = _public_url_for_local(job["image_filename"])
+
+    prompt_to_use = job["prompt"]
+    if "veo" in requested_model:
+        prompt_to_use = await _expand_video_prompt(
+            job["prompt"],
+            user_id=job.get("user_id"),
+        )
+        if prompt_to_use != job["prompt"]:
+            _update_job(job["id"], {"prompt": prompt_to_use})
+
+    body: dict[str, Any] = {
+        "model": requested_model,
+        "prompt": prompt_to_use,
+        "duration": _openrouter_duration(int(job["duration_seconds"]), spec),
+        "resolution": _openrouter_resolution(spec),
+        "aspect_ratio": _openrouter_aspect_ratio(
+            job["ratio"],
+            list(spec.get("features", {}).get("supported_aspect_ratios") or []),
+        ),
+        # Keep silent by default so cost and approval risk stay lower.
+        "generate_audio": False,
+    }
+    if public_image_url:
+        body["frame_images"] = [
+            {
+                "frame_type": "first_frame",
+                "image_url": public_image_url,
+            }
+        ]
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    create_url = f"{base_url}/videos"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(create_url, headers=headers, json=body)
+    if resp.status_code >= 400:
+        raise RuntimeError(
+            f"OpenRouter video submit failed ({resp.status_code}): {resp.text[:400]}"
+        )
+    submission = resp.json()
+    external_id = submission.get("id")
+    if not external_id:
+        raise RuntimeError(f"OpenRouter returned no job id: {submission}")
+    _update_job(job["id"], {
+        "started_at": time.time(),
+        "status": "running",
+        "external_id": external_id,
+    })
+
+    status_url = f"{base_url}/videos/{external_id}"
+    deadline = time.time() + 15 * 60
+    final = submission
+    while time.time() < deadline:
+        await asyncio.sleep(4)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.get(status_url, headers=headers)
+        if r.status_code >= 400:
+            raise RuntimeError(f"OpenRouter video poll failed: {r.text[:400]}")
+        final = r.json()
+        status = (final.get("status") or "").lower()
+        if status == "pending":
+            _update_job(job["id"], {"progress": 0.1})
+        elif status == "processing":
+            _update_job(job["id"], {"progress": 0.55})
+        elif status in ("completed", "failed"):
+            break
+
+    status = (final.get("status") or "").lower()
+    if status != "completed":
+        error = final.get("error") or status or "unknown"
+        raise RuntimeError(f"OpenRouter video {status}: {error}")
+
+    output_url = None
+    unsigned_urls = final.get("unsigned_urls") or []
+    if unsigned_urls and isinstance(unsigned_urls, list):
+        output_url = unsigned_urls[0]
+    if not output_url:
+        output_url = f"{base_url}/videos/{external_id}/content/0"
+
+    out_path = _generated_dir() / f"openrouter-{job['id']}.mp4"
+    async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
+        d = await client.get(output_url, headers=None if unsigned_urls else headers)
+    if d.status_code >= 400:
+        raise RuntimeError(f"Failed to download OpenRouter output: {d.status_code}")
+    out_path.write_bytes(d.content)
+
+    public_url = _public_url_for_local(out_path.name, subdir="generated")
+    cost_usd = _openrouter_usage_cost(final)
+    if cost_usd is None:
+        cost_usd = round(
+            job["duration_seconds"] * float(spec.get("cost_per_second_usd") or 0.0),
+            4,
+        )
+
+    try:
+        from .cost_tracking import record_media_job
+        record_media_job(
+            workflow="video",
+            provider="openrouter",
+            model=requested_model,
+            cost_usd=cost_usd,
+            user_id=job.get("user_id"),
+            metadata={
+                "duration_seconds": job["duration_seconds"],
+                "ratio": job["ratio"],
+                "external_id": external_id,
+                "resolution": body["resolution"],
+            },
+        )
+    except Exception as exc:
+        log.warning("[cost] record_media_job failed: %s", exc)
+
+    return _update_job(job["id"], {
+        "status": "succeeded",
+        "finished_at": time.time(),
+        "progress": 1.0,
+        "output_url": public_url,
+        "output_filename": out_path.name,
+        "cost_usd": cost_usd,
+    }) or job
+
+
 def _aspect_label(ratio: str) -> str:
     """Map our internal ratio string to fal.ai's aspect_ratio enum."""
     mapping = {
@@ -1089,6 +1541,7 @@ def _public_url_for_local(filename: str, *, subdir: str = "generated") -> str:
 
 _PROVIDER_RUNNERS = {
     "fal": "_run_fal_job",
+    "openrouter": "_run_openrouter_job",
     "replicate": "_run_replicate_job",
     "fallback": "_run_fallback_job",
 }
@@ -1101,6 +1554,8 @@ async def _dispatch_provider(provider: str, job: dict[str, Any]) -> dict[str, An
         return await _run_ltx_job(job)
     if provider == "fal":
         return await _run_fal_job(job)
+    if provider == "openrouter":
+        return await _run_openrouter_job(job)
     if provider == "replicate":
         return await _run_replicate_job(job)
     return await _run_fallback_job(job)
@@ -1116,11 +1571,12 @@ async def run_job(job_id: str) -> dict[str, Any] | None:
     job record carries ``attempts`` so the UI can show "fal failed →
     served by fallback" and the team can decide whether to top up.
 
-    Only the external paths (fal / replicate) auto-fall through. A
+    Only the external paths (fal / openrouter / replicate / ltx)
+    auto-fall through. A
     user who explicitly requested ``provider="fallback"`` gets it
     directly — no point trying anything else.
     """
-    job = get_job(job_id)
+    job = get_job(job_id, all_users=True)
     if not job:
         return None
     if job.get("status") in ("succeeded", "failed", "cancelled"):
@@ -1141,14 +1597,14 @@ async def run_job(job_id: str) -> dict[str, Any] | None:
         patch={"status": "running", "started_at": job.get("started_at") or time.time()},
     )
     if claimed is None:
-        return get_job(job_id)
+        return get_job(job_id, all_users=True)
     job = claimed
 
     primary = job["provider"]
     # Build the candidate chain — primary first, then fallback if the
     # primary is an external provider that might fail at runtime.
     candidates = [primary]
-    if primary in ("ltx", "fal", "replicate"):
+    if primary in ("ltx", "fal", "openrouter", "replicate"):
         candidates.append("fallback")
 
     attempts: list[dict[str, Any]] = list(job.get("attempts") or [])
@@ -1210,11 +1666,13 @@ TICK_SECONDS = 5
 async def _tick_once() -> None:
     """Pick up to N queued jobs and start them — fan-out keeps a single
     slow Replicate call from blocking the queue."""
-    queued = [j for j in list_jobs() if j.get("status") == "queued"]
+    queued = [j for j in list_jobs(all_users=True) if j.get("status") == "queued"]
     if not queued:
         return
     # Cap concurrency so we don't slam the provider when the queue spikes.
-    in_flight = sum(1 for j in list_jobs() if j.get("status") == "running")
+    in_flight = sum(
+        1 for j in list_jobs(all_users=True) if j.get("status") == "running"
+    )
     capacity = max(0, 3 - in_flight)
     for job in queued[:capacity]:
         # run_job performs an atomic queued → running CAS at entry, so

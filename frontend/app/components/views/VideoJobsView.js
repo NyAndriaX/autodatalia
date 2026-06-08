@@ -31,7 +31,7 @@ import { btnPrimary, card, fadeIn } from "../../lib/uiClasses";
 /**
  * Management interface for AI video generation jobs.
  *
- * Lets the user pick a fal.ai model (Kling, Higgsfield, Veo, etc.),
+ * Lets the user pick a backend video model (fal.ai, OpenRouter, etc.),
  * choose a mode (text-to-video / image-to-video / UGC) and supply a
  * reference image when the model + mode call for one. Polls every 4s
  * so in-flight jobs show progress live. CreationEditor can stash a
@@ -113,6 +113,7 @@ export default function VideoJobsView() {
     audio: false,
     max_duration_seconds: 15,
     supports_ugc: false,
+    supported_aspect_ratios: RATIOS,
   };
 
   // Auto-flip mode when the model doesn't support what's selected.
@@ -136,6 +137,20 @@ export default function VideoJobsView() {
       }
     });
   }, [features.max_duration_seconds, duration]);
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      const supported = features.supported_aspect_ratios?.length
+        ? features.supported_aspect_ratios
+        : RATIOS;
+      if (supported.includes(ratio)) return;
+      if (ratio === "4:5" && supported.includes("9:16")) {
+        setRatio("9:16");
+        return;
+      }
+      setRatio(supported[0] || "9:16");
+    });
+  }, [features.supported_aspect_ratios, ratio]);
 
   const reload = useCallback(async () => {
     try {
@@ -195,7 +210,9 @@ export default function VideoJobsView() {
         ratio,
         durationSeconds: duration,
         imageFilename: referenceImage?.filename || null,
-        falModel: selectedModel,
+        provider: selectedModelObj?.provider || null,
+        modelId: selectedModel,
+        falModel: selectedModelObj?.provider === "fal" ? selectedModel : null,
         mode,
       });
       setPrompt("");
@@ -399,12 +416,37 @@ export default function VideoJobsView() {
               <button
                 key={r}
                 type="button"
-                onClick={() => setRatio(r)}
+                onClick={() =>
+                  (features.supported_aspect_ratios?.length
+                    ? features.supported_aspect_ratios
+                    : RATIOS
+                  ).includes(r) && setRatio(r)
+                }
+                disabled={
+                  !(features.supported_aspect_ratios?.length
+                    ? features.supported_aspect_ratios
+                    : RATIOS
+                  ).includes(r)
+                }
                 className="py-2 text-xs font-medium rounded-lg transition-all"
                 style={{
                   background: ratio === r ? "var(--accent-primary)" : "var(--bg-secondary)",
                   color: ratio === r ? "white" : "var(--text-secondary)",
                   border: "1px solid var(--border-default)",
+                  opacity: (
+                    features.supported_aspect_ratios?.length
+                      ? features.supported_aspect_ratios
+                      : RATIOS
+                  ).includes(r)
+                    ? 1
+                    : 0.35,
+                  cursor: (
+                    features.supported_aspect_ratios?.length
+                      ? features.supported_aspect_ratios
+                      : RATIOS
+                  ).includes(r)
+                    ? "pointer"
+                    : "not-allowed",
                 }}
               >
                 {r}

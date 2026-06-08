@@ -1,47 +1,32 @@
-# Production compose — what runs on the Hetzner / Fly.io VM.
+# Production compose for the VM.
 #
-# Differences from the dev compose (../infra/docker-compose.yml):
-#  - Caddy in front for SSL + reverse proxy (no host port on caption-api)
-#  - Named volume `caption-content` for posts/oauth_tokens/uploads
-#  - Reads env from .env.production (NOT the dev .env)
-#  - No bind-mount of ../backend/content (that mount is dev-only)
-#  - TIKTOK_SCOPES surfaced so direct-post works without code change
-#
-# Usage on the VM:
+# Usage:
 #   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 #   docker compose -f docker-compose.prod.yml --env-file .env.production logs -f
-#   docker compose -f docker-compose.prod.yml --env-file .env.production restart caption-api
 
 services:
-  postgres:
-    # Users table backing /auth — bcrypt password hashes + JWT-issued
-    # sessions. The rest of the app's state still lives in JSON files
-    # on the named caption-content volume.
-    image: postgres:16-alpine
-    container_name: datalia-postgres
+  mariadb:
+    image: mariadb:11.4
+    container_name: datalia-mariadb
     restart: always
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-datalia}
-      POSTGRES_USER: ${POSTGRES_USER:-datalia}
-      # MUST be overridden in .env.production with a strong password
-      # (openssl rand -hex 24). Default is for first-boot only.
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-datalia}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-datalia}
+      MARIADB_USER: ${MARIADB_USER:-datalia}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-datalia}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-datalia-root}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
-    # NO host port — only caption-api reaches Postgres on the docker
-    # network. Open 5432 only if you need an external pgAdmin / psql,
-    # and put it behind firewall rules.
+      - mariadb-data:/var/lib/mysql
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-datalia} -d ${POSTGRES_DB:-datalia}"]
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u$${MARIADB_USER} -p$${MARIADB_PASSWORD} --silent"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
 
   caddy:
     image: caddy:2-alpine
@@ -64,8 +49,10 @@ services:
         max-size: "20m"
         max-file: "5"
     depends_on:
-      - caption-api
-      - frontend
+      caption-api:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
       interval: 30s
@@ -75,16 +62,15 @@ services:
   caption-api:
     build:
       context: ../backend
+      args:
+        INSTALL_DEV_DEPS: "false"
     container_name: caption-api
     restart: always
     expose:
       - "8000"
     depends_on:
-      postgres:
+      mariadb:
         condition: service_healthy
-    # Cap log volume — backend logs every publish + every video job poll.
-    # 5×20MB = 100MB ceiling per service, plenty for a multi-week debug
-    # window without filling the host disk.
     logging:
       driver: json-file
       options:
@@ -97,7 +83,6 @@ services:
       start_period: 30s
       retries: 3
     environment:
-      # AI
       AI_API_BASE_URL: ${AI_API_BASE_URL:-https://openrouter.ai/api/v1}
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-google/gemini-3.1-flash-lite}
@@ -105,23 +90,12 @@ services:
       AI_MODEL_PREMIUM: ${AI_MODEL_PREMIUM:-}
       AI_INCLUDE_IMAGES: ${AI_INCLUDE_IMAGES:-false}
       AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-200}
-      # CORS — prod frontend origin goes here. The Vercel preview URLs
-      # (`*.vercel.app`) are NOT included by default; add them if you
-      # want preview deploys to hit prod backend.
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS}
-      # Backend auth — strongly recommended ON in prod, since /generate
-      # / /transform / /upload would otherwise be open to anyone who
-      # finds the API host.
       BACKEND_AUTH_TOKEN: ${BACKEND_AUTH_TOKEN}
-      # Tunnel — Cloudflare quick-tunnel is a dev convenience; in prod
-      # Caddy serves the public host. Force off.
+      ALLOW_OPEN_AUTH: ${ALLOW_OPEN_AUTH:-false}
       TUNNEL_ENABLED: "false"
-      # Public hostname Meta/TikTok callbacks hit + where /upload builds
-      # served-URL strings. Must match the Caddy-fronted domain exactly,
-      # https only.
       OAUTH_REDIRECT_BASE: https://${API_DOMAIN}
       PUBLIC_BASE_URL: https://${API_DOMAIN}
-      # Provider credentials
       META_APP_ID: ${META_APP_ID}
       META_APP_SECRET: ${META_APP_SECRET}
       INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-}
@@ -129,54 +103,41 @@ services:
       TIKTOK_CLIENT_KEY: ${TIKTOK_CLIENT_KEY}
       TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET}
       TIKTOK_DOMAIN_VERIFY: ${TIKTOK_DOMAIN_VERIFY}
-      # Comma-separated. Defaults to sandbox-safe ("user.info.basic,
-      # video.upload"); set to include `video.publish` once the app is
-      # audited.
       TIKTOK_SCOPES: ${TIKTOK_SCOPES:-user.info.basic,video.upload}
-      # FILE_UPLOAD avoids the URL-Properties prefix verification step;
-      # leave "file" unless you've verified the prefix at TikTok.
       TIKTOK_UPLOAD_MODE: ${TIKTOK_UPLOAD_MODE:-file}
       LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
       LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      # JWT secret for user auth tokens — MUST be overridden in prod.
-      # Generate with: openssl rand -hex 32
       JWT_SECRET: ${JWT_SECRET:-}
-      # Marks this as a prod boot — config.py refuses to start when
-      # JWT_SECRET is unset or still the public placeholder, so a
-      # mis-deploy with a forgeable secret fails loud instead of silent.
       ENV: production
-      # Postgres backing the users table (auth.py / db.py). Prefer
-      # DATABASE_URL when set (managed Postgres / external host);
-      # otherwise the POSTGRES_* split is used against the in-compose
-      # postgres service.
       DATABASE_URL: ${DATABASE_URL:-}
-      POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
-      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
-      POSTGRES_DB: ${POSTGRES_DB:-datalia}
-      POSTGRES_USER: ${POSTGRES_USER:-datalia}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-datalia}
-      # Telegram validation (optional — leave empty to disable)
+      MARIADB_HOST: ${MARIADB_HOST:-mariadb}
+      MARIADB_PORT: ${MARIADB_PORT:-3306}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-datalia}
+      MARIADB_USER: ${MARIADB_USER:-datalia}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-datalia}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_DEFAULT_CHAT_ID: ${TELEGRAM_DEFAULT_CHAT_ID:-}
       TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
-      # AI image/video generation (optional)
       AI_IMAGE_API_BASE_URL: ${AI_IMAGE_API_BASE_URL:-}
       AI_IMAGE_API_KEY: ${AI_IMAGE_API_KEY:-}
       AI_IMAGE_MODEL: ${AI_IMAGE_MODEL:-}
       AI_VIDEO_API_BASE_URL: ${AI_VIDEO_API_BASE_URL:-}
       AI_VIDEO_API_KEY: ${AI_VIDEO_API_KEY:-}
       AI_VIDEO_MODEL: ${AI_VIDEO_MODEL:-}
-      # Content dir lives on the named volume mounted below.
+      REPLICATE_API_TOKEN: ${REPLICATE_API_TOKEN:-}
+      REPLICATE_VIDEO_MODEL: ${REPLICATE_VIDEO_MODEL:-lightricks/ltx-video}
+      REPLICATE_VIDEO_VERSION: ${REPLICATE_VIDEO_VERSION:-}
+      FAL_API_KEY: ${FAL_API_KEY:-}
+      FAL_VIDEO_MODEL: ${FAL_VIDEO_MODEL:-fal-ai/ltx-video}
+      LTX_API_KEY: ${LTX_API_KEY:-}
+      LTX_API_BASE_URL: ${LTX_API_BASE_URL:-https://api.ltx.video/v1}
+      LTX_VIDEO_MODEL: ${LTX_VIDEO_MODEL:-ltx-2-3-pro}
+      VIDEO_COST_PER_SECOND_USD: ${VIDEO_COST_PER_SECOND_USD:-0.04}
       CONTENT_DIR: /home/app/content
-      # Scheduler default timezone — the dashboard already lets the
-      # user override per-post, but unspecified posts use this.
       DATALIA_DEFAULT_TZ: ${DATALIA_DEFAULT_TZ:-Europe/Paris}
     volumes:
-      # Named volume — survives `docker compose down`, only removed
-      # explicitly with `docker volume rm`. Holds uploaded media,
-      # cropped variants, posts.json, messages.json, oauth_tokens.json.
       - caption-content:/home/app/content
 
   frontend:
@@ -184,7 +145,6 @@ services:
       context: ../frontend
       args:
         - NEXT_PUBLIC_API_BASE_URL=https://${API_DOMAIN}
-        - NEXT_PUBLIC_BACKEND_AUTH_TOKEN=${BACKEND_AUTH_TOKEN}
     container_name: datalia-frontend
     restart: always
     expose:
@@ -192,9 +152,15 @@ services:
     depends_on:
       caption-api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
 
 volumes:
   caption-content:
   caddy-data:
   caddy-config:
-  postgres-data:
+  mariadb-data:

@@ -164,6 +164,7 @@ async def fire_post(post: dict[str, Any]) -> dict[str, Any]:
         media_kind=_resolve_media_kind(post),
         ratios=post.get("ratios"),
         tiktok_options=post.get("tiktok"),
+        user_id=post.get("user_id"),
     )
 
     if not targets and not skipped:
@@ -232,7 +233,7 @@ async def tick(now: float | None = None) -> list[str]:
     if now is None:
         now = time.time()
     touched: list[str] = []
-    for post in posts_list():
+    for post in posts_list(all_users=True):
         if post.get("status") != "scheduled":
             continue
         due = _due_at_epoch(post)

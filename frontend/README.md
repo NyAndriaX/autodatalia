@@ -58,7 +58,6 @@ All client-side, so they use the `NEXT_PUBLIC_` prefix and are read in one place
 | Variable | Purpose |
 |---|---|
 | `NEXT_PUBLIC_API_BASE_URL` | Backend base URL. Empty → AI uses the local mock only. Set to `/api/backend` to use the built-in CORS-free rewrite proxy to `localhost:8000`. |
-| `NEXT_PUBLIC_BACKEND_AUTH_TOKEN` | Bearer token sent to protected backend routes. Must match `BACKEND_AUTH_TOKEN`; empty matches backend open mode. |
 
 ### Graceful degradation
 
@@ -78,6 +77,11 @@ The frontend is still usable regardless:
   `messagesService` mock stubs that try the backend first (`/auth/*`, `/search`,
   `/messages`) and fall back to seed data — each a one-function swap when the
   real endpoint lands.
+
+Production note:
+- The browser no longer receives a shared backend bearer token. Authenticated
+  requests rely on the backend's HttpOnly session cookie; anonymous access
+  depends on the backend's `ALLOW_OPEN_AUTH` policy.
 
 ### Theming
 

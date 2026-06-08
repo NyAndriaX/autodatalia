@@ -27,7 +27,6 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -36,6 +35,7 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 from .config import settings
+from .db import load_scoped_blob, save_scoped_blob
 from .auth import require_token
 
 # ── Provider registry ──────────────────────────────────────────────────
@@ -139,6 +139,26 @@ def _provider_creds(p: ProviderSpec) -> tuple[str | None, str | None]:
     return os.environ.get(p.client_id_env), os.environ.get(p.client_secret_env)
 
 
+def _provider_scopes(p: ProviderSpec) -> list[str]:
+    """Return the effective OAuth scopes for a provider.
+
+    TikTok and LinkedIn both need env overrides in practice:
+      - TikTok: teams toggle `video.publish` on/off during review
+      - LinkedIn: some apps have OIDC (`openid profile email`) while
+        others still rely on legacy profile scopes (`r_liteprofile`)
+    """
+    override_env = {
+        "tiktok": "TIKTOK_SCOPES",
+        "linkedin": "LINKEDIN_SCOPES",
+    }.get(p.id)
+    if not override_env:
+        return list(p.scopes)
+    raw = os.environ.get(override_env, "").strip()
+    if not raw:
+        return list(p.scopes)
+    return [part.strip() for part in raw.replace(",", " ").split() if part.strip()]
+
+
 def _redirect_uri(provider_id: str) -> str:
     # NOTE: OAUTH_REDIRECT_BASE and the *_CLIENT_ID/SECRET pairs are read
     # directly from os.environ on purpose — they are deliberately NOT in
@@ -165,33 +185,23 @@ def _provider_status(p: ProviderSpec) -> dict[str, Any]:
         "configured": configured,
         "missing_env": missing,
         "redirect_uri": _redirect_uri(p.id),
-        "scopes": list(p.scopes),
+        "scopes": _provider_scopes(p),
     }
 
 
 # ── Token storage (file-based stub) ───────────────────────────────────
 
 
-def _token_store_path(user_id: int | None = None) -> Path:
-    suffix = f"_{user_id}" if user_id else ""
-    return settings.content_dir / f".oauth_tokens{suffix}.json"
-
-
 def _load_tokens(user_id: int | None = None) -> dict[str, Any]:
-    p = _token_store_path(user_id)
-    if not p.exists():
-        return {}
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        payload = load_scoped_blob("oauth_tokens", user_id=user_id, default={}) or {}
+        return payload if isinstance(payload, dict) else {}
     except Exception:
         return {}
 
 
 def _save_tokens(data: dict[str, Any], user_id: int | None = None) -> None:
-    # Lazy import to avoid any circular-import risk with services.py.
-    from .services import atomic_write_text
-
-    atomic_write_text(_token_store_path(user_id), json.dumps(data, indent=2))
+    save_scoped_blob("oauth_tokens", data or {}, user_id=user_id)
 
 
 # ── Routes ─────────────────────────────────────────────────────────────
@@ -265,7 +275,7 @@ async def oauth_start(provider_id: str, user_id: int = Depends(require_token)) -
         # the scope at authorize time UNLESS the app's connected account
         # is the developer's own (which is always true in sandbox). Allow
         # an env override so the user can pick: TIKTOK_SCOPES="user.info.basic,video.upload,video.publish"
-        scope_str = os.environ.get("TIKTOK_SCOPES", ",".join(p.scopes))
+        scope_str = ",".join(_provider_scopes(p))
         params = {
             "client_key": client_id,
             "redirect_uri": _redirect_uri(p.id),
@@ -278,7 +288,7 @@ async def oauth_start(provider_id: str, user_id: int = Depends(require_token)) -
             "client_id": client_id,
             "redirect_uri": _redirect_uri(p.id),
             "response_type": "code",
-            "scope": " ".join(p.scopes),
+            "scope": " ".join(_provider_scopes(p)),
             "state": state,
         }
     for k, v in p.extra_authorize_params:
@@ -321,8 +331,7 @@ async def _exchange_code(
             detail={
                 "message": "Token exchange failed.",
                 "provider": provider.id,
-                "status_code": resp.status_code,
-                "response": resp.text[:500],
+                "upstream_status": resp.status_code,
             },
         )
     return resp.json()
@@ -395,6 +404,30 @@ async def _fetch_linkedin_user_info(access_token: str) -> dict[str, Any]:
             resp = await client.get(
                 "https://api.linkedin.com/v2/userinfo",
                 headers={"Authorization": f"Bearer {access_token}"},
+            )
+    except Exception:
+        return {}
+    if resp.status_code >= 400:
+        return {}
+    return resp.json()
+
+
+async def _fetch_linkedin_profile(access_token: str) -> dict[str, Any]:
+    """Fallback LinkedIn member lookup through /v2/me.
+
+    This supports apps that only have the legacy `r_liteprofile`
+    permission instead of the OpenID Connect product.
+    """
+    if not access_token:
+        return {}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(
+                "https://api.linkedin.com/v2/me",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "X-Restli-Protocol-Version": "2.0.0",
+                },
             )
     except Exception:
         return {}
@@ -636,7 +669,7 @@ async def oauth_callback(
     # For Google auth, we use it strictly for user authentication, not for posting.
     if provider_id == "google":
         from .db import get_user_by_email, create_user
-        from .auth import create_jwt_token
+        from .auth import create_jwt_token, _set_session_cookie
 
         user_info = await _fetch_google_user_info(access_token)
         email = user_info.get("email")
@@ -654,18 +687,12 @@ async def oauth_callback(
             user_id = user["id"]
 
         token = create_jwt_token(user_id)
-
-        return HTMLResponse(
-            _popup_close_html(provider_id, True, "Google connected.", {
-                "token": token,
-                "user": {
-                    "id": str(user_id),
-                    "email": email,
-                    "name": name,
-                    "role": "admin"
-                }
-            })
+        response = HTMLResponse(
+            _popup_close_html(provider_id, True, "Google connected.")
         )
+        _set_session_cookie(response, token)
+
+        return response
 
     # TikTok-specific: the token-exchange response includes `open_id` but
     # not the user's display name or avatar. Fetch those right after the
@@ -679,6 +706,23 @@ async def oauth_callback(
         user_info = await _fetch_tiktok_user_info(access_token, data.get("scope") or "")
     elif provider_id == "linkedin":
         user_info = await _fetch_linkedin_user_info(access_token)
+        if not user_info.get("sub"):
+            legacy_profile = await _fetch_linkedin_profile(access_token)
+            if legacy_profile:
+                user_info = {
+                    **user_info,
+                    "sub": legacy_profile.get("id"),
+                    "given_name": legacy_profile.get("localizedFirstName"),
+                    "family_name": legacy_profile.get("localizedLastName"),
+                    "name": " ".join(
+                        part
+                        for part in (
+                            legacy_profile.get("localizedFirstName"),
+                            legacy_profile.get("localizedLastName"),
+                        )
+                        if part
+                    ).strip(),
+                }
 
     # For other providers, we need to know WHICH user is connecting.
     # The frontend should have passed a token to /start if they were logged in.
@@ -686,13 +730,14 @@ async def oauth_callback(
     # and all users will share the connected accounts. This avoids complex state passing
     # and perfectly fits the TikTok sandbox review narrative.
 
-    tokens = _load_tokens(None)
+    connected_user_id = pending_data.get("user_id")
+    tokens = _load_tokens(connected_user_id)
 
     expires_in = data.get("expires_in")
     record = {
         "access_token": access_token,
         "refresh_token": data.get("refresh_token"),
-        "scope": data.get("scope") or " ".join(provider.scopes),
+        "scope": data.get("scope") or " ".join(_provider_scopes(provider)),
         "expires_at": (time.time() + int(expires_in)) if expires_in else None,
         "obtained_at": time.time(),
         # Stash the full response (minus the secrets we already split out)
@@ -723,8 +768,21 @@ async def oauth_callback(
             record["last_name"] = user_info.get("family_name")
             record["avatar_url"] = user_info.get("picture")
             record["email"] = user_info.get("email")
+    if provider_id == "linkedin" and not record.get("urn"):
+        return HTMLResponse(
+            _popup_close_html(
+                provider_id,
+                False,
+                (
+                    "LinkedIn connected, but no member profile target was returned. "
+                    "Enable either OpenID Connect scopes "
+                    "(openid profile email) or r_liteprofile on the LinkedIn app, "
+                    "then reconnect."
+                ),
+            )
+        )
     tokens[provider_id] = record
-    _save_tokens(tokens, None)
+    _save_tokens(tokens, connected_user_id)
 
     return HTMLResponse(
         _popup_close_html(provider_id, True, f"{provider.label} connected.")
@@ -736,9 +794,9 @@ async def oauth_disconnect(provider_id: str, user_id: int = Depends(require_toke
     """Forget the stored token for this provider."""
     if provider_id not in PROVIDERS:
         raise HTTPException(404, f"Unknown provider: {provider_id}")
-    tokens = _load_tokens(None)
+    tokens = _load_tokens(user_id if user_id > 0 else None)
     tokens.pop(provider_id, None)
-    _save_tokens(tokens, None)
+    _save_tokens(tokens, user_id if user_id > 0 else None)
     return {"status": "disconnected", "provider": provider_id}
 
 
@@ -801,7 +859,7 @@ async def meta_accounts(user_id: int = Depends(require_token)) -> dict[str, Any]
     """Return every FB Page the connected user admins, plus any IG Business
     account linked to each Page. Each entry includes the Page access token
     so callers can publish without another round-trip."""
-    tokens = _load_tokens(None)
+    tokens = _load_tokens(user_id if user_id > 0 else None)
     meta_record = tokens.get("meta") or {}
     user_token = meta_record.get("access_token")
     if not user_token:
@@ -824,7 +882,7 @@ async def connections(user_id: int = Depends(require_token)) -> dict[str, Any]:
     Callers that need a token go through /oauth/meta/accounts (or future
     per-provider equivalents) so we can audit token egress separately.
     """
-    tokens = _load_tokens(None)
+    tokens = _load_tokens(user_id if user_id > 0 else None)
     out: dict[str, Any] = {"providers": {}}
 
     for p in PROVIDERS.values():

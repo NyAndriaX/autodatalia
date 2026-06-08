@@ -27,12 +27,15 @@ class Settings(BaseModel):
     ai_daily_limit: int
     cors_allow_origins: list[str]
     backend_auth_token: str
+    allow_open_auth: bool
+    auth_rate_limit_attempts: int
+    auth_rate_limit_window_seconds: int
     tunnel_enabled: bool
     jwt_secret: str
-    # Postgres connection string for the users table. Empty falls back to
-    # the individual POSTGRES_* env vars in db._connect() so docker-compose
-    # works without an explicit URL. Set this in prod to a managed Postgres
-    # DSN (e.g. ``postgres://user:pw@host:5432/datalia``).
+    # MariaDB connection string for the shared application store. Empty
+    # falls back to the individual MARIADB_* env vars in db._connect() so
+    # docker-compose works without an explicit URL. Set this in prod to a
+    # managed MariaDB/MySQL DSN (e.g. ``mysql://user:pw@host:3306/datalia``).
     database_url: str
     telegram_bot_token: str
     telegram_default_chat_id: str
@@ -79,6 +82,40 @@ class Settings(BaseModel):
 _JWT_DEFAULT_INSECURE = "super-secret-default-key-change-in-prod"
 
 
+def _env_name() -> str:
+    return os.getenv("ENV", "development").strip().lower()
+
+
+def _is_production_env() -> bool:
+    return _env_name() in {"prod", "production"}
+
+
+def _resolve_allow_open_auth() -> bool:
+    raw = os.getenv("ALLOW_OPEN_AUTH", "").strip().lower()
+    if raw:
+        return raw in {"1", "true", "yes", "on"}
+    return not _is_production_env()
+
+
+def _validate_security_settings(settings_obj: Settings) -> None:
+    if _is_production_env() and settings_obj.allow_open_auth:
+        raise RuntimeError("ALLOW_OPEN_AUTH must be false in production.")
+    if _is_production_env() and not settings_obj.cors_allow_origins:
+        raise RuntimeError(
+            "CORS_ALLOW_ORIGINS must list the real frontend origin in production."
+        )
+    if "*" in settings_obj.cors_allow_origins:
+        raise RuntimeError("CORS_ALLOW_ORIGINS must not contain '*'.")
+    if (
+        _is_production_env()
+        and settings_obj.telegram_bot_token
+        and not settings_obj.telegram_webhook_secret
+    ):
+        raise RuntimeError(
+            "TELEGRAM_WEBHOOK_SECRET must be set when TELEGRAM_BOT_TOKEN is enabled in production."
+        )
+
+
 def _resolve_jwt_secret() -> str:
     """Return the JWT secret, refusing to silently fall back to the
     hardcoded default in production.
@@ -92,10 +129,10 @@ def _resolve_jwt_secret() -> str:
         a forgeable session secret everyone knows.
     """
     secret = os.getenv("JWT_SECRET", "").strip()
-    env = os.getenv("ENV", "development").strip().lower()
+    env = _env_name()
     if secret and secret != _JWT_DEFAULT_INSECURE:
         return secret
-    if env in {"prod", "production"}:
+    if _is_production_env():
         raise RuntimeError(
             "JWT_SECRET is unset or still the placeholder. "
             "Set ENV=production *and* JWT_SECRET to a fresh 32-byte hex "
@@ -172,7 +209,7 @@ def load_settings() -> Settings:
     if not ai_model_premium:
         ai_model_premium = ai_model
 
-    return Settings(
+    loaded = Settings(
         content_dir=content_dir,
         ai_api_base_url=ai_api_base_url,
         ai_api_key=ai_api_key,
@@ -193,9 +230,17 @@ def load_settings() -> Settings:
             ).split(",")
             if o.strip()
         ],
-        # When set, /generate /transform /upload /posts require
-        # `Authorization: Bearer <token>`. Empty = open mode (local dev).
+        # Optional shared bearer token for non-browser/server-to-server calls.
         backend_auth_token=os.getenv("BACKEND_AUTH_TOKEN", "").strip(),
+        # Anonymous access is a local-dev convenience only. Production
+        # closes it by default unless ALLOW_OPEN_AUTH explicitly re-enables it.
+        allow_open_auth=_resolve_allow_open_auth(),
+        auth_rate_limit_attempts=max(
+            1, int(os.getenv("AUTH_RATE_LIMIT_ATTEMPTS", "10"))
+        ),
+        auth_rate_limit_window_seconds=max(
+            1, int(os.getenv("AUTH_RATE_LIMIT_WINDOW_SECONDS", "300"))
+        ),
         # Quick Cloudflare tunnel is OFF by default — it exposes the API
         # publicly with no auth. Opt in via env when IG publishing needs it.
         tunnel_enabled=os.getenv("TUNNEL_ENABLED", "false").lower()
@@ -234,5 +279,7 @@ def load_settings() -> Settings:
             os.getenv("VIDEO_COST_PER_SECOND_USD", "0.04")
         ),
     )
+    _validate_security_settings(loaded)
+    return loaded
 
 settings = load_settings()

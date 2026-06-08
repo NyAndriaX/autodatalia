@@ -7,6 +7,7 @@ export async function createVideoJob({
   durationSeconds = 6,
   imageFilename = null,
   provider = null,
+  modelId = null,
   falModel = null,
   quality = null,
   mode = null,
@@ -19,6 +20,7 @@ export async function createVideoJob({
       duration_seconds: durationSeconds,
       image_filename: imageFilename,
       provider,
+      model_id: modelId,
       fal_model: falModel,
       quality,
       mode,
@@ -27,7 +29,7 @@ export async function createVideoJob({
   });
 }
 
-// List the available fal.ai video models + the active default. The
+// List the available backend video models + the active default. The
 // backend returns ``{models: [...], default: "..."}`` so the picker
 // can preselect the active one.
 export async function listVideoModels() {
