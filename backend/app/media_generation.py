@@ -174,8 +174,7 @@ async def _call_image_api(
             status_code=502,
             detail={
                 "message": "Image generation request failed.",
-                "status_code": resp.status_code,
-                "response": resp.text[:800],
+                "upstream_status": resp.status_code,
             },
         )
     data = resp.json()
@@ -242,8 +241,7 @@ async def _call_gemini_image_api(
             status_code=502,
             detail={
                 "message": "Gemini image generation request failed.",
-                "status_code": resp.status_code,
-                "response": resp.text[:800],
+                "upstream_status": resp.status_code,
             },
         )
     data = resp.json()
@@ -253,7 +251,6 @@ async def _call_gemini_image_api(
             status_code=502,
             detail={
                 "message": "Gemini returned no image asset.",
-                "response": json.dumps(data)[:800] if isinstance(data, dict) else "",
             },
         )
     _log_image_cost(prompt, user_id)
@@ -440,8 +437,19 @@ async def _generate_image_file(
     refined = await _refine_image_prompt(prompt, user_id=user_id)
     # Append clear, strong negative instructions to guarantee text-free generation across all models
     final_prompt = f"{refined}. High-quality professional image, clean background, completely text-free with absolutely no words, letters, captions, logos, or typography."
-    
-    payload, provider = await _call_image_api(final_prompt, width, height, user_id=user_id)
+
+    try:
+        payload, provider = await _call_image_api(
+            final_prompt, width, height, user_id=user_id
+        )
+    except HTTPException as exc:
+        log.warning(
+            "[media] image generation failed for prompt '%s'; falling back to local poster: %s",
+            prompt[:80],
+            exc.detail,
+        )
+        payload = _render_fallback_poster(prompt, width, height)
+        provider = "fallback-poster"
     out = _write_bytes(prompt, ".png", payload)
     return out, provider
 
@@ -541,6 +549,7 @@ async def generate_video(
             image_filename=body.image_filename,
             provider=body.provider,
             user_id=user_id,
+            model_id=body.model_id or body.fal_model,
             fal_model=body.fal_model,
             quality=body.quality,
             mode=body.mode,
@@ -556,6 +565,7 @@ async def generate_video(
         image_filename=body.image_filename,
         provider=body.provider,
         user_id=user_id,
+        model_id=body.model_id or body.fal_model,
         fal_model=body.fal_model,
         quality=body.quality,
         mode=body.mode,
@@ -567,7 +577,6 @@ async def generate_video(
             detail={
                 "message": "Video generation failed.",
                 "error": (finished or {}).get("error") or "unknown",
-                "job": finished,
             },
         )
     return GeneratedMediaResponse(
@@ -584,30 +593,41 @@ async def generate_video(
 
 @router.get("/video-models", response_model=VideoModelsResponse)
 async def video_models_list() -> VideoModelsResponse:
-    """Catalogue of fal.ai video models the backend knows about.
+    """Catalogue of video models the backend knows about.
 
     The frontend uses this to populate the model picker on the AI Video
     page, hide controls a model can't support (e.g. audio for LTX),
     and surface per-model pricing.
     """
-    from .video_jobs import list_fal_models
+    from .video_jobs import list_video_models
     from .config import settings as _settings
+    models = list_video_models()
+    default_model = _settings.fal_video_model
+    if default_model not in {model["id"] for model in models}:
+        default_model = _settings.ai_video_model or models[0]["id"]
     return VideoModelsResponse(
-        models=[VideoModel(**m) for m in list_fal_models()],
-        default=_settings.fal_video_model,
+        models=[VideoModel(**m) for m in models],
+        default=default_model,
     )
 
 
 @router.get("/video-jobs", response_model=VideoJobsResponse)
-async def video_jobs_list() -> VideoJobsResponse:
+async def video_jobs_list(
+    user_id: int = Depends(require_token),
+) -> VideoJobsResponse:
     from .video_jobs import list_jobs
-    return VideoJobsResponse(jobs=[VideoJob(**j) for j in list_jobs()])
+    return VideoJobsResponse(
+        jobs=[VideoJob(**j) for j in list_jobs(user_id=user_id)]
+    )
 
 
 @router.get("/video-jobs/{job_id}", response_model=VideoJob)
-async def video_jobs_get(job_id: str) -> VideoJob:
+async def video_jobs_get(
+    job_id: str,
+    user_id: int = Depends(require_token),
+) -> VideoJob:
     from .video_jobs import get_job
-    job = get_job(job_id)
+    job = get_job(job_id, user_id=user_id)
     if not job:
         raise HTTPException(404, "Video job not found.")
     return VideoJob(**job)
@@ -618,7 +638,8 @@ async def video_jobs_delete(
     job_id: str,
     user_id: int = Depends(require_token),
 ) -> dict[str, Any]:
-    from .video_jobs import delete_job
-    if not delete_job(job_id):
+    from .video_jobs import delete_job, get_job
+    job = get_job(job_id, user_id=user_id)
+    if not job or not delete_job(job_id):
         raise HTTPException(404, "Video job not found.")
     return {"deleted": True}

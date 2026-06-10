@@ -343,7 +343,8 @@ class ImageGenerationRequest(BaseModel):
 class VideoGenerationRequest(BaseModel):
     """Body for POST /media/generate/video.
 
-    `provider` lets the caller force a backend ("ltx", "replicate", "fallback").
+    `provider` lets the caller force a backend ("fal", "openrouter",
+    "ltx", "replicate", "fallback").
     Omitted ⇒ backend picks the first available based on env config.
     """
 
@@ -354,9 +355,10 @@ class VideoGenerationRequest(BaseModel):
     # set, image-to-video providers will use it as the first frame.
     image_filename: str | None = None
     provider: str | None = None
-    # Optional model override for the chosen provider (e.g. a fal model
-    # id from /video-models). The runner falls back to FAL_VIDEO_MODEL
-    # when unset.
+    # Optional model override for the chosen provider (e.g. a fal.ai or
+    # OpenRouter model id returned by /video-models).
+    model_id: str | None = None
+    # Backward-compatible alias kept so older frontends keep working.
     fal_model: str | None = None
     # ``standard`` / ``master`` / ``pro`` — interpreted by the model spec.
     quality: str | None = None
@@ -377,6 +379,7 @@ class VideoJob(BaseModel):
     status: str  # queued | running | succeeded | failed | cancelled
     provider: str
     model: str
+    model_id: str | None = None
     fal_model: str | None = None
     quality: str | None = None
     mode: str | None = None
@@ -408,6 +411,7 @@ class VideoModelFeatures(BaseModel):
     audio: bool = False
     max_duration_seconds: int = 10
     supports_ugc: bool = False
+    supported_aspect_ratios: list[str] = []
 
 
 class VideoModel(BaseModel):
@@ -415,6 +419,7 @@ class VideoModel(BaseModel):
 
     id: str
     label: str
+    provider: str
     cost_per_second_usd: float
     features: VideoModelFeatures
     endpoints: list[str] = []
@@ -552,10 +557,13 @@ class AutomationRule(BaseModel):
     """A single content-automation rule. Persisted to automation_rules.json."""
 
     id: str | None = None
+    user_id: str | None = None
     name: str = Field(min_length=1, max_length=80)
     active: bool = True
     created_at: float | None = None
     updated_at: float | None = None
+    last_fire_at: float | None = None
+    last_error: str | None = None
 
     # Content shape
     content_type: str = Field(

@@ -14,13 +14,11 @@ fallbacks they did not override themselves.
 
 from __future__ import annotations
 
-import json
-import os
 from contextvars import ContextVar
-from pathlib import Path
 from typing import Any
 
 from .config import Settings, load_settings, settings, _resolve_jwt_secret  # noqa: F401
+from .db import load_scoped_blob, save_scoped_blob
 
 
 # Keys the Settings page is allowed to read + edit. Each entry maps the
@@ -68,19 +66,6 @@ _ACTIVE_USER_ID: ContextVar[int | None] = ContextVar(
 )
 
 
-def _atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding=encoding) as handle:
-        handle.write(content)
-        handle.flush()
-        try:
-            os.fsync(handle.fileno())
-        except OSError:
-            pass
-    os.replace(tmp, path)
-
-
 def _normalize_user_id(user_id: int | None) -> int | None:
     if user_id is None:
         user_id = _ACTIVE_USER_ID.get()
@@ -98,31 +83,6 @@ def set_active_user(user_id: int | None) -> None:
 
 def get_active_user() -> int | None:
     return _normalize_user_id(_ACTIVE_USER_ID.get())
-
-
-def _global_overrides_path() -> Path:
-    return settings.content_dir / "runtime_settings.json"
-
-
-def _user_overrides_path(user_id: int) -> Path:
-    return settings.content_dir / f"runtime_settings_user_{user_id}.json"
-
-
-def _overrides_path(user_id: int | None = None) -> Path:
-    runtime_user_id = _normalize_user_id(user_id)
-    if runtime_user_id is None:
-        return _global_overrides_path()
-    return _user_overrides_path(runtime_user_id)
-
-
-def _read_overrides(path: Path) -> dict[str, str]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8")) or {}
-        return payload if isinstance(payload, dict) else {}
-    except FileNotFoundError:
-        return {}
-    except Exception:
-        return {}
 
 
 def _normalize_overrides(values: dict[str, str]) -> dict[str, str]:
@@ -209,12 +169,18 @@ def load_overrides(
     """Return persisted overrides for the active user context."""
     runtime_user_id = _normalize_user_id(user_id)
     if runtime_user_id is None:
-        return _normalize_overrides(_read_overrides(_global_overrides_path()))
+        payload = load_scoped_blob("runtime_settings", default={}) or {}
+        return _normalize_overrides(payload if isinstance(payload, dict) else {})
     if not merge_global:
-        return _normalize_overrides(_read_overrides(_user_overrides_path(runtime_user_id)))
+        payload = load_scoped_blob("runtime_settings", user_id=runtime_user_id, default={}) or {}
+        return _normalize_overrides(payload if isinstance(payload, dict) else {})
+    global_payload = load_scoped_blob("runtime_settings", default={}) or {}
+    user_payload = load_scoped_blob(
+        "runtime_settings", user_id=runtime_user_id, default={}
+    ) or {}
     merged = {
-        **_normalize_overrides(_read_overrides(_global_overrides_path())),
-        **_normalize_overrides(_read_overrides(_user_overrides_path(runtime_user_id))),
+        **_normalize_overrides(global_payload if isinstance(global_payload, dict) else {}),
+        **_normalize_overrides(user_payload if isinstance(user_payload, dict) else {}),
     }
     return _normalize_overrides(merged)
 
@@ -229,8 +195,10 @@ def save_overrides(
     Empty strings clear that key. Unknown keys are silently dropped so a typo
     in the request cannot smuggle in arbitrary settings.
     """
-    path = _overrides_path(user_id)
-    current = _read_overrides(path)
+    runtime_user_id = _normalize_user_id(user_id)
+    current = load_scoped_blob("runtime_settings", user_id=runtime_user_id, default={}) or {}
+    if not isinstance(current, dict):
+        current = {}
     for env_name, value in (updates or {}).items():
         if env_name not in EDITABLE_KEYS:
             continue
@@ -239,7 +207,7 @@ def save_overrides(
         else:
             current[env_name] = str(value).strip()
     current = _normalize_overrides(current)
-    _atomic_write_text(path, json.dumps(current, indent=2))
+    save_scoped_blob("runtime_settings", current, user_id=runtime_user_id)
     return current
 
 

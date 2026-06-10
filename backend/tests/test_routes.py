@@ -3,18 +3,30 @@
 import asyncio
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from app.config import settings
 from app.auth import create_jwt_token
+from app.db import create_user, get_user_by_id
 from app.oauth import _save_tokens
 from app import telegram_validation as tg
 from app import media_generation as mg
 from app.publish import publish_linkedin
-from app.services import automation_create, automation_get, messages_list, posts_list
+from app.services import (
+    automation_create,
+    automation_get,
+    automation_update,
+    messages_list,
+    posts_list,
+)
+from app.video_jobs import create_job
 
 
 def _auth_headers_for_user(user_id: int) -> dict[str, str]:
     return {"Authorization": f"Bearer {create_jwt_token(user_id)}"}
+
+
+_TG_SECRET = "telegram-secret"
 
 
 # ── Health & basic openness ──────────────────────────────────────────
@@ -22,7 +34,7 @@ def _auth_headers_for_user(user_id: int) -> dict[str, str]:
 def test_health_is_open(client):
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "dependencies": {"postgres": "ok"}}
+    assert r.json() == {"status": "ok", "dependencies": {"mariadb": "ok"}}
 
 
 def test_tunnel_status_is_open_and_reports_disabled(client):
@@ -139,6 +151,7 @@ def test_auth_open_mode_allows_everything(client):
 
 def test_auth_required_when_token_set(client):
     settings.backend_auth_token = "secret-day3"
+    settings.allow_open_auth = True
 
     # No token → 401.
     r = client.post("/posts", json={"scheduledDate": "2026-06-01"})
@@ -159,6 +172,91 @@ def test_auth_required_when_token_set(client):
         headers={"Authorization": "Bearer secret-day3"},
     )
     assert r.status_code == 200
+
+
+def test_auth_closed_when_open_mode_disabled(client):
+    settings.backend_auth_token = ""
+    settings.allow_open_auth = False
+
+    r = client.post("/posts", json={"scheduledDate": "2026-06-01"})
+    assert r.status_code == 401
+
+
+def test_auth_login_sets_cookie_and_me_uses_it(client):
+    settings.allow_open_auth = False
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "owner@example.com", "password": "secret123", "name": "Owner"},
+    )
+    assert reg.status_code == 200
+    assert "datalia_session=" in reg.headers.get("set-cookie", "")
+
+    me = client.get("/auth/me")
+    assert me.status_code == 200
+    assert me.json()["email"] == "owner@example.com"
+    assert me.json()["role"] == "admin"
+
+
+def test_auth_logout_clears_cookie(client):
+    settings.allow_open_auth = False
+    client.post(
+        "/auth/register",
+        json={"email": "owner@example.com", "password": "secret123", "name": "Owner"},
+    )
+
+    out = client.post("/auth/logout")
+    assert out.status_code == 204
+
+    me = client.get("/auth/me")
+    assert me.status_code == 401
+
+
+def test_auth_login_rate_limits_repeated_failures(client):
+    settings.allow_open_auth = False
+    client.post(
+        "/auth/register",
+        json={"email": "owner@example.com", "password": "secret123", "name": "Owner"},
+    )
+
+    original_attempts = settings.auth_rate_limit_attempts
+    original_window = settings.auth_rate_limit_window_seconds
+    settings.auth_rate_limit_attempts = 2
+    settings.auth_rate_limit_window_seconds = 60
+    try:
+        first = client.post(
+            "/auth/login",
+            json={"email": "owner@example.com", "password": "wrong"},
+        )
+        second = client.post(
+            "/auth/login",
+            json={"email": "owner@example.com", "password": "wrong"},
+        )
+        third = client.post(
+            "/auth/login",
+            json={"email": "owner@example.com", "password": "wrong"},
+        )
+
+        assert first.status_code == 401
+        assert second.status_code == 401
+        assert third.status_code == 429
+    finally:
+        settings.auth_rate_limit_attempts = original_attempts
+        settings.auth_rate_limit_window_seconds = original_window
+
+
+def test_second_created_user_defaults_to_member_role(monkeypatch):
+    counts = iter([0, 1])
+    monkeypatch.setattr("app.db.count_users", lambda: next(counts))
+
+    first_id = create_user("admin-role@example.com", password_hash=None, full_name="Admin")
+    second_id = create_user("member-role@example.com", password_hash=None, full_name="Member")
+
+    first = get_user_by_id(first_id)
+    second = get_user_by_id(second_id)
+
+    assert first is not None and first["role"] == "admin"
+    assert second is not None and second["role"] == "member"
 
 
 def test_business_read_routes_require_auth_with_token_set(client):
@@ -241,6 +339,77 @@ def test_settings_keys_user_override_falls_back_to_global_defaults(client):
     shared_after = client.get("/settings/keys")
     assert shared_after.status_code == 200
     assert shared_after.json()["keys"]["TELEGRAM_DEFAULT_CHAT_ID"]["value"] == "shared-chat"
+
+
+def test_create_automation_rule_assigns_authenticated_user(client):
+    headers = _auth_headers_for_user(12)
+
+    r = client.post("/automation-rules", headers=headers, json={"name": "Owned rule"})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["name"] == "Owned rule"
+    assert body["user_id"] == "12"
+
+
+def test_automation_rules_api_exposes_last_error_and_last_fire_at(client):
+    rule = automation_create(
+        {
+            "name": "Broken rule",
+            "last_fire_at": 1234567890.0,
+            "last_error": "boom",
+        }
+    )
+
+    r = client.get("/automation-rules")
+
+    assert r.status_code == 200
+    listed = next(item for item in r.json()["rules"] if item["id"] == rule["id"])
+    assert listed["last_fire_at"] == 1234567890.0
+    assert listed["last_error"] == "boom"
+
+
+def test_video_models_catalogue_includes_veo_3_1_lite(client):
+    r = client.get("/video-models")
+    assert r.status_code == 200
+
+    models = {model["id"]: model for model in r.json()["models"]}
+    lite = models["fal-ai/veo3.1/lite"]
+
+    assert lite["label"] == "Veo 3.1 Lite (Google Practical)"
+    assert lite["cost_per_second_usd"] == 0.05
+    assert lite["provider"] == "fal"
+    assert lite["features"]["image_to_video"] is True
+    assert lite["features"]["audio"] is True
+    assert "text_to_video" in lite["endpoints"]
+    assert "image_to_video" in lite["endpoints"]
+
+
+def test_video_models_catalogue_includes_openrouter_entries(client):
+    r = client.get("/video-models")
+    assert r.status_code == 200
+
+    models = {model["id"]: model for model in r.json()["models"]}
+    veo = models["google/veo-3.1-lite"]
+
+    assert veo["provider"] == "openrouter"
+    assert veo["features"]["image_to_video"] is True
+    assert veo["features"]["supported_aspect_ratios"] == ["16:9", "9:16"]
+
+
+def test_create_job_infers_openrouter_provider_from_model_id(monkeypatch):
+    monkeypatch.setattr(settings, "ai_api_base_url", "https://openrouter.ai/api/v1")
+    monkeypatch.setattr(settings, "ai_api_key", "openrouter-key")
+    job = create_job(
+        prompt="Launch teaser",
+        ratio="9:16",
+        duration_seconds=6,
+        model_id="google/veo-3.1-lite",
+    )
+
+    assert job["provider"] == "openrouter"
+    assert job["model"] == "google/veo-3.1-lite"
+    assert job["model_id"] == "google/veo-3.1-lite"
 
 
 def test_registration_closes_after_first_admin(client, monkeypatch):
@@ -351,8 +520,9 @@ def test_generate_returns_cached_variants(client, monkeypatch):
 def test_validation_submit_creates_pending_post_and_message(client, monkeypatch):
     settings.telegram_bot_token = "telegram-test"
     settings.telegram_default_chat_id = "12345"
+    settings.telegram_webhook_secret = _TG_SECRET
 
-    async def fake_send_validation_card(post, chat_id):
+    async def fake_send_validation_card(post, chat_id, *, user_id=None):
         assert chat_id == "12345"
         assert post["status"] == "pending"
         return 321
@@ -378,6 +548,7 @@ def test_validation_submit_creates_pending_post_and_message(client, monkeypatch)
 
 
 def test_validation_submit_uses_saved_user_telegram_settings(client, monkeypatch):
+    settings.telegram_webhook_secret = _TG_SECRET
     headers = _auth_headers_for_user(12)
     save = client.patch(
         "/settings/keys",
@@ -391,7 +562,7 @@ def test_validation_submit_uses_saved_user_telegram_settings(client, monkeypatch
     )
     assert save.status_code == 200
 
-    async def fake_send_validation_card(post, chat_id):
+    async def fake_send_validation_card(post, chat_id, *, user_id=None):
         assert chat_id == "424242"
         assert post["user_id"] == "12"
         return 654
@@ -412,12 +583,25 @@ def test_validation_submit_uses_saved_user_telegram_settings(client, monkeypatch
     assert body["message_id"] == 654
 
 
+def test_validation_submit_requires_webhook_secret_when_telegram_enabled(client):
+    settings.telegram_bot_token = "telegram-test"
+    settings.telegram_default_chat_id = "12345"
+    settings.telegram_webhook_secret = ""
+
+    r = client.post(
+        "/validation/submit",
+        json={
+            "content": "Need approval",
+            "platforms": {"linkedin": True},
+        },
+    )
+    assert r.status_code == 503
+    assert "webhook secret" in r.json()["detail"].lower()
+
+
 def test_telegram_webhook_approve_schedules_automation_post(client, monkeypatch):
     settings.telegram_bot_token = "telegram-test"
-    # Clear the webhook secret so the handler doesn't require the
-    # X-Telegram-Bot-Api-Secret-Token header — this test exercises the
-    # callback handling logic, not the auth path.
-    settings.telegram_webhook_secret = ""
+    settings.telegram_webhook_secret = _TG_SECRET
     rule = automation_create(
         {
             "id": "rule-1",
@@ -457,13 +641,14 @@ def test_telegram_webhook_approve_schedules_automation_post(client, monkeypatch)
         }
     )
 
-    async def fake_answer_callback(callback_query_id, text=""):
+    async def fake_answer_callback(callback_query_id, text="", *, user_id=None):
         assert callback_query_id == "cb_1"
 
     monkeypatch.setattr(tg, "_answer_callback", fake_answer_callback)
 
     r = client.post(
         "/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": _TG_SECRET},
         json={
             "callback_query": {
                 "id": "cb_1",
@@ -475,6 +660,15 @@ def test_telegram_webhook_approve_schedules_automation_post(client, monkeypatch)
     assert r.status_code == 200
     refreshed = next(p for p in posts_list() if p["id"] == post["id"])
     assert refreshed["status"] == "scheduled"
+
+
+def test_telegram_webhook_requires_secret_when_bot_enabled(client):
+    settings.telegram_bot_token = "telegram-test"
+    settings.telegram_webhook_secret = ""
+
+    r = client.post("/telegram/webhook", json={})
+    assert r.status_code == 503
+    assert "webhook secret" in r.json()["detail"].lower()
 
 
 def test_patch_automation_rule_cancels_open_generated_posts_and_resets_fire_cursor(client):
@@ -539,7 +733,7 @@ def test_patch_automation_rule_cancels_open_generated_posts_and_resets_fire_curs
 
 def test_telegram_webhook_rejects_stale_automation_approval(client, monkeypatch):
     settings.telegram_bot_token = "telegram-test"
-    settings.telegram_webhook_secret = ""
+    settings.telegram_webhook_secret = _TG_SECRET
 
     create = client.post(
         "/automation-rules",
@@ -589,7 +783,7 @@ def test_telegram_webhook_rejects_stale_automation_approval(client, monkeypatch)
 
     answered = {"text": None}
 
-    async def fake_answer_callback(callback_query_id, text=""):
+    async def fake_answer_callback(callback_query_id, text="", *, user_id=None):
         assert callback_query_id == "cb_stale"
         answered["text"] = text
 
@@ -597,6 +791,7 @@ def test_telegram_webhook_rejects_stale_automation_approval(client, monkeypatch)
 
     r = client.post(
         "/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": _TG_SECRET},
         json={
             "callback_query": {
                 "id": "cb_stale",
@@ -613,6 +808,101 @@ def test_telegram_webhook_rejects_stale_automation_approval(client, monkeypatch)
     assert "Rule changed" in (answered["text"] or "")
 
 
+def test_automation_worker_bookkeeping_does_not_stale_rule_revision(client, monkeypatch):
+    create = client.post(
+        "/automation-rules",
+        json={
+            "name": "Stable automation rule",
+            "active": True,
+            "content_type": "photo",
+            "num_media": {"mode": "fixed", "count": 1, "min": 2, "max": 4},
+            "domain": "travel",
+            "target_audience": "families",
+            "tone": "",
+            "objective": "promotional",
+            "description_style": "",
+            "extra_brief": "",
+            "schedule": {
+                "frequency": "daily",
+                "times": ["19:00"],
+                "weekdays": None,
+                "month_days": None,
+                "timezone": "Africa/Lagos",
+            },
+            "validation_lead_minutes": 30,
+            "validation_chat_id": "12345",
+            "platforms": {"facebook": True},
+            "ratios": None,
+            "tiktok": None,
+        },
+    )
+    assert create.status_code == 200
+    rule = create.json()
+    original_updated_at = rule["updated_at"]
+
+    refreshed = automation_update(
+        rule["id"],
+        {"last_fire_at": 1780682400.0, "last_error": ""},
+    )
+
+    assert refreshed is not None
+    assert refreshed["updated_at"] == original_updated_at
+
+
+def test_telegram_feedback_resubmit_keeps_automation_post_awaiting_validation(
+    client, monkeypatch
+):
+    settings.telegram_bot_token = "telegram-test"
+    settings.telegram_webhook_secret = _TG_SECRET
+
+    post = tg.posts_create(
+        {
+            "id": "auto-feedback-1",
+            "content": "original automation draft",
+            "platforms": {"facebook": True},
+            "status": "awaiting_validation",
+            "scheduledDate": "2026-06-05",
+            "time": "19:00",
+            "timezone": "Africa/Lagos",
+            "source_rule_id": "rule-feedback-1",
+            "telegram_chat_id": "12345",
+            "telegram_feedback_prompt_message_id": 777,
+        }
+    )
+
+    async def fake_regenerate_from_feedback(original, feedback, *, user_id=None):
+        assert original == "original automation draft"
+        assert feedback == "Make it punchier"
+        return "rewritten automation draft"
+
+    async def fake_send_validation_card(updated, chat_id, *, user_id=None):
+        assert updated["id"] == post["id"]
+        assert updated["status"] == "awaiting_validation"
+        assert chat_id == "12345"
+        return 888
+
+    monkeypatch.setattr(tg, "_regenerate_from_feedback", fake_regenerate_from_feedback)
+    monkeypatch.setattr(tg, "_send_validation_card", fake_send_validation_card)
+
+    r = client.post(
+        "/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": _TG_SECRET},
+        json={
+            "message": {
+                "text": "Make it punchier",
+                "chat": {"id": 12345},
+                "reply_to_message": {"message_id": 777},
+            }
+        },
+    )
+    assert r.status_code == 200
+
+    refreshed = next(p for p in posts_list() if p["id"] == post["id"])
+    assert refreshed["content"] == "rewritten automation draft"
+    assert refreshed["status"] == "awaiting_validation"
+    assert refreshed["telegram_message_id"] == 888
+
+
 def test_media_generate_image_uses_fallback_and_persists_asset(client):
     settings.ai_image_model = ""
     r = client.post(
@@ -624,6 +914,28 @@ def test_media_generate_image_uses_fallback_and_persists_asset(client):
     assert body["kind"] == "image"
     assert body["provider"] == "fallback-poster"
     assert (settings.content_dir / "generated" / body["filename"]).exists()
+
+
+def test_generate_image_file_falls_back_when_provider_errors(monkeypatch):
+    async def fake_call_image_api(prompt, width, height, *, user_id=None):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "Image generation request failed.",
+                "status_code": 402,
+                "response": "credits exhausted",
+            },
+        )
+
+    monkeypatch.setattr(mg, "_call_image_api", fake_call_image_api)
+
+    path, provider = asyncio.run(
+        mg._generate_image_file("Fallback this poster", "1:1")
+    )
+
+    assert provider == "fallback-poster"
+    assert path.exists()
+    assert path.suffix == ".png"
 
 
 def test_media_generate_video_persists_motion_asset(client, monkeypatch):
@@ -671,6 +983,7 @@ def test_publish_linkedin_text_success(monkeypatch):
     class _Resp:
         status_code = 201
         text = '{"id":"urn:li:share:1"}'
+        headers = {}
 
         def json(self):
             return {"id": "urn:li:share:1"}
@@ -690,3 +1003,30 @@ def test_publish_linkedin_text_success(monkeypatch):
     )
     assert result.ok is True
     assert result.platform_post_id == "urn:li:share:1"
+
+
+def test_publish_linkedin_uses_x_restli_id_header(monkeypatch):
+    class _Resp:
+        status_code = 201
+        text = ""
+        headers = {"x-restli-id": "urn:li:ugcPost:123"}
+
+        def json(self):
+            return {}
+
+    async def fake_post(self, url, **kwargs):
+        assert url == "https://api.linkedin.com/rest/posts"
+        return _Resp()
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    result = asyncio.run(
+        publish_linkedin(
+            "urn:li:person:abc123",
+            "token",
+            label="Alice LinkedIn",
+            content="Hello LinkedIn",
+        )
+    )
+    assert result.ok is True
+    assert result.platform_post_id == "urn:li:ugcPost:123"
+    assert result.permalink_url == "https://www.linkedin.com/feed/update/urn:li:ugcPost:123/"

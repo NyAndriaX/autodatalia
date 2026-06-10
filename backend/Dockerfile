@@ -7,6 +7,8 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /build
 
+ARG INSTALL_DEV_DEPS=false
+
 # Only what's needed to BUILD wheels — gcc/musl-dev for any C extension
 # in the dep tree (pydantic-core's Rust build is satisfied via a wheel,
 # so no Rust toolchain needed here in practice).
@@ -14,10 +16,14 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY requirements.txt requirements-dev.txt .
 # `--user` puts everything under /root/.local which we copy to /home/app
 # in the runtime stage. Keeps the runtime image free of pip + build tools.
-RUN pip install --no-cache-dir --user -r requirements.txt
+RUN if [ "$INSTALL_DEV_DEPS" = "true" ]; then \
+        pip install --no-cache-dir --user -r requirements-dev.txt; \
+    else \
+        pip install --no-cache-dir --user -r requirements.txt; \
+    fi
 
 
 # ── runtime stage ──────────────────────────────────────────────────────

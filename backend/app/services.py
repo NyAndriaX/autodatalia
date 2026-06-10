@@ -14,6 +14,14 @@ import httpx
 from fastapi import HTTPException, UploadFile
 
 from .config import settings
+from .db import (
+    delete_collection_document,
+    get_collection_document,
+    list_collection_documents,
+    load_scoped_blob,
+    save_scoped_blob,
+    upsert_collection_document,
+)
 from .runtime_config import resolved_settings
 
 # Optional dependency — falls back to "no transcode" if the package failed
@@ -67,6 +75,43 @@ def atomic_write_text(path, content: str, *, encoding: str = "utf-8") -> None:
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".gif"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".m4v"}
 DESCRIPTION_EXTENSIONS = (".txt", ".md")
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+ALLOWED_IMAGE_CONTENT_TYPES = {
+    "image/gif",
+    "image/jpeg",
+    "image/jfif",
+    "image/png",
+    "image/webp",
+}
+ALLOWED_VIDEO_CONTENT_TYPES = {
+    "video/mp4",
+    "video/quicktime",
+    "video/webm",
+    "video/x-m4v",
+}
+
+
+def _upstream_error_detail(message: str, upstream_status: int) -> dict[str, Any]:
+    return {
+        "message": message,
+        "upstream_status": upstream_status,
+    }
+
+
+def _upload_kind_for(file: UploadFile, suffix: str) -> str:
+    content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+    if suffix in IMAGE_EXTENSIONS or content_type in ALLOWED_IMAGE_CONTENT_TYPES:
+        return "image"
+    if suffix in VIDEO_EXTENSIONS or content_type in ALLOWED_VIDEO_CONTENT_TYPES:
+        return "video"
+    raise HTTPException(
+        status_code=415,
+        detail=(
+            f"Unsupported upload type: {content_type or suffix or 'unknown'}. "
+            "Allowed: PNG, JPG, GIF, WebP, MP4, MOV."
+        ),
+    )
 
 
 # ── Content helpers ────────────────────────────────────────────────────
@@ -191,11 +236,10 @@ async def generate_captions(
     if response.status_code >= 400:
         raise HTTPException(
             status_code=502,
-            detail={
-                "message": "AI API request failed.",
-                "status_code": response.status_code,
-                "response": response.text,
-            },
+            detail=_upstream_error_detail(
+                "AI API request failed.",
+                response.status_code,
+            ),
         )
 
     data = response.json()
@@ -225,9 +269,7 @@ async def generate_captions(
     try:
         captions = _extract_json(message_content)
     except (ValueError, json.JSONDecodeError) as exc:
-        raise HTTPException(
-            status_code=502, detail=f"Could not parse AI response: {exc}"
-        ) from exc
+        raise HTTPException(status_code=502, detail="Could not parse AI response.") from exc
 
     return {
         "instagram_caption": captions.get("instagram_caption", "").strip(),
@@ -242,14 +284,13 @@ async def generate_captions(
 
 _AI_CACHE_TTL = 24 * 3600.0  # seconds
 _AI_CACHE_MAX = 512
-_AI_CACHE_FILE = settings.content_dir / ".ai_cache.json"
-
-
 def _load_cache() -> dict[str, list[Any]]:
     try:
-        raw = json.loads(_AI_CACHE_FILE.read_text(encoding="utf-8"))
+        raw = load_scoped_blob("ai_cache", default={}) or {}
         now = time.time()
-        return {k: v for k, v in raw.items() if v[0] > now}
+        if not isinstance(raw, dict):
+            return {}
+        return {k: v for k, v in raw.items() if isinstance(v, list) and v and v[0] > now}
     except Exception:
         return {}
 
@@ -259,7 +300,7 @@ _AI_CACHE: dict[str, list[Any]] = _load_cache()
 
 def _save_cache() -> None:
     try:
-        atomic_write_text(_AI_CACHE_FILE, json.dumps(_AI_CACHE))
+        save_scoped_blob("ai_cache", _AI_CACHE)
     except Exception:
         pass  # cache is best-effort; never break a request over it
 
@@ -377,11 +418,10 @@ async def _post_chat(
     if response.status_code >= 400:
         raise HTTPException(
             status_code=502,
-            detail={
-                "message": "AI API request failed.",
-                "status_code": response.status_code,
-                "response": response.text,
-            },
+            detail=_upstream_error_detail(
+                "AI API request failed.",
+                response.status_code,
+            ),
         )
 
     data = response.json()
@@ -722,9 +762,7 @@ async def generate_post_variants(
     try:
         parsed = _extract_json(raw)
     except (ValueError, json.JSONDecodeError) as exc:
-        raise HTTPException(
-            status_code=502, detail=f"Could not parse AI response: {exc}"
-        ) from exc
+        raise HTTPException(status_code=502, detail="Could not parse AI response.") from exc
 
     variants: list[dict[str, Any]] = []
     for idx, item in enumerate(parsed.get("variants", []), start=1):
@@ -1026,15 +1064,33 @@ async def save_upload(file: UploadFile) -> dict[str, str]:
     settings.content_dir.mkdir(parents=True, exist_ok=True)
     safe = _safe_filename(file.filename or "upload")
     dest = _unique_path(settings.content_dir, safe)
-
-    data = await file.read()
-    dest.write_bytes(data)
-
     suffix = dest.suffix.lower()
-    if suffix in VIDEO_EXTENSIONS or (file.content_type or "").startswith("video/"):
-        kind = "video"
-    else:
-        kind = "image"
+    kind = _upload_kind_for(file, suffix)
+
+    total = 0
+    try:
+        with dest.open("wb") as fh:
+            while True:
+                chunk = await file.read(UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Upload exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit.",
+                    )
+                fh.write(chunk)
+    except Exception:
+        try:
+            if dest.exists():
+                dest.unlink()
+        except OSError:
+            pass
+        raise
+
+    if total <= 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
     if kind == "video":
         dest = await _normalize_video_for_publishing(dest)
@@ -1135,16 +1191,24 @@ def _posts_write_raw(posts: list[dict[str, Any]]) -> None:
     atomic_write_text(_POSTS_FILE, json.dumps(posts, indent=2))
 
 
-def posts_list() -> list[dict[str, Any]]:
-    """Return every persisted scheduled post."""
+def posts_list(
+    user_id: str | int | None = None,
+    *,
+    all_users: bool = False,
+) -> list[dict[str, Any]]:
+    """Return persisted scheduled posts, filtered to one user by default."""
     with _POSTS_LOCK:
-        return list(_posts_read_raw())
+        return list_collection_documents(
+            "posts",
+            user_id=user_id,
+            all_scopes=all_users,
+            newest_first=False,
+        )
 
 
 def posts_create(payload: dict[str, Any]) -> dict[str, Any]:
     """Persist a new post and return it (auto-fills id if missing)."""
     with _POSTS_LOCK:
-        posts = _posts_read_raw()
         post = dict(payload)
         if not post.get("id"):
             post["id"] = f"srv-{_uuid.uuid4().hex[:10]}"
@@ -1152,35 +1216,47 @@ def posts_create(payload: dict[str, Any]) -> dict[str, Any]:
         post.setdefault("platforms", {})
         post.setdefault("status", "draft")
         post.setdefault("media", [])
-        posts.append(post)
-        _posts_write_raw(posts)
+        upsert_collection_document(
+            "posts",
+            post["id"],
+            post,
+            user_id=post.get("user_id"),
+            sort_ts=post.get("published_at") or post.get("scheduled_for"),
+        )
         return post
 
 
 def posts_update(post_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
     """Apply a partial update (None values are ignored). Returns the post or None."""
     with _POSTS_LOCK:
-        posts = _posts_read_raw()
-        for post in posts:
-            if post.get("id") == post_id:
-                for key, value in patch.items():
-                    if value is None:
-                        continue
-                    post[key] = value
-                _posts_write_raw(posts)
-                return post
-    return None
+        post = get_collection_document("posts", post_id, all_scopes=True)
+        if post is None:
+            return None
+        for key, value in patch.items():
+            if value is None:
+                continue
+            post[key] = value
+        upsert_collection_document(
+            "posts",
+            post_id,
+            post,
+            user_id=post.get("user_id"),
+            sort_ts=post.get("published_at") or post.get("scheduled_for"),
+        )
+        return post
 
 
 def posts_delete(post_id: str) -> bool:
     """Remove the post by id. Returns True if anything was removed."""
     with _POSTS_LOCK:
-        posts = _posts_read_raw()
-        remaining = [p for p in posts if p.get("id") != post_id]
-        if len(remaining) == len(posts):
+        post = get_collection_document("posts", post_id, all_scopes=True)
+        if post is None:
             return False
-        _posts_write_raw(remaining)
-        return True
+        return delete_collection_document(
+            "posts",
+            post_id,
+            user_id=post.get("user_id"),
+        )
 
 
 # ── Automation rules CRUD ──────────────────────────────────────────────
@@ -1206,22 +1282,27 @@ def _automation_write_raw(rules: list[dict[str, Any]]) -> None:
     atomic_write_text(_AUTOMATION_FILE, json.dumps(rules, indent=2))
 
 
-def automation_list() -> list[dict[str, Any]]:
+def automation_list(
+    user_id: str | int | None = None,
+    *,
+    all_users: bool = False,
+) -> list[dict[str, Any]]:
     with _AUTOMATION_LOCK:
-        return list(_automation_read_raw())
+        return list_collection_documents(
+            "automation_rules",
+            user_id=user_id,
+            all_scopes=all_users,
+            newest_first=False,
+        )
 
 
 def automation_get(rule_id: str) -> dict[str, Any] | None:
     with _AUTOMATION_LOCK:
-        for rule in _automation_read_raw():
-            if rule.get("id") == rule_id:
-                return dict(rule)
-    return None
+        return get_collection_document("automation_rules", rule_id, all_scopes=True)
 
 
 def automation_create(payload: dict[str, Any]) -> dict[str, Any]:
     with _AUTOMATION_LOCK:
-        rules = _automation_read_raw()
         rule = dict(payload)
         if not rule.get("id"):
             rule["id"] = f"ar_{_uuid.uuid4().hex[:10]}"
@@ -1229,34 +1310,50 @@ def automation_create(payload: dict[str, Any]) -> dict[str, Any]:
         rule.setdefault("created_at", now)
         rule["updated_at"] = now
         rule.setdefault("active", True)
-        rules.append(rule)
-        _automation_write_raw(rules)
+        upsert_collection_document(
+            "automation_rules",
+            rule["id"],
+            rule,
+            user_id=rule.get("user_id"),
+            sort_ts=rule["updated_at"],
+        )
         return rule
 
 
 def automation_update(rule_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
     with _AUTOMATION_LOCK:
-        rules = _automation_read_raw()
-        for rule in rules:
-            if rule.get("id") == rule_id:
-                for key, value in patch.items():
-                    if value is None:
-                        continue
-                    rule[key] = value
-                rule["updated_at"] = time.time()
-                _automation_write_raw(rules)
-                return rule
-    return None
+        rule = get_collection_document("automation_rules", rule_id, all_scopes=True)
+        if rule is None:
+            return None
+        previous_updated_at = rule.get("updated_at")
+        for key, value in patch.items():
+            if value is None:
+                continue
+            rule[key] = value
+        operational_only = all(
+            key in {"last_fire_at", "last_error"} for key, value in patch.items() if value is not None
+        )
+        rule["updated_at"] = previous_updated_at if operational_only else time.time()
+        upsert_collection_document(
+            "automation_rules",
+            rule_id,
+            rule,
+            user_id=rule.get("user_id"),
+            sort_ts=rule["updated_at"],
+        )
+        return rule
 
 
 def automation_delete(rule_id: str) -> bool:
     with _AUTOMATION_LOCK:
-        rules = _automation_read_raw()
-        remaining = [r for r in rules if r.get("id") != rule_id]
-        if len(remaining) == len(rules):
+        rule = get_collection_document("automation_rules", rule_id, all_scopes=True)
+        if rule is None:
             return False
-        _automation_write_raw(remaining)
-        return True
+        return delete_collection_document(
+            "automation_rules",
+            rule_id,
+            user_id=rule.get("user_id"),
+        )
 
 
 # ── Messages / activity feed ───────────────────────────────────────────
@@ -1284,10 +1381,20 @@ def _messages_write_raw(items: list[dict[str, Any]]) -> None:
     atomic_write_text(_MESSAGES_FILE, json.dumps(items, indent=2))
 
 
-def messages_list() -> list[dict[str, Any]]:
+def messages_list(
+    user_id: str | int | None = None,
+    *,
+    all_users: bool = False,
+) -> list[dict[str, Any]]:
     """Return every persisted message, newest first."""
     with _MESSAGES_LOCK:
-        return list(_messages_read_raw())
+        return list_collection_documents(
+            "messages",
+            user_id=user_id,
+            all_scopes=all_users,
+            newest_first=True,
+            limit=MAX_MESSAGES if not all_users else None,
+        )
 
 
 def messages_append(message: dict[str, Any]) -> dict[str, Any]:
@@ -1297,14 +1404,21 @@ def messages_append(message: dict[str, Any]) -> dict[str, Any]:
     treats absent `id` as a fresh unread item, so we always issue one.
     """
     with _MESSAGES_LOCK:
-        items = _messages_read_raw()
         record = dict(message)
         record.setdefault("id", f"msg-{_uuid.uuid4().hex[:12]}")
         record.setdefault("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
         record.setdefault("read", False)
-        items.insert(0, record)
-        del items[MAX_MESSAGES:]
-        _messages_write_raw(items)
+        if not record.get("user_id") and record.get("post_id"):
+            post = get_collection_document("posts", str(record["post_id"]), all_scopes=True)
+            if post and post.get("user_id"):
+                record["user_id"] = post.get("user_id")
+        upsert_collection_document(
+            "messages",
+            record["id"],
+            record,
+            user_id=record.get("user_id"),
+            sort_ts=time.time(),
+        )
         return record
 
 

@@ -20,9 +20,9 @@ exactly one tenant (Datalia itself), OAuth connections happen once at setup.
 | Calendar + scheduling + auto-publish | Done |
 | OAuth for Facebook Pages, Instagram Business, TikTok, LinkedIn | Done |
 | Image cropping per platform ratio + spam guards | Done |
-| **AI image generation** — Nano Banana (Gemini 2.5 Flash Image) via OpenRouter | Done |
+| **AI image generation** — Nano Banana (Gemini 2.5 Flash Image) via OpenRouter, auto-falls-back to a local poster if provider credits fail | Done |
 | **AI video generation** — LTX-2 (Lightricks official) → fal.ai → ffmpeg Ken Burns fallback, auto-fallback on provider failure | Done |
-| **Cost dashboard** — per-call / per-workflow / per-tier / per-model spend in Postgres-backed log | Done |
+| **Cost dashboard** — per-call / per-workflow / per-tier / per-model spend in MariaDB-backed log | Done |
 | **3-tier LLM routing** — Fast (hashtags/transforms), Standard (variants), Premium (n≥3 variants) | Done |
 | **Automation module** — auto-generate posts on a recurring schedule | Done (Phase 1–3) |
 | **Telegram validation gate** — every auto-generated post requires explicit user approval before publish, manual approvals publish immediately | Done |
@@ -55,7 +55,7 @@ For per-platform publish state see [`PROJECT_STATE.md`](PROJECT_STATE.md).
                                        ├──▶ TikTok API
                                        ├──▶ LinkedIn API
                                        ├──▶ Telegram Bot API (validation gate)
-                                       └──▶ Postgres (users + auth only)
+                                       └──▶ MariaDB (auth + app state)
 ```
 
 Three background loops inside the backend process:
@@ -65,15 +65,18 @@ Three background loops inside the backend process:
   candidate posts AI-side, submits them to Telegram for approval.
   Approved candidates flip to `status="scheduled"` and the scheduler
   picks them up like any other scheduled post.
+  Rule bookkeeping (`last_fire_at`, `last_error`) does not count as a
+  real rule edit, so already-generated validation cards stay approvable
+  unless the user actually changes the rule itself.
 - **video jobs worker** — polls the queued LTX / fal jobs, downloads
   finished MP4s, auto-falls-back to ffmpeg Ken Burns if the external
   provider raises so the user always gets *a* video.
 
-Storage is split: posts, automation rules, OAuth tokens, cost logs,
-video jobs and the activity feed live as JSON in a Docker named volume;
-**users + auth** live in Postgres (a `postgres:16-alpine` container
-ships in the dev compose; prod can swap to managed Postgres via
-`DATABASE_URL`). No other external database needed.
+Storage is split by type: uploaded media still lives on the Docker
+content volume, while auth, posts, automation rules, OAuth tokens,
+runtime API keys, cost logs, video jobs and the activity feed live in
+MariaDB. The default compose ships an in-stack MariaDB container; prod
+can point `DATABASE_URL` at a managed MariaDB/MySQL host instead.
 
 ---
 
@@ -85,11 +88,31 @@ docker compose -f infra/docker-compose.yml up -d --build caption-api
 # caption-api → http://localhost:8000
 ```
 
+### Full local stack (Docker)
+```bash
+docker compose -f infra/docker-compose.yml up -d --build
+# frontend    → http://localhost:3005
+# caption-api → http://localhost:8000
+```
+
+For the simplest operator flow, this is the only command needed for a local
+run. Docker Compose brings up MariaDB automatically; there is no separate
+database install or manual schema step.
+
+Windows helper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\infra\start-local.ps1
+```
+
 Meta and TikTok require HTTPS OAuth callbacks, so for OAuth testing point
 a public HTTPS host at the backend and set `OAUTH_REDIRECT_BASE` +
 `PUBLIC_BASE_URL` in `infra/.env` to that URL. Any tunneling service
 that gives a stable HTTPS hostname works (Cloudflare Tunnel, Tailscale
-Funnel, etc.). For production deployment see [`DEPLOY.md`](DEPLOY.md).
+Funnel, etc.). That same host must also serve `/content/...` URLs for
+scheduled Instagram/TikTok publishes, because those platforms pull the
+media file directly from the public URL. For production deployment see
+[`DEPLOY.md`](DEPLOY.md).
 
 ### Frontend
 ```bash
@@ -103,6 +126,12 @@ npm run dev                       # http://localhost:3000
 ```bash
 docker compose -f infra/docker-compose.yml exec -T caption-api \
   python -m pytest tests/ -q
+```
+
+On Windows there is also:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\backend\run-tests.ps1
 ```
 
 ---

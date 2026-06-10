@@ -1,7 +1,7 @@
 # DATALIA Infra - Orchestration & Deployment
 
-Docker Compose configuration for running the FastAPI backend locally and in
-production.
+Docker Compose configuration for running the local full stack and the
+production stack.
 
 The active runtime is direct frontend -> backend. n8n is not part of the current
 compose stack.
@@ -10,8 +10,8 @@ compose stack.
 
 ```text
 infra/
-|-- docker-compose.yml           # Local dev: caption-api only
-|-- docker-compose.prod.yml      # Production: Caddy + caption-api + frontend
+|-- docker-compose.yml           # Local dev: frontend + caption-api + mariadb
+|-- docker-compose.prod.yml      # Production: Caddy + frontend + caption-api + mariadb
 |-- .env.example                 # Safe local env template
 |-- .env                         # Local secrets, git-ignored
 |-- .env.production.example      # Safe production env template
@@ -19,26 +19,36 @@ infra/
     `-- Caddyfile                # HTTPS reverse proxy for production API + dashboard
 ```
 
-The local `caption-api` service builds from `../backend` and bind-mounts
-`../backend/content` to `/app/content`.
+The local stack builds the backend from `../backend`, serves the dashboard on
+`http://localhost:3005`, the API on `http://localhost:8000`, and keeps app
+state in the in-stack MariaDB container.
 
-## Local Backend
+## Local Stack
 
 ```bash
-docker compose -f infra/docker-compose.yml up -d --build caption-api
+docker compose -f infra/docker-compose.yml up -d --build
 ```
 
 Service URL:
 
 | Service | URL |
 |---|---|
+| frontend | http://localhost:3005 |
 | caption-api | http://localhost:8000 |
 
 Useful commands:
 
 ```bash
-docker compose -f infra/docker-compose.yml restart caption-api
+docker compose -f infra/docker-compose.yml ps
 docker compose -f infra/docker-compose.yml logs -f caption-api
+docker compose -f infra/docker-compose.yml logs -f frontend
+docker compose -f infra/docker-compose.yml exec -T caption-api python -m pytest /home/app/tests -q
+```
+
+Windows helper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start-local.ps1
 ```
 
 Rebuild for code, dependency, or Dockerfile changes. A restart is enough for
@@ -59,12 +69,19 @@ Compose reads `infra/.env` automatically.
 | `AI_INCLUDE_IMAGES` | `false` | Whether AI calls include image bytes by default |
 | `AI_DAILY_LIMIT` | `200` | Per-client daily non-cached AI call cap |
 | `CORS_ALLOW_ORIGINS` | localhost frontend origins | Direct browser access allowlist |
-| `BACKEND_AUTH_TOKEN` | empty | Bearer token gate for mutating routes |
+| `BACKEND_AUTH_TOKEN` | empty | Optional shared bearer token for server-to-server calls |
+| `ALLOW_OPEN_AUTH` | `true` local / `false` prod | Anonymous access switch; keep false on any public deployment |
 | `OAUTH_REDIRECT_BASE` | `http://localhost:8000` | Public HTTPS callback base for OAuth |
 | `PUBLIC_BASE_URL` | request base URL | Optional public media URL override |
 | provider secrets | empty | Meta, TikTok, LinkedIn, Google credentials |
 
-`BACKEND_AUTH_TOKEN` should be set before any public deployment.
+For any public deployment, keep `ALLOW_OPEN_AUTH=false`. Browser users should
+authenticate through `/auth/login`; do not ship a shared backend token to the
+frontend bundle.
+
+If Telegram validation is enabled, set `TELEGRAM_WEBHOOK_SECRET`. The backend
+now rejects webhook callbacks and validation submissions when the bot is on but
+the secret is missing.
 
 ## Public HTTPS For OAuth
 
@@ -96,9 +113,8 @@ The production compose runs:
 | `frontend` | Next.js dashboard, exposed only through Caddy |
 
 Set `API_DOMAIN` for the API host and `FRONTEND_DOMAIN` for the dashboard host
-in `infra/.env.production`. Persistent app data lives in the `caption-content`
-named volume. It holds uploads, cropped media, posts, messages, AI caches, and
-OAuth tokens.
+in `infra/.env.production`. Persistent media lives in the `caption-content`
+named volume. App state and user accounts live in MariaDB.
 
 ## Backend Endpoints
 

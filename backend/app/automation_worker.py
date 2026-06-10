@@ -27,6 +27,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .config import settings
+from .db import get_only_user_id, list_scoped_blob_user_ids
+from .runtime_config import resolved_settings
 from .services import (
     automation_list,
     automation_update,
@@ -171,8 +173,36 @@ def _ratio_for_image(rule: dict[str, Any]) -> str:
     return "1:1"
 
 
+def _resolve_rule_user_id(rule: dict[str, Any]) -> int | None:
+    raw_user_id = rule.get("user_id")
+    if raw_user_id not in (None, "", 0, "0"):
+        try:
+            normalized = int(raw_user_id)
+        except (TypeError, ValueError):
+            normalized = None
+        else:
+            if normalized > 0:
+                return normalized
+    try:
+        only_user_id = get_only_user_id()
+    except Exception:
+        log.warning("[automation] could not infer legacy rule owner", exc_info=True)
+        only_user_id = None
+    if only_user_id is None:
+        owner_candidates = {
+            *list_scoped_blob_user_ids("runtime_settings"),
+            *list_scoped_blob_user_ids("oauth_tokens"),
+        }
+        if len(owner_candidates) == 1:
+            only_user_id = next(iter(owner_candidates))
+    if only_user_id and rule.get("id"):
+        automation_update(rule["id"], {"user_id": str(only_user_id)})
+        rule["user_id"] = str(only_user_id)
+    return only_user_id
+
+
 async def _generate_media_for_rule(
-    rule: dict[str, Any], count: int
+    rule: dict[str, Any], count: int, *, user_id: int | None = None
 ) -> list[dict[str, Any]]:
     """Generate `count` fresh AI images for a rule (one per slide, distinct
     prompts). Returns Post-shaped media entries already wired with
@@ -200,7 +230,9 @@ async def _generate_media_for_rule(
     for slide_idx in range(count):
         slide_prompt = _build_brief(rule, slide_idx=slide_idx)
         try:
-            path, provider = await _generate_image_file(slide_prompt, ratio)
+            path, provider = await _generate_image_file(
+                slide_prompt, ratio, user_id=user_id
+            )
         except Exception as exc:
             log.warning("[automation] image gen failed for slide %s: %s", slide_idx, exc)
             continue
@@ -226,6 +258,8 @@ async def generate_candidate(rule: dict[str, Any], fire_epoch: float) -> dict[st
     """Create one Post candidate for this rule's next fire and submit it
     to Telegram for validation. Returns the created Post dict.
     """
+    rule_user_id = _resolve_rule_user_id(rule)
+    cfg = resolved_settings(rule_user_id)
     # 1. Caption generation
     brief = _build_brief(rule)
     variants, _usage, _model = await generate_post_variants(
@@ -234,6 +268,7 @@ async def generate_candidate(rule: dict[str, Any], fire_epoch: float) -> dict[st
         template=rule.get("description_style") or None,
         n=1,
         quality="standard",
+        user_id=rule_user_id,
     )
     content = (variants[0].get("text") or "").strip() if variants else ""
 
@@ -242,7 +277,7 @@ async def generate_candidate(rule: dict[str, Any], fire_epoch: float) -> dict[st
     if rule.get("content_type") == "text":
         desired_media = 0
     media = (
-        await _generate_media_for_rule(rule, desired_media)
+        await _generate_media_for_rule(rule, desired_media, user_id=rule_user_id)
         if desired_media > 0
         else []
     )
@@ -272,16 +307,19 @@ async def generate_candidate(rule: dict[str, Any], fire_epoch: float) -> dict[st
         "source_rule_updated_at": rule.get("updated_at"),
         "scheduled_for": fire_epoch,
         "auto_generated_at": time.time(),
+        "user_id": str(rule_user_id) if rule_user_id else None,
     }
     post = posts_create(payload)
 
     # 5. Submit to Telegram (lazy import keeps a circular dep at bay).
     from .telegram_validation import _send_validation_card  # type: ignore
 
-    chat_id = (rule.get("validation_chat_id") or settings.telegram_default_chat_id or "").strip()
-    if chat_id and settings.telegram_bot_token:
+    chat_id = (rule.get("validation_chat_id") or cfg.telegram_default_chat_id or "").strip()
+    if chat_id and cfg.telegram_bot_token:
         try:
-            message_id = await _send_validation_card(post, chat_id)
+            message_id = await _send_validation_card(
+                post, chat_id, user_id=rule_user_id
+            )
             post = {
                 **post,
                 "telegram_chat_id": chat_id,
@@ -332,10 +370,15 @@ async def regenerate_for_post(post: dict[str, Any]) -> dict[str, Any]:
     rule_id = post.get("source_rule_id")
     if not rule_id:
         raise RuntimeError("post has no source_rule_id — cannot regenerate")
-    rule = next((r for r in automation_list() if r.get("id") == rule_id), None)
+    rule = next(
+        (r for r in automation_list(all_users=True) if r.get("id") == rule_id),
+        None,
+    )
     if not rule:
         raise RuntimeError(f"rule {rule_id} no longer exists")
 
+    rule_user_id = _resolve_rule_user_id(rule)
+    cfg = resolved_settings(rule_user_id)
     brief = _build_brief(rule)
     variants, _usage, _model = await generate_post_variants(
         prompt=brief,
@@ -343,6 +386,7 @@ async def regenerate_for_post(post: dict[str, Any]) -> dict[str, Any]:
         template=rule.get("description_style") or None,
         n=1,
         quality="standard",
+        user_id=rule_user_id,
     )
     content = (variants[0].get("text") or "").strip() if variants else ""
 
@@ -350,7 +394,7 @@ async def regenerate_for_post(post: dict[str, Any]) -> dict[str, Any]:
     if rule.get("content_type") == "text":
         desired_media = 0
     media = (
-        await _generate_media_for_rule(rule, desired_media)
+        await _generate_media_for_rule(rule, desired_media, user_id=rule_user_id)
         if desired_media > 0
         else []
     )
@@ -364,15 +408,18 @@ async def regenerate_for_post(post: dict[str, Any]) -> dict[str, Any]:
         "timeout_prompt_message_id": None,
         "regenerated_at": time.time(),
         "source_rule_updated_at": rule.get("updated_at"),
+        "user_id": str(rule_user_id) if rule_user_id else post.get("user_id"),
     }) or post
 
     chat_id = post.get("telegram_chat_id") or (
-        rule.get("validation_chat_id") or settings.telegram_default_chat_id or ""
+        rule.get("validation_chat_id") or cfg.telegram_default_chat_id or ""
     )
     chat_id = str(chat_id or "").strip()
-    if chat_id and settings.telegram_bot_token:
+    if chat_id and cfg.telegram_bot_token:
         from .telegram_validation import _send_validation_card  # type: ignore
-        new_card_id = await _send_validation_card(updated, chat_id)
+        new_card_id = await _send_validation_card(
+            updated, chat_id, user_id=rule_user_id
+        )
         posts_update(updated["id"], {
             "telegram_chat_id": chat_id,
             "telegram_message_id": new_card_id,
@@ -396,10 +443,8 @@ async def _scan_timeouts(now: float) -> list[str]:
     Returns post ids that received a prompt this tick.
     """
     prompted: list[str] = []
-    if not settings.telegram_bot_token:
-        return prompted
     from .telegram_validation import send_timeout_prompt  # type: ignore
-    for post in posts_list():
+    for post in posts_list(all_users=True):
         if post.get("status") != "awaiting_validation":
             continue
         if not post.get("source_rule_id"):
@@ -409,11 +454,16 @@ async def _scan_timeouts(now: float) -> list[str]:
             continue
         if post.get("timeout_prompt_sent_at"):
             continue  # already prompted
-        chat_id = str(post.get("telegram_chat_id") or settings.telegram_default_chat_id or "").strip()
+        cfg = resolved_settings(post.get("user_id"))
+        chat_id = str(
+            post.get("telegram_chat_id") or cfg.telegram_default_chat_id or ""
+        ).strip()
         if not chat_id:
             continue
         try:
-            msg_id = await send_timeout_prompt(post, chat_id)
+            msg_id = await send_timeout_prompt(
+                post, chat_id, user_id=post.get("user_id")
+            )
         except Exception as exc:
             log.exception("[automation] timeout prompt failed for %s", post.get("id"))
             posts_update(post["id"], {
@@ -440,8 +490,8 @@ async def _scan_timeouts(now: float) -> list[str]:
 def _reconcile_open_posts() -> list[str]:
     """Cancel open automation posts that no longer match their source rule."""
     touched: list[str] = []
-    rules = {str(rule.get("id")): rule for rule in automation_list()}
-    for post in posts_list():
+    rules = {str(rule.get("id")): rule for rule in automation_list(all_users=True)}
+    for post in posts_list(all_users=True):
         if post.get("status") not in {"awaiting_validation", "scheduled"}:
             continue
         rule_id = str(post.get("source_rule_id") or "")
@@ -493,9 +543,11 @@ async def tick(now: float | None = None) -> dict[str, list[str]]:
         now = time.time()
     reconciled = _reconcile_open_posts()
     fired: list[str] = []
-    for rule in automation_list():
+    for rule in automation_list(all_users=True):
         if not rule.get("active"):
             continue
+        rule_user_id = _resolve_rule_user_id(rule)
+        cfg = resolved_settings(rule_user_id)
         next_fire = compute_next_fire_epoch(rule, now)
         if next_fire is None:
             continue
@@ -512,10 +564,10 @@ async def tick(now: float | None = None) -> dict[str, list[str]]:
         # must be human-approved before publishing.
         chat_id = (
             rule.get("validation_chat_id")
-            or settings.telegram_default_chat_id
+            or cfg.telegram_default_chat_id
             or ""
         ).strip()
-        if not chat_id or not settings.telegram_bot_token:
+        if not chat_id or not cfg.telegram_bot_token:
             messages_append({
                 "kind": "automation_error",
                 "post_id": None,
@@ -536,6 +588,14 @@ async def tick(now: float | None = None) -> dict[str, list[str]]:
             await generate_candidate(rule, next_fire)
         except Exception as exc:
             log.exception("[automation] generation failed for rule %s", rule.get("id"))
+            messages_append({
+                "kind": "automation_error",
+                "post_id": None,
+                "message": (
+                    f"Automation rule '{rule.get('name')}' failed during generation: "
+                    f"{type(exc).__name__}: {exc}"
+                )[:500],
+            })
             automation_update(rule["id"], {
                 "last_fire_at": next_fire,
                 "last_error": f"{type(exc).__name__}: {exc}"[:300],

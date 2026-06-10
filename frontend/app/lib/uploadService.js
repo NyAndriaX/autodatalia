@@ -60,7 +60,7 @@ export async function uploadToBackend(file) {
     const status = e?.status;
     let error;
     if (!status) error = "Backend offline";
-    else if (status === 401) error = "Auth required (set token)";
+    else if (status === 401) error = "Auth required (sign in first)";
     else if (status === 413) error = "File too large";
     else if (status === 415) error = "Unsupported type";
     else if (status >= 500) error = `Server error (${status})`;
@@ -74,16 +74,9 @@ export async function uploadToBackend(file) {
 export async function deleteFromBackend(relativePath) {
   if (!config.apiBaseUrl) return { ok: false, status: 0 };
   try {
-    const headers = {};
-    let token = config.backendAuthToken;
-    try {
-      const session = JSON.parse(window.localStorage.getItem("datalia-session"));
-      if (session && session.token) token = session.token;
-    } catch (e) {}
-    if (token) headers.Authorization = `Bearer ${token}`;
     const res = await fetch(
       `${config.apiBaseUrl}/media/${encodeURI(relativePath)}`,
-      { method: "DELETE", headers },
+      { method: "DELETE", credentials: "include" },
     );
     return { ok: res.ok, status: res.status };
   } catch {
