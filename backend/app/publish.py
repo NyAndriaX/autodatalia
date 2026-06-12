@@ -1015,7 +1015,7 @@ async def publish_tiktok(
             hint = ""
             cl = err_code.lower()
             if "url_ownership" in cl:
-                hint = " — verify your ngrok host under TikTok Developer Portal → URL Properties"
+                hint = " — verify your public media host under TikTok Developer Portal -> URL Properties"
             elif "unaudited" in cl:
                 hint = (
                     " — unaudited apps can only direct-post to PRIVATE TikTok accounts. "

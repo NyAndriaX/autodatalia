@@ -49,7 +49,7 @@ def _public_base_url() -> str:
 
     Mirrors the precedence used by /upload and /search in routes.py:
     PUBLIC_BASE_URL (explicit override) wins, then OAUTH_REDIRECT_BASE
-    (already pointed at the ngrok/prod host). Trailing slash stripped so
+    (already pointed at the public callback/media host). Trailing slash stripped so
     callers can append a path directly.
     """
     base = (

@@ -229,10 +229,10 @@ async def _call_gemini_image_api(
         "modalities": ["image", "text"],
         # Cap output tokens so OpenRouter's pre-flight credit check
         # doesn't reserve the model's full context window (~30k for
-        # Gemini 2.5 Flash Image). 2500 is the minimum that reliably
-        # produces a complete image without OpenRouter rejecting the
-        # call on low-balance accounts.
-        "max_tokens": 2500,
+        # Gemini 2.5 Flash Image). Keep this comfortably below the
+        # typical "fresh but low-balance" allowance so image gen still
+        # runs instead of immediately tripping the fallback poster path.
+        "max_tokens": 1800,
         "messages": [{"role": "user", "content": aspect_hint}],
     }
     # Defense in depth: re-validate the per-tenant image base URL before we

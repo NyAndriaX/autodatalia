@@ -329,6 +329,7 @@ async def generate(
         prompt=body.prompt,
         platforms=body.platforms,
         template=body.template,
+        tone=body.tone,
         n=body.variants,
         image_filename=body.image_filename,
         quality=body.quality,
@@ -779,8 +780,8 @@ async def upload(request: Request, file: UploadFile = File(...)) -> UploadRespon
 
     URL precedence (each must be publicly fetchable for Meta/IG to ingest):
       1. PUBLIC_BASE_URL  — explicit override
-      2. OAUTH_REDIRECT_BASE — already configured to the ngrok host
-      3. cloudflared tunnel (TUNNEL_ENABLED=true)
+      2. OAUTH_REDIRECT_BASE — explicit public callback/media host
+      3. tunnel helper (returns the configured public URL when enabled)
       4. request.base_url — last-resort localhost; Meta will reject it
     """
     meta = await save_upload(file)

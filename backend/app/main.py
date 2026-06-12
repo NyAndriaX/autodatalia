@@ -51,11 +51,13 @@ async def lifespan(app: FastAPI):
     # warning) so it can never break startup.
     from .telegram_validation import register_webhook
     await register_webhook()
-    # The free ngrok tunnel exposes the API publicly with no auth, so it
-    # only starts when explicitly enabled (e.g. for Instagram publishing).
+    # Public media callbacks should come from an explicit public URL. When
+    # TUNNEL_ENABLED=true we only publish the configured PUBLIC_BASE_URL /
+    # OAUTH_REDIRECT_BASE through the tunnel helper; no bundled tunnel client
+    # is started inside the container.
     if settings.tunnel_enabled:
-        from .tunnel import start_ngrok
-        threading.Thread(target=start_ngrok, daemon=True).start()
+        from .tunnel import start_tunnel
+        threading.Thread(target=start_tunnel, daemon=True).start()
     else:
         print("[tunnel] disabled (set TUNNEL_ENABLED=true to enable)")
     # Scheduler is what turns a "scheduled" Post into a real publish call

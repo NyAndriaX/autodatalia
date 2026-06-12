@@ -1,6 +1,7 @@
-# Pin the project name so volumes/networks are `datalia_*` regardless of the
-# host directory name, matching the prod compose and DEPLOY.md references.
-name: datalia
+# Keep the local compose project name aligned with the `infra/` folder so
+# Docker Desktop's Compose app "Run" action targets the same project it
+# discovers from disk instead of a stale cached `infra`/`datalia` mismatch.
+name: infra
 
 services:
   mariadb:
@@ -130,3 +131,6 @@ services:
 
 volumes:
   mariadb_data:
+    # Preserve the historical volume name so existing local DB data survives
+    # the project-name alignment above.
+    name: datalia_mariadb_data

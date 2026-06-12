@@ -721,6 +721,7 @@ async def generate_post_variants(
     prompt: str,
     platforms: dict[str, bool] | None = None,
     template: str | None = None,
+    tone: str | None = None,
     n: int = 1,
     image_filename: str | None = None,
     quality: str = "auto",
@@ -773,8 +774,10 @@ async def generate_post_variants(
         tier = "premium" if n >= 3 else "standard"
     chosen_model = model_for_tier(tier, user_id)
 
+    tone = _compress(tone or "", limit=200)
+
     cache_key = _cache_key(
-        "generate", prompt, sorted(active), template, n,
+        "generate", prompt, sorted(active), template, tone, n,
         image_fingerprint, image_description, tier, chosen_model,
     )
     cached = _cache_get(cache_key, user_id=user_id)
@@ -792,6 +795,7 @@ async def generate_post_variants(
         f"Brief: {prompt.strip() or 'An engaging brand post.'}\n"
         f"Target platforms: {', '.join(active)}.\n"
         + (f"Brand template/style hint: {template}.\n" if template else "")
+        + (f"Preferred tone/voice: {tone}.\n" if tone else "")
         + (
             f"Image (already analyzed): {image_description}\n"
             "Use it as the main subject.\n"

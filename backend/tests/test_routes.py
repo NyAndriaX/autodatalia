@@ -5,6 +5,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from app import routes as routes_module
 from app.config import settings
 from app.auth import create_jwt_token
 from app.db import create_user, get_user_by_id
@@ -699,6 +700,30 @@ def test_generate_returns_cached_variants(client, monkeypatch):
     assert r2.status_code == 200
     assert r2.json()["usage"]["total_tokens"] == 0  # cache hit
     assert call_count["n"] == 1
+
+
+def test_generate_forwards_tone_hint(client, monkeypatch):
+    seen: dict[str, object] = {}
+
+    async def fake_generate_post_variants(**kwargs):
+        seen.update(kwargs)
+        return ([{"id": 1, "text": "toned post", "tone": "playful"}], {"total_tokens": 42}, "test-model")
+
+    monkeypatch.setattr(routes_module, "generate_post_variants", fake_generate_post_variants)
+
+    response = client.post(
+        "/generate",
+        json={
+            "prompt": "launch post",
+            "platforms": {"facebook": True},
+            "tone": "playful and witty",
+            "variants": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["variants"][0]["text"] == "toned post"
+    assert seen["tone"] == "playful and witty"
 
 
 def test_validation_submit_creates_pending_post_and_message(client, monkeypatch):
