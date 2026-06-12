@@ -145,7 +145,7 @@ Caddy automatically provisions Let's Encrypt certificates on the first requests 
 **Verify it's up:**
 ```bash
 curl https://api.your-domain.com/health
-# → {"status":"ok","dependencies":{"postgres":"ok"}}
+# → {"status":"ok","dependencies":{"mariadb":"ok"}}
 ```
 
 If you see a TLS error, wait 30 seconds and retry (Caddy is still
@@ -276,17 +276,19 @@ TikTok requires a screen recording of your app to approve `video.publish`. Your 
 
 State is split across **two** named volumes — back both up:
 
-### `caption-content` (app state)
-- `posts.json` — every post (draft, scheduled, published, automation candidates)
-- `automation_rules.json` — automation rules
-- `messages.json` — bell-menu activity feed
-- `.oauth_tokens*.json` — provider access tokens
-- `cost_logs.json` — per-call AI / media cost rows
-- `video_jobs.json` — LTX video generation queue
-- Uploaded + AI-generated media
+### `caption-content` (media only)
+- Uploaded + AI-generated media (`content/`, `content/generated/`)
 
-### `postgres-data` (auth)
+> Posts, automation rules, OAuth tokens, runtime API keys, bell-feed messages,
+> cost logs and video jobs **no longer live here as JSON** — they're migrated
+> into MariaDB on startup (`migrate_legacy_state()`) and the DB is canonical.
+> See the `mariadb-data` section below.
+
+### `mariadb-data` (auth + all structured state)
 - `users` table — bcrypt password hashes for everyone who can log in
+- doc table — posts, automation rules, OAuth tokens, runtime API keys,
+  bell-feed messages, cost logs, video jobs (all migrated out of the old JSON
+  files; the DB is canonical). The `mariadb-dump` below captures all of it.
 
 Both volumes survive `docker compose down`. They're only removed with `docker volume rm`. Back them up periodically:
 
@@ -295,12 +297,12 @@ Both volumes survive `docker compose down`. They're only removed with `docker vo
 docker run --rm -v datalia_caption-content:/data -v "$PWD":/backup alpine \
   tar czf /backup/datalia-content-$(date +%F).tgz -C /data .
 
-# Postgres (users table + future schema)
-docker compose -f docker-compose.prod.yml --env-file .env.production exec -T postgres \
-  pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > "datalia-users-$(date +%F).sql"
+# MariaDB (users table + per-user app state)
+docker compose -f docker-compose.prod.yml --env-file .env.production exec -T mariadb \
+  mariadb-dump -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE" > "datalia-users-$(date +%F).sql"
 ```
 
-> **Using managed Postgres instead?** Set `DATABASE_URL=postgres://...` in
-> `.env.production` and skip the embedded postgres container — the API
-> auto-detects the URL and uses it. The dev docker-compose keeps the
+> **Using managed MariaDB/MySQL instead?** Set `DATABASE_URL=mysql://...` (or
+> `mariadb://...`) in `.env.production` and skip the embedded mariadb container —
+> the API auto-detects the URL and uses it. The dev docker-compose keeps the
 > embedded container for local convenience.
