@@ -29,14 +29,9 @@ RUN if [ "$INSTALL_DEV_DEPS" = "true" ]; then \
 # ── runtime stage ──────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 
-# `ngrok` is added here to support local dev tunneling (tunnel.py).
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         curl \
         ca-certificates \
-    && curl -L https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz -o ngrok.tgz \
-    && tar -xvzf ngrok.tgz -C /usr/local/bin \
-    && rm ngrok.tgz \
-    && chmod +x /usr/local/bin/ngrok \
     && rm -rf /var/lib/apt/lists/*
 
 # Run as a non-root user. The /home/app/content directory is created here
@@ -71,8 +66,18 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://localhost:8000/health || exit 1
 
-# `--proxy-headers` lets uvicorn trust X-Forwarded-* from Caddy (and
-# ngrok) so request.base_url, the client IP, and the OAuth redirect
+# `--proxy-headers` lets uvicorn trust X-Forwarded-* from Caddy (and any
+# front proxy) so request.base_url, the client IP, and the OAuth redirect
 # logic see the public scheme/host instead of the loopback the container
 # actually listens on.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]
+#
+# `--forwarded-allow-ips` defaults to `*` (trust X-Forwarded-* from any
+# caller) for the dev/single-host compose setup. For internet-facing
+# deploys, scope FORWARDED_ALLOW_IPS to the Caddy/docker subnet (e.g. the
+# reverse proxy's IP or the docker network CIDR), and NEVER publish the
+# backend port (8000) to the host — only Caddy should reach it. Otherwise
+# a direct caller could spoof X-Forwarded-For/Proto.
+#
+# Shell-form `exec` so ${FORWARDED_ALLOW_IPS} expands at runtime while
+# uvicorn still becomes PID 1 (clean signal handling / shutdown).
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=${FORWARDED_ALLOW_IPS:-*}"]

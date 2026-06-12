@@ -23,6 +23,10 @@ The local stack builds the backend from `../backend`, serves the dashboard on
 `http://localhost:3005`, the API on `http://localhost:8000`, and keeps app
 state in the in-stack MariaDB container.
 
+The local compose project is intentionally named `infra` so Docker Desktop's
+Compose UI can start it reliably from the `infra/` folder. The MariaDB volume
+name stays `datalia_mariadb_data` so existing local data is preserved.
+
 ## Local Stack
 
 ```bash

@@ -1,69 +1,61 @@
-"""Ngrok tunnel management.
+"""Public URL helper for local and production media callbacks.
 
-Starts a free ngrok tunnel in the background so images
-can be served via a public URL (required by the Instagram Graph API).
+This module no longer starts a bundled tunnel provider. If a public URL is
+needed, configure it explicitly via PUBLIC_BASE_URL or OAUTH_REDIRECT_BASE.
+The legacy function names stay in place so the rest of the app does not need
+to change.
 """
 
+from __future__ import annotations
+
 import asyncio
-import re
-import subprocess
-import threading
-import httpx
-import time
 import os
+import threading
+
 
 TUNNEL_URL: str | None = None
 _tunnel_ready = threading.Event()
-_tunnel_started = False  # set True only when start_ngrok() is launched
+_tunnel_started = False
 
 
-def start_ngrok() -> None:
-    """Launch ngrok and capture the generated tunnel URL."""
+def _configured_public_url() -> str | None:
+    for name in ("PUBLIC_BASE_URL", "OAUTH_REDIRECT_BASE"):
+        value = (os.environ.get(name) or "").strip().rstrip("/")
+        if value:
+            return value
+    return None
+
+
+def start_tunnel() -> None:
+    """Publish the explicitly-configured public URL to the app runtime.
+
+    When TUNNEL_ENABLED=true we now just expose the explicitly-configured
+    public URL if one exists; we do not spawn a tunnel client inside the
+    backend container anymore.
+    """
     global TUNNEL_URL, _tunnel_started
     _tunnel_started = True
-    print("[tunnel] Starting ngrok...")
-    try:
-        domain_arg = []
-        domain = os.environ.get("NGROK_DOMAIN")
-        if domain:
-            domain_arg = ["--domain", domain]
-            
-        process = subprocess.Popen(
-            ["ngrok", "http", "8000"] + domain_arg,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+    TUNNEL_URL = _configured_public_url()
+    if TUNNEL_URL:
+        print(f"[tunnel] using configured public URL: {TUNNEL_URL}")
+    else:
+        print(
+            "[tunnel] TUNNEL_ENABLED=true but no bundled tunnel provider is configured. "
+            "Set PUBLIC_BASE_URL or OAUTH_REDIRECT_BASE explicitly."
         )
-        
-        # Poll the local ngrok API to get the public URL
-        for _ in range(10):
-            time.sleep(1)
-            try:
-                r = httpx.get("http://127.0.0.1:4040/api/tunnels", timeout=2.0)
-                if r.status_code == 200:
-                    tunnels = r.json().get("tunnels", [])
-                    for t in tunnels:
-                        if t.get("public_url", "").startswith("https://"):
-                            TUNNEL_URL = t["public_url"]
-                            _tunnel_ready.set()
-                            print(f"[tunnel] *** Public URL: {TUNNEL_URL} ***")
-                            return
-            except Exception:
-                pass
-                
-        print("[tunnel] Failed to get ngrok URL from local API")
-        _tunnel_ready.set()
-    except Exception as exc:
-        print(f"[tunnel] Failed to start ngrok: {exc}")
-        _tunnel_ready.set()  # unblock waiters even on failure
+    _tunnel_ready.set()
 
 
 async def wait_for_tunnel(timeout: float = 30.0) -> str | None:
-    """Block (async) until the tunnel is ready or *timeout* seconds elapse.
+    """Return the configured public URL when available.
 
-    If the tunnel was never started (TUNNEL_ENABLED=false) this returns
-    immediately — otherwise every /upload, /search etc. would block for the
-    full timeout on every request, making the media library appear frozen.
+    Production deployments with a real domain do not need any local tunnel
+    process, so an explicit PUBLIC_BASE_URL/OAUTH_REDIRECT_BASE wins
+    immediately even when TUNNEL_ENABLED=false.
     """
+    configured = _configured_public_url()
+    if configured:
+        return configured
     if TUNNEL_URL:
         return TUNNEL_URL
     if not _tunnel_started:
@@ -75,10 +67,10 @@ async def wait_for_tunnel(timeout: float = 30.0) -> str | None:
             timeout=timeout + 1,
         )
     except asyncio.TimeoutError:
-        print("[tunnel] Wait timed out — falling back to internal URL.")
+        print("[tunnel] wait timed out; falling back to internal URL.")
     return TUNNEL_URL
 
 
 def is_ready() -> bool:
-    """Return True if the tunnel thread has finished initialising."""
+    """Return True if the helper finished initialising."""
     return _tunnel_ready.is_set()

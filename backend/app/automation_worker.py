@@ -27,7 +27,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .config import settings
-from .db import get_only_user_id, list_scoped_blob_user_ids
+from .db import (
+    get_only_user_id,
+    list_scoped_blob_user_ids,
+    upsert_collection_document,
+)
 from .runtime_config import resolved_settings
 from .services import (
     automation_list,
@@ -196,8 +200,22 @@ def _resolve_rule_user_id(rule: dict[str, Any]) -> int | None:
         if len(owner_candidates) == 1:
             only_user_id = next(iter(owner_candidates))
     if only_user_id and rule.get("id"):
-        automation_update(rule["id"], {"user_id": str(only_user_id)})
+        # Back-fill the inferred owner WITHOUT bumping updated_at. This runs
+        # mid-scan in tick(); going through automation_update() would treat
+        # the user_id write as a real edit (it's not in the operational-only
+        # set {last_fire_at, last_error}), bump updated_at, and trip the
+        # "rule_changed_after_generation" cancellation on approval. Resolving
+        # the owner is operational-only, so we upsert directly and preserve
+        # the existing updated_at / sort_ts.
         rule["user_id"] = str(only_user_id)
+        preserved_updated_at = rule.get("updated_at")
+        upsert_collection_document(
+            "automation_rules",
+            rule["id"],
+            rule,
+            user_id=only_user_id,
+            sort_ts=preserved_updated_at,
+        )
     return only_user_id
 
 

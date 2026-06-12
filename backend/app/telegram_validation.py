@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hmac
+import logging
+import os
 import time
 from typing import Any
 
@@ -30,6 +33,103 @@ from .runtime_config import resolved_settings
 import asyncio  # noqa: E402
 
 router = APIRouter(tags=["telegram-validation"])
+
+logger = logging.getLogger(__name__)
+
+
+# Update types the webhook handler below actually processes. We register
+# exactly these so Telegram doesn't waste round-trips delivering anything
+# the handler ignores: `message` (free-text feedback replies) and
+# `callback_query` (the approve / reject / edit / timeout inline buttons).
+_WEBHOOK_ALLOWED_UPDATES = ["message", "callback_query"]
+
+
+def _public_base_url() -> str:
+    """Resolve the public base URL for inbound webhooks.
+
+    Mirrors the precedence used by /upload and /search in routes.py:
+    PUBLIC_BASE_URL (explicit override) wins, then OAUTH_REDIRECT_BASE
+    (already pointed at the public callback/media host). Trailing slash stripped so
+    callers can append a path directly.
+    """
+    base = (
+        os.environ.get("PUBLIC_BASE_URL")
+        or os.environ.get("OAUTH_REDIRECT_BASE")
+        or ""
+    ).strip()
+    return base.rstrip("/")
+
+
+async def register_webhook() -> None:
+    """Register the shared bot's webhook with Telegram, once, at startup.
+
+    The bot is a single shared instance configured only via env
+    (TELEGRAM_BOT_TOKEN / TELEGRAM_WEBHOOK_SECRET). This points Telegram at
+    ``<public-base>/telegram/webhook`` and hands it the webhook secret as
+    ``secret_token`` — Telegram then echoes it back in the
+    ``X-Telegram-Bot-Api-Secret-Token`` header, which ``telegram_webhook()``
+    validates on every incoming update.
+
+    Best-effort and non-fatal: a missing token/secret/base URL is a silent
+    no-op, and any network error is logged (never raised) so a flaky boot
+    can't take the whole API down.
+    """
+    token = (settings.telegram_bot_token or "").strip()
+    secret = (settings.telegram_webhook_secret or "").strip()
+    base = _public_base_url()
+    if not token or not secret or not base:
+        # Nothing to do when the shared bot isn't fully configured — the
+        # rest of the app degrades gracefully (status endpoints report
+        # "not configured"), so just skip registration quietly.
+        return
+
+    url = f"{base}/telegram/webhook"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Skip the redundant setWebhook if Telegram already points at
+            # this exact URL — keeps every boot cheap and avoids tripping
+            # Telegram's setWebhook rate limit on rapid restarts.
+            try:
+                info_resp = await client.get(
+                    f"https://api.telegram.org/bot{token}/getWebhookInfo"
+                )
+                if info_resp.status_code < 400:
+                    current = (info_resp.json() or {}).get("result") or {}
+                    if current.get("url") == url:
+                        logger.info(
+                            "Telegram webhook already registered at %s", url
+                        )
+                        return
+            except Exception:
+                # getWebhookInfo is only an optimisation — fall through to
+                # an unconditional setWebhook if it fails for any reason.
+                pass
+
+            resp = await client.post(
+                f"https://api.telegram.org/bot{token}/setWebhook",
+                json={
+                    "url": url,
+                    "secret_token": secret,
+                    "allowed_updates": _WEBHOOK_ALLOWED_UPDATES,
+                },
+            )
+        if resp.status_code >= 400:
+            logger.warning(
+                "Telegram setWebhook failed (HTTP %s): %s",
+                resp.status_code,
+                resp.text[:300],
+            )
+            return
+        data = resp.json()
+        if not data.get("ok"):
+            logger.warning(
+                "Telegram setWebhook rejected: %s",
+                data.get("description") or "unknown error",
+            )
+            return
+        logger.info("Telegram webhook registered at %s", url)
+    except Exception as exc:  # never let a network blip crash startup
+        logger.warning("Telegram webhook registration error: %s", exc)
 
 
 def _require_webhook_secret() -> str:
@@ -507,7 +607,16 @@ async def telegram_webhook(
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> dict[str, bool]:
     expected = _require_webhook_secret()
-    if x_telegram_bot_api_secret_token != expected:
+    # Never process a webhook without a configured secret. _require_webhook_secret
+    # only 503s when a bot token is set; if the bot is unconfigured `expected`
+    # is "" and a caller sending an empty/no token would otherwise slip past a
+    # plain `!=` check. Reject outright so the webhook can't be driven anonymously.
+    if not expected:
+        raise HTTPException(401, "Telegram webhook secret is not configured.")
+    # Constant-time comparison to avoid leaking the secret via timing (matches
+    # the bearer-token check in auth.py). compare_digest needs a real string.
+    presented = x_telegram_bot_api_secret_token or ""
+    if not hmac.compare_digest(presented, expected):
         raise HTTPException(401, "Invalid Telegram webhook secret.")
 
     callback = update.get("callback_query") or {}

@@ -1,9 +1,13 @@
 # Datalia — Marketing Automation Platform
 
-Internal tool used by the Datalia team to plan, generate, schedule, validate
-and publish content across Datalia's **own** social accounts (Facebook
-Pages, Instagram Business, TikTok, LinkedIn). Not SaaS-for-clients —
-exactly one tenant (Datalia itself), OAuth connections happen once at setup.
+Multi-user marketing-automation platform: a team plans, generates, schedules,
+validates and publishes content across social accounts (Facebook Pages,
+Instagram Business, TikTok, LinkedIn). Each member signs in and connects
+**their own** social accounts — OAuth tokens, posts and app state are scoped
+per user. The first account (created via `/auth/register`) is the admin and
+registration then closes; additional members are provisioned through Google
+sign-in. Running as a multi-tenant product (rather than a single shared login)
+is also what TikTok's API review requires.
 
 > ## ▶ Deploying this to production?
 > **Read [`DEPLOY.md`](DEPLOY.md).** It's a top-to-bottom checklist —
@@ -141,7 +145,7 @@ powershell -ExecutionPolicy Bypass -File .\backend\run-tests.ps1
 | Platform   | OAuth | Publish |
 |------------|-------|---------|
 | Facebook   | Yes   | Text + photo + video + multi-photo carousel — confirmed |
-| Instagram  | Yes   | Image + video — single confirmed; carousel hardened (drops per-child polling, longer parent-create backoff) |
+| Instagram  | Yes   | Image + video + multi-slide carousel — confirmed on a stable HTTPS domain (per-child polling dropped for image carousels, parent-create backoff up to ~42s for Meta eventual consistency) |
 | TikTok     | Yes   | Photo carousels + video, direct mode default with automatic scope-aware downgrade to inbox |
 | LinkedIn   | Yes   | Text + single image — implemented, end-to-end pending a connected token |
 | Google     | Sign-in only | n/a |

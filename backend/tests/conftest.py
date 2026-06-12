@@ -25,7 +25,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db import reset_all_state_for_tests  # noqa: E402
-from app.services import _AI_CACHE  # noqa: E402
+from app.services import _AI_CACHE, _AI_CACHE_BY_SCOPE, _RATE  # noqa: E402
 
 
 @pytest.fixture
@@ -49,7 +49,14 @@ def _isolate_state():
             p.unlink()
     for p in TEST_CONTENT.glob("runtime_settings_user_*.json"):
         p.unlink()
+    # Reset the AI cache (global slice + every per-tenant slice) and the
+    # per-tenant daily rate-limit counters so tests don't leak across each other.
     _AI_CACHE.clear()
+    for bucket in _AI_CACHE_BY_SCOPE.values():
+        bucket.clear()
+    _AI_CACHE_BY_SCOPE.clear()
+    _AI_CACHE_BY_SCOPE["global"] = _AI_CACHE
+    _RATE.clear()
     # Reset auth to open mode between tests; individual tests can opt in.
     settings.backend_auth_token = ""
     settings.allow_open_auth = True

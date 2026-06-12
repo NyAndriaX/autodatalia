@@ -133,28 +133,25 @@ export async function generateContent({
     await mockDelay();
     variants = MOCK_VARIANTS.slice(0, variantCount);
   } else {
-    try {
-      const data = await apiFetch("/generate", {
-        method: "POST",
-        body: JSON.stringify({
-          prompt: (prompt || "").slice(0, MAX_PROMPT_CHARS),
-          platforms,
-          template,
-          tone, // backend may forward to the LLM Router as a style hint
-          variants: variantCount,
-          image_filename: image,
-          quality,
-        }),
-      });
-      if (!Array.isArray(data?.variants) || !data.variants.length) throw new Error("empty");
-      variants = data.variants;
-      usage = data.usage || ZERO_USAGE;
-      model = data.model || null;
-      tier = data.tier || null;
-    } catch {
-      await mockDelay();
-      variants = MOCK_VARIANTS.slice(0, variantCount);
+    const data = await apiFetch("/generate", {
+      method: "POST",
+      body: JSON.stringify({
+        prompt: (prompt || "").slice(0, MAX_PROMPT_CHARS),
+        platforms,
+        template,
+        tone,
+        variants: variantCount,
+        image_filename: image,
+        quality,
+      }),
+    });
+    if (!Array.isArray(data?.variants) || !data.variants.length) {
+      throw new Error("AI returned no usable variants");
     }
+    variants = data.variants;
+    usage = data.usage || ZERO_USAGE;
+    model = data.model || null;
+    tier = data.tier || null;
   }
   _genCache = { sig, variants };
   saveGenCache();

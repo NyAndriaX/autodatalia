@@ -5,6 +5,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from app import routes as routes_module
 from app.config import settings
 from app.auth import create_jwt_token
 from app.db import create_user, get_user_by_id
@@ -275,16 +276,32 @@ def test_business_read_routes_require_auth_with_token_set(client):
     ).status_code == 200
 
 
-def test_auth_query_token_fallback(client):
-    """Form uploads can authenticate via ?token= when headers are awkward."""
-    settings.backend_auth_token = "qtok"
+def test_auth_query_token_is_rejected(client):
+    """A JWT/shared token in the ?token= query string must NOT authenticate.
 
+    Query strings leak into access logs, browser history and Referer headers,
+    so the query-param token path was removed. Only the Authorization header
+    and the session cookie are accepted.
+    """
+    settings.backend_auth_token = "qtok"
+    settings.allow_open_auth = True
+
+    # No credentials at all → 401.
     r = client.post("/posts", json={"scheduledDate": "2026-06-01"})
     assert r.status_code == 401
 
+    # Correct shared token but only in the query string → still 401.
     r = client.post(
         "/posts?token=qtok",
         json={"scheduledDate": "2026-06-01"},
+    )
+    assert r.status_code == 401
+
+    # The same token in the Authorization header works.
+    r = client.post(
+        "/posts",
+        json={"scheduledDate": "2026-06-01"},
+        headers={"Authorization": "Bearer qtok"},
     )
     assert r.status_code == 200
 
@@ -350,6 +367,174 @@ def test_create_automation_rule_assigns_authenticated_user(client):
     body = r.json()
     assert body["name"] == "Owned rule"
     assert body["user_id"] == "12"
+
+
+# ── Multi-tenant isolation ───────────────────────────────────────────
+# A real authenticated JWT user (user_id > 0) is a tenant that can only
+# see/modify its own scope. These tests pin that a tenant can never read or
+# mutate another tenant's records, and that the shared/global scope is its
+# own bounded tenant (not "owns everything").
+
+
+def test_posts_are_isolated_between_tenants(client):
+    alice = _auth_headers_for_user(101)
+    bob = _auth_headers_for_user(202)
+
+    created = client.post(
+        "/posts",
+        headers=alice,
+        json={"scheduledDate": "2026-06-01", "content": "alice-secret"},
+    )
+    assert created.status_code == 200
+    pid = created.json()["id"]
+
+    # Bob's list never sees Alice's post.
+    bob_list = client.get("/posts", headers=bob).json()["posts"]
+    assert all(p["id"] != pid for p in bob_list)
+
+    # Alice's list does.
+    alice_list = client.get("/posts", headers=alice).json()["posts"]
+    assert any(p["id"] == pid for p in alice_list)
+
+
+def test_tenant_cannot_patch_or_delete_other_tenants_post(client):
+    alice = _auth_headers_for_user(101)
+    bob = _auth_headers_for_user(202)
+
+    pid = client.post(
+        "/posts",
+        headers=alice,
+        json={"scheduledDate": "2026-06-01", "content": "alice-only"},
+    ).json()["id"]
+
+    # Bob cannot patch Alice's post → 404 (not found in his scope).
+    patched = client.patch(
+        f"/posts/{pid}", headers=bob, json={"content": "hacked"}
+    )
+    assert patched.status_code == 404
+
+    # Bob cannot delete Alice's post either.
+    deleted = client.delete(f"/posts/{pid}", headers=bob)
+    assert deleted.status_code == 404
+
+    # Alice's post is untouched.
+    alice_list = client.get("/posts", headers=alice).json()["posts"]
+    mine = next(p for p in alice_list if p["id"] == pid)
+    assert mine["content"] == "alice-only"
+
+    # Alice herself can patch + delete it.
+    assert client.patch(
+        f"/posts/{pid}", headers=alice, json={"content": "edited"}
+    ).status_code == 200
+    assert client.delete(f"/posts/{pid}", headers=alice).status_code == 200
+
+
+def test_global_scope_does_not_see_user_posts(client):
+    """The shared/global scope is its OWN tenant — it must not read user rows."""
+    alice = _auth_headers_for_user(101)
+    client.post(
+        "/posts",
+        headers=alice,
+        json={"scheduledDate": "2026-06-01", "content": "alice-private"},
+    )
+
+    # Open-mode request (no JWT) resolves to the global scope and must only
+    # see global-scoped rows — never Alice's.
+    global_list = client.get("/posts").json()["posts"]
+    assert all(p.get("content") != "alice-private" for p in global_list)
+
+
+def test_tenant_cannot_read_patch_or_delete_other_tenants_rule(client):
+    alice = _auth_headers_for_user(101)
+    bob = _auth_headers_for_user(202)
+
+    rule = client.post(
+        "/automation-rules", headers=alice, json={"name": "Alice rule"}
+    ).json()
+    rid = rule["id"]
+
+    # Bob can't GET it.
+    assert client.get(f"/automation-rules/{rid}", headers=bob).status_code == 404
+    # Bob can't PATCH it.
+    assert client.patch(
+        f"/automation-rules/{rid}", headers=bob, json={"name": "stolen"}
+    ).status_code == 404
+    # Bob can't DELETE it.
+    assert client.delete(f"/automation-rules/{rid}", headers=bob).status_code == 404
+    # Bob's list doesn't include it.
+    bob_rules = client.get("/automation-rules", headers=bob).json()["rules"]
+    assert all(r["id"] != rid for r in bob_rules)
+
+    # Alice retains full access.
+    assert client.get(f"/automation-rules/{rid}", headers=alice).status_code == 200
+
+
+def test_me_does_not_mint_synthetic_admin_for_shared_token(client):
+    """The shared-token / global scope is non-interactive — /me must 401,
+    never return a hardcoded 'Global Admin'."""
+    settings.backend_auth_token = "shared-tok"
+    settings.allow_open_auth = True
+
+    me = client.get("/auth/me", headers={"Authorization": "Bearer shared-tok"})
+    assert me.status_code == 401
+
+
+def test_oauth_start_requires_real_user_for_social_providers(client):
+    """Per-user social tokens cannot be started from the shared/global scope."""
+    settings.backend_auth_token = ""
+    settings.allow_open_auth = True
+
+    import os
+
+    os.environ["TIKTOK_CLIENT_KEY"] = "ck"
+    os.environ["TIKTOK_CLIENT_SECRET"] = "cs"
+    try:
+        # Open mode → user_id 0 → social provider start refused.
+        anon = client.get("/oauth/tiktok/start")
+        assert anon.status_code == 401
+
+        # A real authenticated user can start it.
+        authed = client.get(
+            "/oauth/tiktok/start", headers=_auth_headers_for_user(55)
+        )
+        assert authed.status_code == 200
+        assert "authorize_url" in authed.json()
+    finally:
+        os.environ.pop("TIKTOK_CLIENT_KEY", None)
+        os.environ.pop("TIKTOK_CLIENT_SECRET", None)
+
+
+def test_oauth_start_stamps_real_user_in_pending_state(client):
+    """The pending-state row records the authenticated user so the callback
+    can refuse connections not tied to a real account."""
+    import os
+
+    from app.oauth import _load_tokens
+
+    os.environ["TIKTOK_CLIENT_KEY"] = "ck"
+    os.environ["TIKTOK_CLIENT_SECRET"] = "cs"
+    try:
+        r = client.get("/oauth/tiktok/start", headers=_auth_headers_for_user(77))
+        assert r.status_code == 200
+        pending = _load_tokens(None).get("_pending_state") or {}
+        assert pending, "expected a pending-state entry"
+        assert all(v.get("user_id") == 77 for v in pending.values())
+    finally:
+        os.environ.pop("TIKTOK_CLIENT_KEY", None)
+        os.environ.pop("TIKTOK_CLIENT_SECRET", None)
+
+
+def test_long_password_rejected_to_avoid_bcrypt_truncation(client):
+    """Passwords longer than bcrypt's 72-byte limit are rejected so two
+    passwords sharing the first 72 bytes can't become interchangeable."""
+    settings.allow_open_auth = False
+
+    overlong = "A" * 80
+    r = client.post(
+        "/auth/register",
+        json={"email": "long@example.com", "password": overlong, "name": "Long"},
+    )
+    assert r.status_code == 422
 
 
 def test_automation_rules_api_exposes_last_error_and_last_fire_at(client):
@@ -515,6 +700,30 @@ def test_generate_returns_cached_variants(client, monkeypatch):
     assert r2.status_code == 200
     assert r2.json()["usage"]["total_tokens"] == 0  # cache hit
     assert call_count["n"] == 1
+
+
+def test_generate_forwards_tone_hint(client, monkeypatch):
+    seen: dict[str, object] = {}
+
+    async def fake_generate_post_variants(**kwargs):
+        seen.update(kwargs)
+        return ([{"id": 1, "text": "toned post", "tone": "playful"}], {"total_tokens": 42}, "test-model")
+
+    monkeypatch.setattr(routes_module, "generate_post_variants", fake_generate_post_variants)
+
+    response = client.post(
+        "/generate",
+        json={
+            "prompt": "launch post",
+            "platforms": {"facebook": True},
+            "tone": "playful and witty",
+            "variants": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["variants"][0]["text"] == "toned post"
+    assert seen["tone"] == "playful and witty"
 
 
 def test_validation_submit_creates_pending_post_and_message(client, monkeypatch):

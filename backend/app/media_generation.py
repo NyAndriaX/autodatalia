@@ -20,6 +20,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .auth import require_token
 from .config import settings
+from .net_guard import assert_safe_url, safe_get_async
 from .models import (
     GeneratedMediaResponse,
     ImageGenerationRequest,
@@ -159,6 +160,14 @@ async def _call_image_api(
         "size": f"{width}x{height}",
         "n": 1,
     }
+    # Defense in depth: ai_image_api_base_url is a per-tenant override.
+    # runtime_config validates it at write time, but a value that predates
+    # that guard could still be on disk — re-check before we attach our API
+    # key and POST to it.
+    try:
+        assert_safe_url(f"{cfg.ai_image_api_base_url}/images/generations")
+    except ValueError as exc:
+        raise HTTPException(400, f"Image API base URL is not allowed: {exc}") from exc
     async with httpx.AsyncClient(timeout=180.0) as client:
         resp = await client.post(
             f"{cfg.ai_image_api_base_url}/images/generations",
@@ -183,8 +192,10 @@ async def _call_image_api(
         _log_image_cost(prompt, user_id)
         return base64.b64decode(first["b64_json"]), cfg.ai_image_model
     if first.get("url"):
+        # The asset URL is returned by the image provider; fetch it through the
+        # SSRF guard (validates host + each redirect hop) before downloading.
         async with httpx.AsyncClient(timeout=120.0) as client:
-            image_resp = await client.get(first["url"])
+            image_resp = await safe_get_async(client, first["url"])
         if image_resp.status_code >= 400:
             raise HTTPException(502, "Generated image URL could not be fetched.")
         _log_image_cost(prompt, user_id)
@@ -218,12 +229,18 @@ async def _call_gemini_image_api(
         "modalities": ["image", "text"],
         # Cap output tokens so OpenRouter's pre-flight credit check
         # doesn't reserve the model's full context window (~30k for
-        # Gemini 2.5 Flash Image). 2500 is the minimum that reliably
-        # produces a complete image without OpenRouter rejecting the
-        # call on low-balance accounts.
-        "max_tokens": 2500,
+        # Gemini 2.5 Flash Image). Keep this comfortably below the
+        # typical "fresh but low-balance" allowance so image gen still
+        # runs instead of immediately tripping the fallback poster path.
+        "max_tokens": 1800,
         "messages": [{"role": "user", "content": aspect_hint}],
     }
+    # Defense in depth: re-validate the per-tenant image base URL before we
+    # attach the API key and POST (mirrors runtime_config's write-time check).
+    try:
+        assert_safe_url(f"{cfg.ai_image_api_base_url}/chat/completions")
+    except ValueError as exc:
+        raise HTTPException(400, f"Image API base URL is not allowed: {exc}") from exc
     async with httpx.AsyncClient(timeout=180.0) as client:
         resp = await client.post(
             f"{cfg.ai_image_api_base_url}/chat/completions",
@@ -314,8 +331,13 @@ async def _bytes_from_image_url(url: str) -> bytes | None:
         except (ValueError, base64.binascii.Error):
             return None
     if url.startswith("http://") or url.startswith("https://"):
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            r = await client.get(url)
+        # URL comes from the AI provider's response; guard against it pointing
+        # at an internal address (validates host + every redirect hop).
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                r = await safe_get_async(client, url)
+        except ValueError:
+            return None
         if r.status_code < 400:
             return r.content
     return None
@@ -406,6 +428,10 @@ async def _refine_image_prompt(prompt: str, user_id: str | int | None = None) ->
     }
 
     try:
+        # Defense in depth: ai_api_base_url is a per-tenant override. Re-validate
+        # the resolved URL before attaching the API key and calling out, in case
+        # a value predates runtime_config's write-time SSRF check.
+        assert_safe_url(f"{cfg.ai_api_base_url}/chat/completions")
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
                 f"{cfg.ai_api_base_url}/chat/completions",

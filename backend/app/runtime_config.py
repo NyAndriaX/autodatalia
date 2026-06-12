@@ -17,8 +17,22 @@ from __future__ import annotations
 from contextvars import ContextVar
 from typing import Any
 
+from fastapi import HTTPException
+
 from .config import Settings, load_settings, settings, _resolve_jwt_secret  # noqa: F401
 from .db import load_scoped_blob, save_scoped_blob
+from .net_guard import assert_safe_url
+
+
+# Editable keys whose value is an outbound base URL the backend will later
+# fetch (with our API key attached). When a tenant SETS one of these we must
+# reject private/internal targets at write time — otherwise it's an SSRF +
+# credential-exfil sink (the Authorization header rides along to whatever host
+# they pointed us at). Model-id / API-key keys are not URLs and are skipped.
+URL_KEYS: set[str] = {
+    "AI_API_BASE_URL",
+    "AI_IMAGE_API_BASE_URL",
+}
 
 
 # Keys the Settings page is allowed to read + edit. Each entry maps the
@@ -42,8 +56,10 @@ EDITABLE_KEYS: dict[str, str] = {
     "REPLICATE_API_TOKEN": "replicate_api_token",
     "REPLICATE_VIDEO_MODEL": "replicate_video_model",
     "REPLICATE_VIDEO_VERSION": "replicate_video_version",
-    # Telegram
-    "TELEGRAM_BOT_TOKEN": "telegram_bot_token",
+    # Telegram — the bot TOKEN is intentionally NOT editable: the bot is a
+    # single shared instance configured only via the TELEGRAM_BOT_TOKEN env
+    # var (see telegram_validation.register_webhook). Only the per-tenant
+    # default chat id is editable here.
     "TELEGRAM_DEFAULT_CHAT_ID": "telegram_default_chat_id",
 }
 
@@ -56,7 +72,6 @@ SECRET_KEYS: set[str] = {
     "FAL_API_KEY",
     "LTX_API_KEY",
     "REPLICATE_API_TOKEN",
-    "TELEGRAM_BOT_TOKEN",
 }
 
 
@@ -205,7 +220,22 @@ def save_overrides(
         if value is None or value == "":
             current.pop(env_name, None)
         else:
-            current[env_name] = str(value).strip()
+            cleaned = str(value).strip()
+            # SSRF guard: a tenant-supplied outbound base URL must resolve to a
+            # public host. Reject private/internal targets before persisting so
+            # a poisoned override can never reach the outbound httpx callers.
+            # Raised as HTTPException(400) so the /settings/keys route returns a
+            # clean client error instead of a 500 (routes.py is untouched and
+            # FastAPI renders HTTPException for us).
+            if env_name in URL_KEYS:
+                try:
+                    assert_safe_url(cleaned)
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{env_name} must be a public http(s) URL: {exc}",
+                    ) from exc
+            current[env_name] = cleaned
     current = _normalize_overrides(current)
     save_scoped_blob("runtime_settings", current, user_id=runtime_user_id)
     return current

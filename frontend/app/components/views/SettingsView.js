@@ -267,7 +267,7 @@ function BackendKeysSection() {
     },
     {
       title: t("backendKeysGroupTelegram"),
-      ids: ["TELEGRAM_BOT_TOKEN", "TELEGRAM_DEFAULT_CHAT_ID"],
+      ids: ["TELEGRAM_DEFAULT_CHAT_ID"],
     },
   ];
 
@@ -424,7 +424,7 @@ export default function SettingsView() {
   const [pendingProvider, setPendingProvider] = useState(null);
   const [refreshing,      setRefreshing]      = useState(false);
   const [telegramStatus,  setTelegramStatus]  = useState(null);
-  const [telegramBackend, setTelegramBackend] = useState({ tokenSet:false, tokenMasked:"", chatId:"" });
+  const [telegramBackend, setTelegramBackend] = useState({ chatId:"" });
   const [testingTelegram, setTestingTelegram] = useState(false);
   const [savingTelegram,  setSavingTelegram]  = useState(false);
   const [onglet,          setOnglet]          = useState("plateformes");
@@ -460,14 +460,8 @@ export default function SettingsView() {
         fetchBackendKeys(),
       ]);
       const savedChatId = keysData?.keys?.TELEGRAM_DEFAULT_CHAT_ID?.value || "";
-      const savedTokenMasked = keysData?.keys?.TELEGRAM_BOT_TOKEN?.masked || "";
-      const savedTokenSet = !!keysData?.keys?.TELEGRAM_BOT_TOKEN?.set;
       setTelegramStatus(status);
-      setTelegramBackend({
-        tokenSet: savedTokenSet,
-        tokenMasked: savedTokenMasked,
-        chatId: savedChatId,
-      });
+      setTelegramBackend({ chatId: savedChatId });
       setS((prev) => {
         if (!prev) return prev;
         return {
@@ -479,7 +473,7 @@ export default function SettingsView() {
       setTelegramStatus({
         configured:false, default_chat_configured:false, webhook_secret_configured:false,
       });
-      setTelegramBackend({ tokenSet:false, tokenMasked:"", chatId:"" });
+      setTelegramBackend({ chatId:"" });
     }
   }, []);
 
@@ -537,17 +531,11 @@ export default function SettingsView() {
       const updates = {
         TELEGRAM_DEFAULT_CHAT_ID: s.telegramChatId.trim(),
       };
-      if ((s.telegramBotToken || "").trim()) {
-        updates.TELEGRAM_BOT_TOKEN = s.telegramBotToken.trim();
-      }
       const data = await patchBackendKeys(updates);
       const nextChatId = data?.keys?.TELEGRAM_DEFAULT_CHAT_ID?.value || s.telegramChatId.trim();
-      const tokenSet = !!data?.keys?.TELEGRAM_BOT_TOKEN?.set;
-      const tokenMasked = data?.keys?.TELEGRAM_BOT_TOKEN?.masked || "";
-      setTelegramBackend({ tokenSet, tokenMasked, chatId: nextChatId });
+      setTelegramBackend({ chatId: nextChatId });
       const nextSettings = {
         ...s,
-        telegramBotToken: "",
         telegramChatId: nextChatId,
       };
       setS(nextSettings);
@@ -717,13 +705,6 @@ export default function SettingsView() {
             ))}
           </div>
 
-          <Champ label={t("telegramBotTokenLabel")} name="telegramBotToken" value={s.telegramBotToken}
-            onChange={update} placeholder="123456:ABC-DEF…" secret
-            hint={
-              telegramBackend.tokenSet
-                ? `${t("telegramBotTokenHint")} Saved on backend: ${telegramBackend.tokenMasked}.`
-                : t("telegramBotTokenHint")
-            } />
           <Champ label={t("telegramChatIdLabel")} name="telegramChatId" value={s.telegramChatId}
             onChange={update} placeholder={t("telegramChatIdPlaceholder")} />
 

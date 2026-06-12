@@ -1,24 +1,7 @@
 import Script from "next/script";
-import { Inter, Plus_Jakarta_Sans } from "next/font/google";
 import "./globals.css";
 import ReduxProvider from "./components/providers/ReduxProvider";
 import I18nProvider from "./components/providers/I18nProvider";
-
-/* Inter — police de corps : lisibilité maximale */
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-  weight: ["400", "500", "600"],
-  display: "swap",
-});
-
-/* Plus Jakarta Sans — police d'affichage : titres et accroches */
-const plusJakarta = Plus_Jakarta_Sans({
-  subsets: ["latin"],
-  variable: "--font-jakarta",
-  weight: ["600", "700", "800"],
-  display: "swap",
-});
 
 export const metadata = {
   title: "DATALIA — Automatisation Marketing",
@@ -30,13 +13,19 @@ export default function RootLayout({ children }) {
   return (
     <html
       lang="fr"
-      className={`h-full antialiased ${inter.variable} ${plusJakarta.variable}`}
+      className="h-full antialiased"
+      style={{
+        "--font-inter":
+          "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+        "--font-jakarta":
+          "'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+      }}
       suppressHydrationWarning
     >
       <body
         className="min-h-full flex flex-col"
         style={{
-          fontFamily: "var(--font-inter, 'Inter'), -apple-system, sans-serif",
+          fontFamily: "var(--font-inter)",
           fontSize: "15px",
         }}
       >

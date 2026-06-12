@@ -1,5 +1,6 @@
 """Caption API — FastAPI application entrypoint."""
 
+import asyncio
 import os
 import threading
 import mimetypes
@@ -35,17 +36,28 @@ async def lifespan(app: FastAPI):
     # with retry/backoff so a MariaDB still booting in the next
     # container doesn't crash the API.
     from .db import init_db
-    init_db()
+    # init_db blocks (retry/backoff with time.sleep up to 30x while MariaDB
+    # boots). Run it off the event loop so the async startup isn't frozen.
+    await asyncio.to_thread(init_db)
     # Pull any UI-edited API keys / models from runtime_settings.json
     # into the live settings object so the running process picks them
     # up without a container rebuild.
     from .runtime_config import apply_overrides_to_settings
     apply_overrides_to_settings()
-    # The free ngrok tunnel exposes the API publicly with no auth, so it
-    # only starts when explicitly enabled (e.g. for Instagram publishing).
+    # Register the single shared Telegram bot's webhook once at startup.
+    # The bot is configured only via env now (not per-tenant), so this is
+    # the one place we point Telegram at our public webhook URL. It swallows
+    # its own errors (missing token/secret/base URL → no-op; network blip →
+    # warning) so it can never break startup.
+    from .telegram_validation import register_webhook
+    await register_webhook()
+    # Public media callbacks should come from an explicit public URL. When
+    # TUNNEL_ENABLED=true we only publish the configured PUBLIC_BASE_URL /
+    # OAUTH_REDIRECT_BASE through the tunnel helper; no bundled tunnel client
+    # is started inside the container.
     if settings.tunnel_enabled:
-        from .tunnel import start_ngrok
-        threading.Thread(target=start_ngrok, daemon=True).start()
+        from .tunnel import start_tunnel
+        threading.Thread(target=start_tunnel, daemon=True).start()
     else:
         print("[tunnel] disabled (set TUNNEL_ENABLED=true to enable)")
     # Scheduler is what turns a "scheduled" Post into a real publish call
