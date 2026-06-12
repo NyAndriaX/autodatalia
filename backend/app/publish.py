@@ -28,6 +28,7 @@ import httpx
 from fastapi import HTTPException
 
 from .config import settings
+from .net_guard import assert_safe_url, safe_get_async
 
 # ── Spam guards ─────────────────────────────────────────────────────
 # Two cheap in-memory checks so a runaway button-press doesn't flood
@@ -1223,7 +1224,14 @@ async def _linkedin_upload_image(
         if not image_urn or not upload_url:
             raise HTTPException(502, "LinkedIn image upload did not return image/uploadUrl.")
 
-        source = await client.get(media_url)
+        # SSRF guard: media_url is user/tenant-supplied (pasted into a draft
+        # or returned from our own /content/ host). Validate the host resolves
+        # to a public address and follow redirects only through validated hops,
+        # so it can't be pointed at 169.254.169.254 or an internal service.
+        try:
+            source = await safe_get_async(client, media_url)
+        except ValueError as exc:
+            raise HTTPException(400, f"Refusing to fetch media_url: {exc}") from exc
         if source.status_code >= 400:
             raise HTTPException(502, f"LinkedIn could not fetch media_url ({source.status_code}).")
         content_type = (
@@ -1263,6 +1271,128 @@ async def _linkedin_upload_image(
     return image_urn
 
 
+async def _linkedin_upload_video(
+    member_or_org_urn: str,
+    access_token: str,
+    media_url: str,
+) -> str:
+    """Upload a video via the LinkedIn Videos API and return its URN.
+
+    Flow per the Videos API: initializeUpload (declares owner + fileSizeBytes)
+    → PUT each declared byte-range part, capturing the ETag of each →
+    finalizeUpload (uploadToken + the ETags in order) → poll until processed.
+    """
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        # SSRF guard: media_url is user/tenant-supplied. Validate the host
+        # resolves to a public address and only follow validated redirects.
+        try:
+            source = await safe_get_async(client, media_url)
+        except ValueError as exc:
+            raise HTTPException(400, f"Refusing to fetch media_url: {exc}") from exc
+        if source.status_code >= 400:
+            raise HTTPException(502, f"LinkedIn could not fetch media_url ({source.status_code}).")
+        video_bytes = source.content
+        file_size = len(video_bytes)
+        if file_size == 0:
+            raise HTTPException(502, "LinkedIn video source is empty.")
+
+        init_resp = await client.post(
+            "https://api.linkedin.com/rest/videos?action=initializeUpload",
+            headers=_linkedin_headers(access_token),
+            json={
+                "initializeUploadRequest": {
+                    "owner": member_or_org_urn,
+                    "fileSizeBytes": file_size,
+                    "uploadCaptions": False,
+                    "uploadThumbnail": False,
+                }
+            },
+        )
+        if init_resp.status_code >= 400:
+            raise HTTPException(
+                502,
+                {
+                    "message": "LinkedIn video initializeUpload failed.",
+                    "upstream_status": init_resp.status_code,
+                    "body": init_resp.text[:500],
+                },
+            )
+        value = (init_resp.json() or {}).get("value") or {}
+        video_urn = value.get("video")
+        instructions = value.get("uploadInstructions") or []
+        upload_token = value.get("uploadToken", "")
+        if not video_urn or not instructions:
+            raise HTTPException(502, "LinkedIn video upload did not return video/uploadInstructions.")
+
+        # PUT each declared byte-range part; LinkedIn returns an ETag per part
+        # that must be passed back, in order, to finalizeUpload.
+        uploaded_part_ids: list[str] = []
+        for part in instructions:
+            upload_url = part.get("uploadUrl")
+            if not upload_url:
+                raise HTTPException(502, "LinkedIn video part missing uploadUrl.")
+            first = int(part.get("firstByte", 0))
+            last = int(part.get("lastByte", file_size - 1))
+            chunk = video_bytes[first : last + 1]
+            put_resp = await client.put(
+                upload_url,
+                headers={"Content-Type": "application/octet-stream"},
+                content=chunk,
+            )
+            if put_resp.status_code >= 400:
+                raise HTTPException(
+                    502,
+                    {
+                        "message": "LinkedIn video chunk upload failed.",
+                        "upstream_status": put_resp.status_code,
+                    },
+                )
+            etag = (put_resp.headers.get("etag") or "").strip('"')
+            if etag:
+                uploaded_part_ids.append(etag)
+
+        finalize_resp = await client.post(
+            "https://api.linkedin.com/rest/videos?action=finalizeUpload",
+            headers=_linkedin_headers(access_token),
+            json={
+                "finalizeUploadRequest": {
+                    "video": video_urn,
+                    "uploadToken": upload_token,
+                    "uploadedPartIds": uploaded_part_ids,
+                }
+            },
+        )
+        if finalize_resp.status_code >= 400:
+            raise HTTPException(
+                502,
+                {
+                    "message": "LinkedIn video finalizeUpload failed.",
+                    "upstream_status": finalize_resp.status_code,
+                    "body": finalize_resp.text[:500],
+                },
+            )
+
+        # Videos process asynchronously and slower than images. Poll a bounded
+        # number of times, but return the URN regardless — LinkedIn accepts a
+        # post referencing a still-processing video and publishes it when ready.
+        encoded = quote(video_urn, safe="")
+        for _ in range(15):
+            status_resp = await client.get(
+                f"https://api.linkedin.com/rest/videos/{encoded}",
+                headers=_linkedin_headers(access_token, json_body=False),
+            )
+            if status_resp.status_code >= 400:
+                break
+            status = (status_resp.json().get("status") or "").upper()
+            if status == "AVAILABLE":
+                return video_urn
+            if status in {"PROCESSING", "WAITING_UPLOAD"}:
+                await asyncio.sleep(2)
+                continue
+            break
+    return video_urn
+
+
 async def publish_linkedin(
     member_or_org_urn: str,
     access_token: str,
@@ -1281,22 +1411,23 @@ async def publish_linkedin(
             error="linkedin_not_connected",
         )
     try:
-        image_urn = None
+        media_id = None
+        media_is_video = False
         if media_url:
             ext = (media_url or "").lower().rsplit(".", 1)[-1]
             if ext in {"mp4", "mov", "webm", "m4v"}:
-                return PublishResult(
-                    target_id=member_or_org_urn,
-                    target_label=label,
-                    platform="linkedin",
-                    ok=False,
-                    error="linkedin_video_not_implemented",
+                media_is_video = True
+                media_id = await _linkedin_upload_video(
+                    member_or_org_urn,
+                    access_token,
+                    media_url,
                 )
-            image_urn = await _linkedin_upload_image(
-                member_or_org_urn,
-                access_token,
-                media_url,
-            )
+            else:
+                media_id = await _linkedin_upload_image(
+                    member_or_org_urn,
+                    access_token,
+                    media_url,
+                )
 
         payload: dict[str, Any] = {
             "author": member_or_org_urn,
@@ -1310,13 +1441,15 @@ async def publish_linkedin(
             "lifecycleState": "PUBLISHED",
             "isReshareDisabledByAuthor": False,
         }
-        if image_urn:
-            payload["content"] = {
-                "media": {
-                    "id": image_urn,
-                    "title": label or "Datalia post",
-                }
-            }
+        if media_id:
+            # Per the Posts API content.media schema: videos carry a "title",
+            # images carry "altText".
+            media_obj: dict[str, Any] = {"id": media_id}
+            if media_is_video:
+                media_obj["title"] = label or "Datalia post"
+            else:
+                media_obj["altText"] = label or "Datalia post"
+            payload["content"] = {"media": media_obj}
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(

@@ -157,6 +157,14 @@ async def fire_post(post: dict[str, Any]) -> dict[str, Any]:
     pid = post["id"]
     media_url = _resolve_media_url(post)
     media_urls = _resolve_media_urls(post)
+    # Resolve targets AND OAuth tokens against the POST OWNER's scope. The
+    # always-on scheduler must publish with the owning tenant's own social
+    # tokens — never a shared/global set — so it cannot exercise the old
+    # cross-tenant token sharing. A post with no user_id is a global-scope
+    # post and correctly resolves the global tenant's tokens (consistent with
+    # the per-user scoping in routes/oauth). `owner_scope` is threaded through
+    # so token lookups and any owner-scoped writes use the same identity.
+    owner_scope = post.get("user_id")
     targets, skipped = await build_targets_from_post(
         platforms=post.get("platforms") or {},
         media_url=media_url,
@@ -164,7 +172,7 @@ async def fire_post(post: dict[str, Any]) -> dict[str, Any]:
         media_kind=_resolve_media_kind(post),
         ratios=post.get("ratios"),
         tiktok_options=post.get("tiktok"),
-        user_id=post.get("user_id"),
+        user_id=owner_scope,
     )
 
     if not targets and not skipped:

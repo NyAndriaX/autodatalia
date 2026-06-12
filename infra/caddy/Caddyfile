@@ -6,7 +6,7 @@
 #
 # {$API_DOMAIN} is substituted from the compose `environment:` block,
 # which in turn reads it from `infra/.env.production`. Set it to the
-# bare hostname (e.g. `api.datalia.com`, NOT `https://api.datalia.com`).
+# bare hostname (e.g. `api.datalia.app`, NOT `https://api.datalia.app`).
 
 {$API_DOMAIN} {
 	# Larger body cap than the default 10MB — videos can be up to ~50MB

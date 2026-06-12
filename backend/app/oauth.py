@@ -228,6 +228,14 @@ async def oauth_status(user_id: int = Depends(require_token)) -> dict[str, Any]:
     }
 
 
+# Providers whose tokens are PER-USER posting credentials. These MUST be
+# tied to a real authenticated tenant (user_id > 0) so one tenant's social
+# tokens never land in the shared/global scope where every other tenant
+# could publish with them. `google` is excluded because it is the sign-in
+# flow itself (a logged-out user legitimately starts it to authenticate).
+_PER_USER_TOKEN_PROVIDERS = {"meta", "tiktok", "linkedin"}
+
+
 @router.get("/{provider_id}/start")
 async def oauth_start(provider_id: str, user_id: int = Depends(require_token)) -> dict[str, str]:
     """Return the authorize URL to redirect the browser to.
@@ -237,6 +245,18 @@ async def oauth_start(provider_id: str, user_id: int = Depends(require_token)) -
     """
     if provider_id not in PROVIDERS:
         raise HTTPException(404, f"Unknown provider: {provider_id}")
+    # Per-user social connections require a real authenticated tenant. In
+    # open/shared-token mode require_token returns 0 — refuse to start so we
+    # never write posting tokens into the shared 'global' scope (which every
+    # tenant can read). Google sign-in is exempt (it IS the auth flow).
+    if provider_id in _PER_USER_TOKEN_PROVIDERS and user_id <= 0:
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "Sign in with a real account before connecting a social "
+                "provider — per-user tokens cannot be stored in the shared scope."
+            ),
+        )
     p = PROVIDERS[provider_id]
     client_id, client_secret = _provider_creds(p)
     if not client_id or not client_secret:
@@ -531,6 +551,103 @@ async def resolve_tiktok_access_token(user_id: int | None = None) -> str | None:
     return new_access
 
 
+async def _refresh_linkedin_token(refresh_token: str) -> dict[str, Any]:
+    """Trade a LinkedIn refresh_token for a fresh access_token.
+
+    LinkedIn access tokens last ~60 days. Programmatic refresh tokens (issued
+    only to apps approved for them) last a FIXED 365 days — the one-year clock
+    starts at the ORIGINAL authorization and does NOT extend when you refresh,
+    so after a year the member must fully reconnect. LinkedIn uses the standard
+    OAuth client_id/client_secret (unlike TikTok's client_key). Returns the raw
+    token-endpoint body on success, {} on any error.
+    """
+    if not refresh_token:
+        return {}
+    p = PROVIDERS.get("linkedin")
+    if not p:
+        return {}
+    try:
+        client_id, client_secret = _provider_creds(p)
+    except Exception:
+        return {}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                p.token_url,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+    except Exception as exc:
+        print(f"[linkedin-refresh] network error: {exc}")
+        return {}
+    if resp.status_code >= 400:
+        print(f"[linkedin-refresh] {resp.status_code}: {resp.text[:300]}")
+        return {}
+    data = resp.json() or {}
+    if not data.get("access_token"):
+        print(f"[linkedin-refresh] no access_token in response: {data}")
+        return {}
+    return data
+
+
+async def resolve_linkedin_access_token(user_id: int | None = None) -> str | None:
+    """Return a valid LinkedIn access_token, refreshing if it's expired or
+    about to be. Persists the refreshed token back to the store.
+
+    Returns None if there's no LinkedIn connection at all. If the record has
+    no refresh_token (LinkedIn only mints them for apps approved for
+    programmatic refresh tokens), returns the existing token and lets the
+    caller's publish attempt surface a reconnect error on 401.
+    """
+    tokens = _load_tokens(user_id)
+    record = tokens.get("linkedin") or {}
+    access_token = record.get("access_token")
+    if not access_token:
+        return None
+
+    # 60s grace so we don't ship a token that expires mid-flight.
+    expires_at = record.get("expires_at")
+    if expires_at is None or expires_at - time.time() > 60:
+        return access_token
+
+    refresh_token = record.get("refresh_token") or (record.get("raw") or {}).get("refresh_token")
+    if not refresh_token:
+        print("[linkedin-refresh] no refresh_token on record — needs manual reconnect")
+        return access_token  # let the caller try anyway; it may 401
+
+    print("[linkedin-refresh] access_token expired, refreshing…")
+    fresh = await _refresh_linkedin_token(refresh_token)
+    if not fresh:
+        return access_token  # refresh failed; caller will likely 401 + know to surface
+
+    new_access = fresh["access_token"]
+    new_refresh = fresh.get("refresh_token") or refresh_token
+    new_expires_in = fresh.get("expires_in")
+    record["access_token"] = new_access
+    record["refresh_token"] = new_refresh
+    record["scope"] = fresh.get("scope") or record.get("scope")
+    record["expires_at"] = (time.time() + int(new_expires_in)) if new_expires_in else None
+    record["obtained_at"] = time.time()
+    raw = record.get("raw") or {}
+    raw.update({
+        "access_token": new_access,
+        "refresh_token": new_refresh,
+        "expires_in": new_expires_in,
+        "refresh_token_expires_in": fresh.get("refresh_token_expires_in"),
+        "scope": fresh.get("scope"),
+    })
+    record["raw"] = raw
+    tokens["linkedin"] = record
+    _save_tokens(tokens, user_id)
+    print("[linkedin-refresh] persisted new token")
+    return new_access
+
+
 async def _exchange_long_lived_meta(short_token: str) -> dict[str, Any]:
     """Meta returns a short-lived user token; trade it for the 60-day one."""
     p = PROVIDERS["meta"]
@@ -724,13 +841,30 @@ async def oauth_callback(
                     ).strip(),
                 }
 
-    # For other providers, we need to know WHICH user is connecting.
-    # The frontend should have passed a token to /start if they were logged in.
-    # But since they didn't, for TikTok review purposes, we will save to the global store
-    # and all users will share the connected accounts. This avoids complex state passing
-    # and perfectly fits the TikTok sandbox review narrative.
-
-    connected_user_id = pending_data.get("user_id")
+    # For posting providers we must know WHICH real tenant is connecting and
+    # persist the token ONLY to that tenant's scope. The pending-state row was
+    # stamped with the authenticated user_id at /start time. If it lacks a real
+    # user (<= 0), refuse — we never store per-user OAuth tokens in the shared
+    # global scope, because every tenant can read the global scope and would
+    # then be able to publish with another tenant's credentials.
+    raw_pending_user = pending_data.get("user_id")
+    try:
+        connected_user_id = int(raw_pending_user) if raw_pending_user is not None else None
+    except (TypeError, ValueError):
+        connected_user_id = None
+    if connected_user_id is not None and connected_user_id <= 0:
+        connected_user_id = None
+    if provider_id in _PER_USER_TOKEN_PROVIDERS and not connected_user_id:
+        return HTMLResponse(
+            _popup_close_html(
+                provider_id,
+                False,
+                (
+                    "This connection was not tied to a signed-in account and "
+                    "was refused. Sign in, then connect the provider again."
+                ),
+            )
+        )
     tokens = _load_tokens(connected_user_id)
 
     expires_in = data.get("expires_in")

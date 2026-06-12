@@ -35,6 +35,7 @@ from typing import Any
 import httpx
 
 from .config import settings
+from .net_guard import safe_get_async
 from .db import (
     delete_collection_document,
     get_collection_document,
@@ -446,9 +447,13 @@ async def _run_replicate_job(job: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("Replicate returned no output URL")
 
     # 3. Download the result into content/generated/
+    # SSRF guard: `output` is a URL taken from the Replicate API response and
+    # was previously fetched with redirects auto-followed. safe_get_async
+    # validates the initial host and re-validates every redirect Location so
+    # a malicious/compromised response can't bounce us into an internal IP.
     out_path = _generated_dir() / f"ltx-{job['id']}.mp4"
-    async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
-        d = await client.get(output)
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        d = await safe_get_async(client, output)
     if d.status_code >= 400:
         raise RuntimeError(f"Failed to download Replicate output: {d.status_code}")
     out_path.write_bytes(d.content)
@@ -1220,9 +1225,12 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError(f"fal.ai returned no video URL: {str(result)[:400]}")
 
     # 4. Download into content/generated/
+    # SSRF guard: `video_url` is taken from the fal.ai API response and was
+    # previously fetched with redirects auto-followed. safe_get_async validates
+    # the host and re-validates every redirect hop before following it.
     out_path = _generated_dir() / f"falltx-{job['id']}.mp4"
-    async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
-        d = await client.get(video_url)
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        d = await safe_get_async(client, video_url)
     if d.status_code >= 400:
         raise RuntimeError(f"Failed to download fal.ai output: {d.status_code}")
     out_path.write_bytes(d.content)
@@ -1400,9 +1408,15 @@ async def _run_openrouter_job(job: dict[str, Any]) -> dict[str, Any]:
     if not output_url:
         output_url = f"{base_url}/videos/{external_id}/content/0"
 
+    # SSRF guard: output_url is taken from the OpenRouter response (or built
+    # from the per-tenant base_url) and was previously fetched with redirects
+    # auto-followed — and, when there are no unsigned_urls, our auth headers
+    # ride along. safe_get_async validates the host and every redirect hop.
     out_path = _generated_dir() / f"openrouter-{job['id']}.mp4"
-    async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
-        d = await client.get(output_url, headers=None if unsigned_urls else headers)
+    async with httpx.AsyncClient(timeout=180.0) as client:
+        d = await safe_get_async(
+            client, output_url, headers=None if unsigned_urls else headers
+        )
     if d.status_code >= 400:
         raise RuntimeError(f"Failed to download OpenRouter output: {d.status_code}")
     out_path.write_bytes(d.content)

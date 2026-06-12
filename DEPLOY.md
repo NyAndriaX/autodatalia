@@ -4,9 +4,13 @@ This is the **one** doc you need to put Datalia in production. Follow it
 top to bottom, copy-paste the commands, and the app will be running on
 your domain by the end.
 
-> Throughout this guide `your-domain.com` and `api.your-domain.com`
-> are placeholders. Replace them with the real domain you own everywhere
-> they appear (env vars, dev-portal URLs, frontend config).
+> This guide uses Datalia's real production domain: **`datalia.app`**, with
+> the API on **`api.datalia.app`** and the dashboard on **`app.datalia.app`**.
+> If you are deploying your own copy, replace these with the domain you own
+> everywhere they appear (env vars, dev-portal URLs, frontend config). The API
+> host and the dashboard host MUST share the same registrable domain
+> (`datalia.app`) so the `SameSite=Lax` session cookie set by `/auth/login` is
+> sent on cross-subdomain requests between the dashboard and the API.
 
 ---
 
@@ -15,7 +19,7 @@ your domain by the end.
 You need:
 
 - [ ] A **Linux server** with a public IP. ~$5–10/mo Hetzner CX22, DigitalOcean droplet, Vultr, Fly.io, etc. Ubuntu 22.04+ is the tested baseline. Minimum specs: 2 vCPU, 4 GB RAM, 40 GB disk.
-- [ ] A **domain name** with DNS you can edit. The convention used here is `api.your-domain.com` for the backend and `your-domain.com` for the dashboard. Both can live on the same server unless you split them.
+- [ ] A **domain name** with DNS you can edit. The convention used here is `api.datalia.app` for the backend and `app.datalia.app` for the dashboard. Both can live on the same server unless you split them. The two hosts must share the same registrable domain (here `datalia.app`) for the session cookie to work across them.
 - [ ] **API keys / app credentials** ready to paste:
   - **OpenRouter** API key (`sk-or-v1-…`) — for AI text + image (Nano Banana) generation
   - **Meta** app ID + secret — Facebook + Instagram OAuth
@@ -36,13 +40,28 @@ ssh user@your-server-ip
 ```
 
 ### 1.2 Point your domain at the server
-On your DNS host (Cloudflare / Namecheap / etc.) create an **A record**:
+On your DNS host (Cloudflare / Namecheap / etc.) create **two A records** — one
+for the API host and one for the dashboard (frontend) host:
 
 | Name | Type | Value |
 |---|---|---|
 | `api` | A | `<your server's public IP>` |
+| `app` | A | `<your server's public IP>` |
 
-Wait 1–5 min for propagation. Verify with `dig api.your-domain.com` — it should return your server's IP.
+> If you serve the dashboard on the apex (`datalia.app`) instead of `app`,
+> create the A record on `@` and set `FRONTEND_DOMAIN=datalia.app` accordingly.
+
+Wait 1–5 min for propagation, then verify **both** hosts resolve to your server:
+
+```bash
+dig +short api.datalia.app
+dig +short app.datalia.app
+```
+
+Both must return your server's public IP **before you start the stack in Part 5**.
+Caddy provisions a Let's Encrypt certificate for each host on first request; if a
+host does not yet resolve to this server, the ACME HTTP/TLS challenge fails and
+cert provisioning errors out. Don't move on until both resolve.
 
 ### 1.3 Install Docker
 ```bash
@@ -62,15 +81,36 @@ cd ~/datalia/infra
 
 ## Part 2 — Generate secrets
 
-Run these once and save the output somewhere safe:
+Create the env file, then let the helper script fill in the random secrets and
+DB passwords **and write them into the file** (the old version of this guide only
+echoed them to the terminal — they were never persisted, so the stack booted with
+empty/placeholder secrets):
 
 ```bash
-echo "BACKEND_AUTH_TOKEN=$(openssl rand -hex 32)"
-echo "JWT_SECRET=$(openssl rand -hex 32)"
-echo "TELEGRAM_WEBHOOK_SECRET=$(openssl rand -hex 32)"
+cd ~/datalia/infra
+cp .env.production.example .env.production
+chmod 600 .env.production          # keep secrets readable only by you
+bash gen-secrets.sh                 # see infra/gen-secrets.sh
 ```
 
-You'll paste all three into the env file in Part 4.
+`gen-secrets.sh` only fills values that are still **empty** (it never overwrites
+anything you've already set) and prints which variables it generated:
+
+- `BACKEND_AUTH_TOKEN`, `JWT_SECRET`, `TELEGRAM_WEBHOOK_SECRET` → `openssl rand -hex 32`
+- `MARIADB_PASSWORD`, `MARIADB_ROOT_PASSWORD` → `openssl rand -hex 16`
+
+It is idempotent — re-running it after the values are set generates nothing. You
+can also set any of these by hand in the file beforehand and the script will leave
+your value alone.
+
+> ⚠️ **MariaDB password first-init trap.** `MARIADB_PASSWORD` /
+> `MARIADB_ROOT_PASSWORD` are only applied when the `mariadb-data` volume is
+> created the **first** time. Generate them **now**, before the first
+> `up -d --build`. If you change them later, the running database keeps the old
+> password — you must `ALTER USER` inside the container or wipe the
+> `mariadb-data` volume (which destroys all data). See "What gets persisted".
+
+You'll fill in the remaining values (API keys, domains, OAuth secrets) in Part 4.
 
 ---
 
@@ -92,7 +132,7 @@ TELEGRAM_WEBHOOK_SECRET from Part 2, run this one-time call (replace
 the placeholders):
 
 ```bash
-curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://api.your-domain.com/telegram/webhook&secret_token=<SECRET>"
+curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://api.datalia.app/telegram/webhook&secret_token=<SECRET>"
 ```
 
 You should get back `{"ok":true,"result":true,"description":"Webhook was set"}`. From Part 5 onward the backend handles webhook events automatically.
@@ -101,29 +141,33 @@ You should get back `{"ok":true,"result":true,"description":"Webhook was set"}`.
 
 ## Part 4 — Configure the app
 
-Still in `~/datalia/infra` on the server:
+You already created `.env.production` and generated the secrets in Part 2. Now
+fill in the remaining values. Still in `~/datalia/infra` on the server:
 
 ```bash
-cp .env.production.example .env.production
 nano .env.production
 ```
 
-Fill in **every line that has an `=` followed by nothing**. The minimum required to boot:
+Fill in **every line that has an `=` followed by nothing** (the secrets/DB
+passwords are already populated by `gen-secrets.sh`). The minimum required to boot:
 
 | Variable | What to put |
 |---|---|
-| `API_DOMAIN` | Your bare domain — `api.your-domain.com` (no `https://`, no path) |
-| `FRONTEND_DOMAIN` | Dashboard domain: `your-domain.com` or `app.your-domain.com` (no `https://`, no path) |
-| `CORS_ALLOW_ORIGINS` | Frontend URL(s), comma-separated: `https://your-domain.com` |
-| `BACKEND_AUTH_TOKEN` | The hex from Part 2 |
-| `JWT_SECRET` | The hex from Part 2 |
+| `API_DOMAIN` | API host — `api.datalia.app` (no `https://`, no path) |
+| `FRONTEND_DOMAIN` | Dashboard host — `app.datalia.app` (no `https://`, no path) |
+| `CORS_ALLOW_ORIGINS` | Frontend URL(s), comma-separated; must EXACTLY equal `https://<FRONTEND_DOMAIN>`, e.g. `https://app.datalia.app` |
+| `ALLOW_OPEN_AUTH` | **`false` in production.** Setting `true` disables the auth gate on mutating routes — only ever use it for throwaway local testing. |
+| `BACKEND_AUTH_TOKEN` | Generated by `gen-secrets.sh` (Part 2). Server-to-server only; never shipped to the browser. |
+| `JWT_SECRET` | Generated by `gen-secrets.sh` (Part 2). The backend refuses to boot in production on an empty/placeholder value. |
+| `MARIADB_PASSWORD` | Generated by `gen-secrets.sh` (Part 2). If left at the compose default it falls back to a weak `datalia`. Only applied on first volume init (see Part 2 trap). |
+| `MARIADB_ROOT_PASSWORD` | Generated by `gen-secrets.sh` (Part 2). Defaults to a weak `datalia-root` if unset — do not ship that. Only applied on first volume init. |
 | `AI_API_KEY` | Your OpenRouter key |
 | `META_APP_ID` + `META_APP_SECRET` | From developers.facebook.com |
 | `TIKTOK_CLIENT_KEY` + `TIKTOK_CLIENT_SECRET` | From developers.tiktok.com |
 | `TIKTOK_DOMAIN_VERIFY` | The token TikTok gives you when verifying the domain (Part 6) |
 | `TELEGRAM_BOT_TOKEN` | From Part 3 |
 | `TELEGRAM_DEFAULT_CHAT_ID` | From Part 3 |
-| `TELEGRAM_WEBHOOK_SECRET` | The hex from Part 2 |
+| `TELEGRAM_WEBHOOK_SECRET` | Generated by `gen-secrets.sh` (Part 2) |
 
 Save and exit (`Ctrl+O`, Enter, `Ctrl+X` in nano).
 
@@ -144,13 +188,14 @@ Caddy automatically provisions Let's Encrypt certificates on the first requests 
 
 **Verify it's up:**
 ```bash
-curl https://api.your-domain.com/health
+curl https://api.datalia.app/health
 # → {"status":"ok","dependencies":{"mariadb":"ok"}}
 ```
 
 If you see a TLS error, wait 30 seconds and retry (Caddy is still
 provisioning the cert). If the error persists, check DNS actually
-points to this server: `dig api.your-domain.com`.
+points to this server for **both** hosts:
+`dig +short api.datalia.app` and `dig +short app.datalia.app`.
 
 ---
 
@@ -160,23 +205,23 @@ Each provider needs to know where to send users back after OAuth, and TikTok add
 
 ### Meta (developers.facebook.com)
 On your Datalia Meta app:
-- **App Settings → Basic → App Domains:** add `api.your-domain.com`
-- **Use cases → Customize (Auth & account creation):** under **Valid OAuth Redirect URIs** add `https://api.your-domain.com/oauth/meta/callback`
-- **Site URL** (Basic settings): `https://api.your-domain.com`
+- **App Settings → Basic → App Domains:** add `api.datalia.app`
+- **Use cases → Customize (Auth & account creation):** under **Valid OAuth Redirect URIs** add `https://api.datalia.app/oauth/meta/callback`
+- **Site URL** (Basic settings): `https://api.datalia.app`
 
 ### TikTok (developers.tiktok.com)
 On your Datalia TikTok app:
-- **App details → URL properties → Redirect URI:** add `https://api.your-domain.com/oauth/tiktok/callback`
-- **Terms of Service URL:** `https://api.your-domain.com/terms`
-- **Privacy Policy URL:** `https://api.your-domain.com/privacy`
-- **Domain verification:** click **Add → Verify URL prefix** with `https://api.your-domain.com/`. TikTok shows you a token-named `.txt` filename like `tiktok<token>.txt`. **Copy the token portion** (the part after `tiktok` and before `.txt`) and put it in `.env.production` as `TIKTOK_DOMAIN_VERIFY=<token>`. Then restart the backend:
+- **App details → URL properties → Redirect URI:** add `https://api.datalia.app/oauth/tiktok/callback`
+- **Terms of Service URL:** `https://api.datalia.app/terms`
+- **Privacy Policy URL:** `https://api.datalia.app/privacy`
+- **Domain verification:** click **Add → Verify URL prefix** with `https://api.datalia.app/`. TikTok shows you a token-named `.txt` filename like `tiktok<token>.txt`. **Copy the token portion** (the part after `tiktok` and before `.txt`) and put it in `.env.production` as `TIKTOK_DOMAIN_VERIFY=<token>`. Then restart the backend:
   ```bash
   docker compose -f docker-compose.prod.yml --env-file .env.production up -d
   ```
   Back on the TikTok portal click **Verify** — the backend serves the file automatically.
 
 ### LinkedIn (optional, when you have an app)
-- **Auth tab → Authorized redirect URLs:** add `https://api.your-domain.com/oauth/linkedin/callback`
+- **Auth tab → Authorized redirect URLs:** add `https://api.datalia.app/oauth/linkedin/callback`
 
 ### LTX-2 video generation (recommended — free signup)
 
@@ -200,14 +245,20 @@ When LTX runs out of credits or is overloaded, the backend **automatically falls
 
 ## Part 7 — Verify the frontend
 
-The frontend is built by `docker-compose.prod.yml` and served by Caddy at `https://your-domain.com` using `FRONTEND_DOMAIN`. No separate `npm install`, pm2 process, or exposed `:3000` port is needed.
+The frontend is built by `docker-compose.prod.yml` and served by Caddy at `https://app.datalia.app` using `FRONTEND_DOMAIN`. No separate `npm install`, pm2 process, or exposed `:3000` port is needed.
 
 ```bash
-curl -I https://your-domain.com
+curl -I https://app.datalia.app
 # → HTTP/2 200
 ```
 
-> ⚠️ `NEXT_PUBLIC_BACKEND_AUTH_TOKEN` ships to the browser. Fine for an internal-only tool with a known user list; if the dashboard becomes public-facing, switch to a proxy auth flow.
+> ℹ️ **Browser auth uses the JWT session cookie, not a baked-in token.** The
+> frontend does **not** read `BACKEND_AUTH_TOKEN`, and there is no
+> `NEXT_PUBLIC_BACKEND_AUTH_TOKEN` in the bundle. After `/auth/login` the browser
+> holds an HttpOnly `SameSite=Lax` session cookie; that is what authenticates
+> dashboard requests. `BACKEND_AUTH_TOKEN` is **server-to-server only** (e.g. the
+> Telegram webhook caller) and must **never** be exposed to the browser — keeping
+> it out of any `NEXT_PUBLIC_*` var is a hard security requirement, not a nicety.
 
 ---
 
@@ -231,17 +282,24 @@ If everything above works, the deploy is real.
 # tail logs
 docker compose -f docker-compose.prod.yml --env-file .env.production logs -f caption-api
 
-# restart after env change (no rebuild needed)
+# backend-only env change (e.g. an API key, a Telegram token) — no rebuild
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d
 
-# rebuild after code pull
-git -C ~/datalia pull
+# changing API_DOMAIN or FRONTEND_DOMAIN — REBUILD REQUIRED
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 
 # rebuild backend + frontend after a code pull
 git -C ~/datalia pull
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 ```
+
+> ⚠️ **`up -d` is NOT enough for domain changes.** The frontend bakes
+> `NEXT_PUBLIC_API_BASE_URL` (derived from `API_DOMAIN`) into the static bundle at
+> **build** time — it is a build arg, not a runtime env var. So changing
+> `API_DOMAIN` or `FRONTEND_DOMAIN` requires `up -d --build` to rebuild the
+> frontend image; a plain `up -d` will keep serving the old API URL. Backend-only
+> env changes (API keys, tokens, AI models) take effect with a plain `up -d`
+> because the backend reads them at runtime.
 
 ---
 
@@ -265,7 +323,7 @@ TikTok requires a screen recording of your app to approve `video.publish`. Your 
 ## Common gotchas
 
 - **TLS error from your domain right after starting Caddy.** First-cert provisioning takes 20-40s. Wait and retry.
-- **`Meta 100: Authorization Error subcode 33` on Instagram carousels.** Should not happen on a real domain. If you see it on `api.your-domain.com`, check the Meta app permissions for `instagram_basic` + `instagram_content_publish`, and confirm the API hostname is reachable from Meta's IPs (no firewall block on `facebookexternalhit/1.1` user agents).
+- **`Meta 100: Authorization Error subcode 33` on Instagram carousels.** Should not happen on a real domain. If you see it on `api.datalia.app`, check the Meta app permissions for `instagram_basic` + `instagram_content_publish`, and confirm the API hostname is reachable from Meta's IPs (no firewall block on `facebookexternalhit/1.1` user agents).
 - **TikTok `access_token_invalid` returned 24h after a successful connect.** The refresh-token flow handles this automatically. If publishing still fails after refresh, reconnect TikTok from Settings.
 - **Telegram approve doesn't publish.** Check the post's status in the calendar — if it says `scheduled` but isn't firing, the scheduler is waiting for the scheduled time. Check the container logs for `[scheduler]` lines.
 - **Automation rule fires but no Telegram card arrives.** Settings → Telegram section → confirm all three status dots are green. If the bot token dot is red, `TELEGRAM_BOT_TOKEN` is missing/wrong in `.env.production`. Also verify the webhook registered successfully (Part 3.3).
@@ -290,17 +348,49 @@ State is split across **two** named volumes — back both up:
   bell-feed messages, cost logs, video jobs (all migrated out of the old JSON
   files; the DB is canonical). The `mariadb-dump` below captures all of it.
 
-Both volumes survive `docker compose down`. They're only removed with `docker volume rm`. Back them up periodically:
+Both volumes survive `docker compose down`. They're only removed with `docker volume rm`. Back them up periodically.
+
+> **Volume names are project-prefixed.** Compose prefixes every named volume with
+> the project name, so the real volume is `<project>_caption-content`, not bare
+> `caption-content`. The project name defaults to the directory the compose file
+> lives in (`infra` → `infra_caption-content`) unless you set
+> `COMPOSE_PROJECT_NAME` or a top-level `name:` in the compose file. The commands
+> below resolve the real name automatically instead of hardcoding a prefix —
+> run them from `~/datalia/infra`:
 
 ```bash
-# App state (JSON + media)
-docker run --rm -v datalia_caption-content:/data -v "$PWD":/backup alpine \
-  tar czf /backup/datalia-content-$(date +%F).tgz -C /data .
+cd ~/datalia/infra
+COMPOSE="docker compose -f docker-compose.prod.yml --env-file .env.production"
 
-# MariaDB (users table + per-user app state)
-docker compose -f docker-compose.prod.yml --env-file .env.production exec -T mariadb \
-  mariadb-dump -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE" > "datalia-users-$(date +%F).sql"
+# Resolve the actual (project-prefixed) caption-content volume name.
+# Matches e.g. infra_caption-content (or datalia_caption-content if you set a
+# project name). Confirm the match with: docker volume ls
+CONTENT_VOL=$(docker volume ls -q | grep -E '_caption-content$' | head -n1)
+echo "Backing up volume: $CONTENT_VOL"
+
+# App state — media files
+docker run --rm -v "$CONTENT_VOL":/data -v "$PWD":/backup alpine \
+  tar czf "/backup/datalia-content-$(date +%F).tgz" -C /data .
+
+# MariaDB (users table + per-user app state).
+# Run mariadb-dump INSIDE the container so it reads the DB credentials from the
+# container's own environment — the host shell never has $MARIADB_* exported, so
+# referencing them on the host would dump with empty credentials and fail.
+$COMPOSE exec -T mariadb sh -c \
+  'exec mariadb-dump -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE"' \
+  > "datalia-users-$(date +%F).sql"
 ```
+
+> If you prefer to drive the dump from the host shell instead of inside the
+> container, source the env file first so the variables actually exist:
+> ```bash
+> set -a; source ~/datalia/infra/.env.production; set +a
+> $COMPOSE exec -T mariadb \
+>   mariadb-dump -u"$MARIADB_USER" -p"$MARIADB_PASSWORD" "$MARIADB_DATABASE" \
+>   > "datalia-users-$(date +%F).sql"
+> ```
+> (`set -a` exports everything sourced so the `$MARIADB_*` refs resolve; without
+> it, `source` only sets shell-local vars and the dump runs with empty flags.)
 
 > **Using managed MariaDB/MySQL instead?** Set `DATABASE_URL=mysql://...` (or
 > `mariadb://...`) in `.env.production` and skip the embedded mariadb container —

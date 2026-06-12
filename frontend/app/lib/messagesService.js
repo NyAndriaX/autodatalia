@@ -38,6 +38,8 @@ export async function fetchMessages() {
     if (!Array.isArray(data?.items)) throw new Error("bad shape");
     return data.items;
   } catch {
-    return new Promise((r) => setTimeout(() => r(SEED), 300));
+    // A real fetch error (401/500/bad shape) — don't fabricate notifications.
+    // SEED is only for the unconfigured-backend case handled above.
+    return [];
   }
 }

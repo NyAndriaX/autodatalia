@@ -29,5 +29,9 @@ LINKEDIN_SCOPES=r_liteprofile,w_member_social
 Notes:
 - Each signed-in AutoDatalia user must connect LinkedIn from Settings for their own account.
 - Tokens are stored server-side per user.
-- LinkedIn posting currently supports member text posts and single-image posts.
-- LinkedIn video posting is not wired yet.
+- LinkedIn posting supports member text posts, single-image posts, and video
+  posts (chunked Videos API: initializeUpload → upload parts → finalizeUpload).
+- Access tokens auto-refresh (~60-day lifetime) when the app is approved for
+  programmatic refresh tokens; otherwise the user reconnects on expiry.
+- Video posting is implemented but **not yet verified end-to-end** against the
+  live API — pending a connected token.

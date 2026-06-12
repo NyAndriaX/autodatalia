@@ -284,9 +284,28 @@ async def generate_captions(
 
 _AI_CACHE_TTL = 24 * 3600.0  # seconds
 _AI_CACHE_MAX = 512
-def _load_cache() -> dict[str, list[Any]]:
+
+
+def _normalize_cache_user_id(user_id: str | int | None) -> int | None:
+    """Map a caller id to a positive tenant id, or None for the global scope.
+
+    Mirrors db._scope_key: a real user (>0) gets its own cache scope; the
+    shared/global tenant (None/0/<=0) uses the bounded 'global' scope.
+    """
+    if user_id in (None, "", 0, "0"):
+        return None
     try:
-        raw = load_scoped_blob("ai_cache", default={}) or {}
+        normalized = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def _load_cache(user_id: str | int | None = None) -> dict[str, list[Any]]:
+    """Load the persisted, per-tenant AI cache, dropping expired entries."""
+    scope_uid = _normalize_cache_user_id(user_id)
+    try:
+        raw = load_scoped_blob("ai_cache", user_id=scope_uid, default={}) or {}
         now = time.time()
         if not isinstance(raw, dict):
             return {}
@@ -295,12 +314,35 @@ def _load_cache() -> dict[str, list[Any]]:
         return {}
 
 
-_AI_CACHE: dict[str, list[Any]] = _load_cache()
+# In-memory cache, partitioned by tenant scope so one tenant's generated
+# content can NEVER be served to another. Key: scope ("global" or "user:<id>")
+# → {cache_key: [expires_at, value]}. The global slice is primed at import;
+# per-user slices are lazily loaded from the user's own persisted blob.
+_AI_CACHE: dict[str, list[Any]] = _load_cache()  # global slice (back-compat name)
+_AI_CACHE_BY_SCOPE: dict[str, dict[str, list[Any]]] = {"global": _AI_CACHE}
 
 
-def _save_cache() -> None:
+def _cache_scope_name(user_id: str | int | None) -> str:
+    scope_uid = _normalize_cache_user_id(user_id)
+    return "global" if scope_uid is None else f"user:{scope_uid}"
+
+
+def _cache_scope(user_id: str | int | None) -> dict[str, list[Any]]:
+    scope = _cache_scope_name(user_id)
+    bucket = _AI_CACHE_BY_SCOPE.get(scope)
+    if bucket is None:
+        bucket = _load_cache(user_id)
+        _AI_CACHE_BY_SCOPE[scope] = bucket
+    return bucket
+
+
+def _save_cache(user_id: str | int | None = None) -> None:
     try:
-        save_scoped_blob("ai_cache", _AI_CACHE)
+        save_scoped_blob(
+            "ai_cache",
+            _cache_scope(user_id),
+            user_id=_normalize_cache_user_id(user_id),
+        )
     except Exception:
         pass  # cache is best-effort; never break a request over it
 
@@ -311,22 +353,24 @@ def _cache_key(*parts: Any) -> str:
     ).hexdigest()
 
 
-def _cache_get(key: str) -> Any | None:
-    hit = _AI_CACHE.get(key)
+def _cache_get(key: str, *, user_id: str | int | None = None) -> Any | None:
+    bucket = _cache_scope(user_id)
+    hit = bucket.get(key)
     if not hit:
         return None
     expires, value = hit
     if time.time() > expires:
-        _AI_CACHE.pop(key, None)
+        bucket.pop(key, None)
         return None
     return value
 
 
-def _cache_set(key: str, value: Any) -> None:
-    if len(_AI_CACHE) >= _AI_CACHE_MAX:
-        _AI_CACHE.clear()  # simple bound — fine for this scale
-    _AI_CACHE[key] = [time.time() + _AI_CACHE_TTL, value]
-    _save_cache()
+def _cache_set(key: str, value: Any, *, user_id: str | int | None = None) -> None:
+    bucket = _cache_scope(user_id)
+    if len(bucket) >= _AI_CACHE_MAX:
+        bucket.clear()  # simple bound — fine for this scale
+    bucket[key] = [time.time() + _AI_CACHE_TTL, value]
+    _save_cache(user_id)
 
 
 # ── Token conservation: prompt compression (#9) ────────────────────────
@@ -338,18 +382,41 @@ def _compress(text: str, *, limit: int = 4000) -> str:
     return text[:limit]
 
 
-# ── Token conservation: per-client daily rate limit (#10) ──────────────
+# ── Token conservation: per-tenant daily rate limit (#10) ──────────────
+# The quota is keyed by the AUTHENTICATED TENANT, not the raw client IP.
+# IP-keying let one tenant behind a shared NAT/proxy exhaust another tenant's
+# allowance (and, conversely, let a single tenant dodge the cap by rotating
+# IPs). We fall back to the IP only for the shared/global scope (open mode /
+# server-to-server) where there is no per-user identity to key on.
 
-_RATE: dict[str, list[Any]] = {}  # client -> [yyyy-mm-dd, count]
+_RATE: dict[str, list[Any]] = {}  # rate_key -> [yyyy-mm-dd, count]
 
 
-def rate_guard(client_id: str) -> None:
-    """Raise 429 if the client already hit AI_DAILY_LIMIT real calls today."""
+def rate_key_for(user_id: str | int | None, client_id: str) -> str:
+    """Build the daily-quota key.
+
+    Authenticated tenants (user_id > 0) are keyed by ``user:<id>`` so the limit
+    follows the account regardless of source IP. The global/shared scope keeps
+    using the (IP-based) ``client_id`` since it has no per-user identity.
+    """
+    normalized = _normalize_cache_user_id(user_id)
+    if normalized is not None:
+        return f"user:{normalized}"
+    return f"ip:{client_id}"
+
+
+def rate_guard(rate_key: str) -> None:
+    """Raise 429 if this key already hit AI_DAILY_LIMIT real calls today.
+
+    ``rate_key`` should come from ``rate_key_for(user_id, client_ip)`` so the
+    quota is per authenticated tenant. A bare IP is only correct for the
+    shared/global scope.
+    """
     limit = settings.ai_daily_limit
     if limit <= 0:
         return
     today = time.strftime("%Y-%m-%d")
-    day, count = _RATE.get(client_id, [today, 0])
+    day, count = _RATE.get(rate_key, [today, 0])
     if day == today and count >= limit:
         raise HTTPException(
             status_code=429,
@@ -357,15 +424,15 @@ def rate_guard(client_id: str) -> None:
         )
 
 
-def rate_tick(client_id: str) -> None:
+def rate_tick(rate_key: str) -> None:
     """Count one real (non-cached) AI call against the daily quota."""
     if settings.ai_daily_limit <= 0:
         return
     today = time.strftime("%Y-%m-%d")
-    day, count = _RATE.get(client_id, [today, 0])
+    day, count = _RATE.get(rate_key, [today, 0])
     if day != today:
         day, count = today, 0
-    _RATE[client_id] = [day, count + 1]
+    _RATE[rate_key] = [day, count + 1]
 
 
 _ZERO_USAGE = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
@@ -508,7 +575,7 @@ async def _describe_image(
         cfg.ai_api_base_url,
         cfg.ai_model_fast,
     )
-    cached = _cache_get(key)
+    cached = _cache_get(key, user_id=user_id)
     if isinstance(cached, str) and cached:
         record_cache_hit(
             workflow="image_description",
@@ -554,7 +621,7 @@ async def _describe_image(
         return ""
     text = text.strip()
     if text:
-        _cache_set(key, text)
+        _cache_set(key, text, user_id=user_id)
     return text
 
 
@@ -573,7 +640,7 @@ async def generate_hashtags(
     if not content.strip():
         return [], dict(_ZERO_USAGE)
     cache_key = _cache_key("hashtags", content, max_tags, cfg.ai_model_fast)
-    cached = _cache_get(cache_key)
+    cached = _cache_get(cache_key, user_id=user_id)
     if cached is not None:
         record_cache_hit(
             workflow="hashtags",
@@ -601,7 +668,7 @@ async def generate_hashtags(
         payload, workflow="hashtags", tier="fast", user_id=user_id
     )
     tags = [t.strip() for t in text.split() if t.startswith("#")][:max_tags]
-    _cache_set(cache_key, tags)
+    _cache_set(cache_key, tags, user_id=user_id)
     return tags, usage
 
 
@@ -614,7 +681,7 @@ async def summarize_post(
     if not content.strip():
         return "", dict(_ZERO_USAGE)
     cache_key = _cache_key("summary", content, target_chars, cfg.ai_model_fast)
-    cached = _cache_get(cache_key)
+    cached = _cache_get(cache_key, user_id=user_id)
     if cached is not None:
         record_cache_hit(
             workflow="summary",
@@ -645,7 +712,7 @@ async def summarize_post(
         payload, workflow="summary", tier="fast", user_id=user_id
     )
     text = text.strip()
-    _cache_set(cache_key, text)
+    _cache_set(cache_key, text, user_id=user_id)
     return text, usage
 
 
@@ -710,7 +777,7 @@ async def generate_post_variants(
         "generate", prompt, sorted(active), template, n,
         image_fingerprint, image_description, tier, chosen_model,
     )
-    cached = _cache_get(cache_key)
+    cached = _cache_get(cache_key, user_id=user_id)
     if cached is not None:
         record_cache_hit(
             workflow="post_variants",
@@ -777,7 +844,7 @@ async def generate_post_variants(
         raise HTTPException(
             status_code=502, detail="AI returned no usable variants."
         )
-    _cache_set(cache_key, variants)
+    _cache_set(cache_key, variants, user_id=user_id)
     return variants, usage, chosen_model
 
 
@@ -809,7 +876,7 @@ async def transform_content(
 
     content = _compress(content)
     cache_key = _cache_key("transform", action, content, cfg.ai_model_fast)
-    cached = _cache_get(cache_key)
+    cached = _cache_get(cache_key, user_id=user_id)
     if cached is not None:
         record_cache_hit(
             workflow="transform",
@@ -841,7 +908,7 @@ async def transform_content(
         payload, workflow="transform", tier="fast", user_id=user_id
     )
     text = text.strip()
-    _cache_set(cache_key, text)
+    _cache_set(cache_key, text, user_id=user_id)
     return text, usage, cfg.ai_model_fast
 
 
@@ -1226,10 +1293,46 @@ def posts_create(payload: dict[str, Any]) -> dict[str, Any]:
         return post
 
 
-def posts_update(post_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
-    """Apply a partial update (None values are ignored). Returns the post or None."""
+def posts_get(
+    post_id: str,
+    *,
+    user_id: str | int | None = None,
+    scoped: bool = False,
+) -> dict[str, Any] | None:
+    """Fetch a single post.
+
+    SECURITY: request handlers MUST pass ``scoped=True`` together with the
+    caller's ``user_id`` so a tenant can never read another tenant's post.
+    The default (``scoped=False``) is an all-scopes lookup, preserved for
+    trusted internal callers (scheduler, automation worker, telegram approval)
+    that legitimately act across every tenant. Never call this with the
+    default from a user-request path.
+    """
     with _POSTS_LOCK:
-        post = get_collection_document("posts", post_id, all_scopes=True)
+        return get_collection_document(
+            "posts", post_id, user_id=user_id, all_scopes=not scoped
+        )
+
+
+def posts_update(
+    post_id: str,
+    patch: dict[str, Any],
+    *,
+    user_id: str | int | None = None,
+    scoped: bool = False,
+) -> dict[str, Any] | None:
+    """Apply a partial update (None values are ignored). Returns the post or None.
+
+    SECURITY: when ``scoped=True`` the post is read bounded to the caller's
+    ``user_id`` first, so a tenant cannot mutate a post outside its own scope
+    (the lookup misses → returns None → caller surfaces 404). The default
+    (all-scopes) is reserved for trusted internal callers (scheduler /
+    automation worker / telegram) which act on every tenant's posts.
+    """
+    with _POSTS_LOCK:
+        post = get_collection_document(
+            "posts", post_id, user_id=user_id, all_scopes=not scoped
+        )
         if post is None:
             return None
         for key, value in patch.items():
@@ -1246,10 +1349,22 @@ def posts_update(post_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
         return post
 
 
-def posts_delete(post_id: str) -> bool:
-    """Remove the post by id. Returns True if anything was removed."""
+def posts_delete(
+    post_id: str,
+    *,
+    user_id: str | int | None = None,
+    scoped: bool = False,
+) -> bool:
+    """Remove the post by id. Returns True if anything was removed.
+
+    SECURITY: pass ``scoped=True`` + the caller's ``user_id`` from request
+    handlers so a caller can only delete a post in its own scope. The default
+    all-scopes path is reserved for trusted internal callers.
+    """
     with _POSTS_LOCK:
-        post = get_collection_document("posts", post_id, all_scopes=True)
+        post = get_collection_document(
+            "posts", post_id, user_id=user_id, all_scopes=not scoped
+        )
         if post is None:
             return False
         return delete_collection_document(
@@ -1296,9 +1411,23 @@ def automation_list(
         )
 
 
-def automation_get(rule_id: str) -> dict[str, Any] | None:
+def automation_get(
+    rule_id: str,
+    *,
+    user_id: str | int | None = None,
+    scoped: bool = False,
+) -> dict[str, Any] | None:
+    """Fetch one automation rule.
+
+    SECURITY: request handlers MUST pass ``scoped=True`` + the caller's
+    ``user_id`` so a tenant can only see its own rules. The default all-scopes
+    lookup is reserved for trusted internal callers (automation worker,
+    telegram approval) that legitimately act across tenants.
+    """
     with _AUTOMATION_LOCK:
-        return get_collection_document("automation_rules", rule_id, all_scopes=True)
+        return get_collection_document(
+            "automation_rules", rule_id, user_id=user_id, all_scopes=not scoped
+        )
 
 
 def automation_create(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1320,9 +1449,24 @@ def automation_create(payload: dict[str, Any]) -> dict[str, Any]:
         return rule
 
 
-def automation_update(rule_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+def automation_update(
+    rule_id: str,
+    patch: dict[str, Any],
+    *,
+    user_id: str | int | None = None,
+    scoped: bool = False,
+) -> dict[str, Any] | None:
+    """Apply a partial update to a rule.
+
+    SECURITY: request handlers pass ``scoped=True`` + the caller's
+    ``user_id`` so a tenant cannot mutate another tenant's rule (the
+    scope-bounded lookup misses → returns None → 404). Default all-scopes
+    is reserved for trusted internal callers.
+    """
     with _AUTOMATION_LOCK:
-        rule = get_collection_document("automation_rules", rule_id, all_scopes=True)
+        rule = get_collection_document(
+            "automation_rules", rule_id, user_id=user_id, all_scopes=not scoped
+        )
         if rule is None:
             return None
         previous_updated_at = rule.get("updated_at")
@@ -1344,9 +1488,22 @@ def automation_update(rule_id: str, patch: dict[str, Any]) -> dict[str, Any] | N
         return rule
 
 
-def automation_delete(rule_id: str) -> bool:
+def automation_delete(
+    rule_id: str,
+    *,
+    user_id: str | int | None = None,
+    scoped: bool = False,
+) -> bool:
+    """Delete a rule by id.
+
+    SECURITY: pass ``scoped=True`` + the caller's ``user_id`` from request
+    handlers so a tenant can only delete its own rule. Default all-scopes is
+    reserved for trusted internal callers.
+    """
     with _AUTOMATION_LOCK:
-        rule = get_collection_document("automation_rules", rule_id, all_scopes=True)
+        rule = get_collection_document(
+            "automation_rules", rule_id, user_id=user_id, all_scopes=not scoped
+        )
         if rule is None:
             return False
         return delete_collection_document(

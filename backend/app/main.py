@@ -1,5 +1,6 @@
 """Caption API — FastAPI application entrypoint."""
 
+import asyncio
 import os
 import threading
 import mimetypes
@@ -35,12 +36,21 @@ async def lifespan(app: FastAPI):
     # with retry/backoff so a MariaDB still booting in the next
     # container doesn't crash the API.
     from .db import init_db
-    init_db()
+    # init_db blocks (retry/backoff with time.sleep up to 30x while MariaDB
+    # boots). Run it off the event loop so the async startup isn't frozen.
+    await asyncio.to_thread(init_db)
     # Pull any UI-edited API keys / models from runtime_settings.json
     # into the live settings object so the running process picks them
     # up without a container rebuild.
     from .runtime_config import apply_overrides_to_settings
     apply_overrides_to_settings()
+    # Register the single shared Telegram bot's webhook once at startup.
+    # The bot is configured only via env now (not per-tenant), so this is
+    # the one place we point Telegram at our public webhook URL. It swallows
+    # its own errors (missing token/secret/base URL → no-op; network blip →
+    # warning) so it can never break startup.
+    from .telegram_validation import register_webhook
+    await register_webhook()
     # The free ngrok tunnel exposes the API publicly with no auth, so it
     # only starts when explicitly enabled (e.g. for Instagram publishing).
     if settings.tunnel_enabled:

@@ -48,13 +48,34 @@ git push origin main
 > separately so the code commit can be cherry-picked to `main` without the
 > docs: `git switch main && git cherry-pick <code-commit>`.
 
-## Auth (both remotes use HTTPS + a token)
+## Auth (never embed a token in a remote URL)
 
-- **GitHub**: fine-grained PAT (repo `DataliaAuto`, Contents: read/write).
-  An in-memory credential cache is set locally
+> ⚠️ **Security incident notice.** An earlier version of this file contained a
+> live GitLab personal access token (`glpat-…`) written in plaintext in the
+> `origin` remote URL. **Committing a credential to the repository is a security
+> incident.** Anyone with read access to any branch (or to the GitHub mirror) has
+> that token. If you are reading this and such a token ever existed:
+>
+> 1. **Treat it as fully compromised.** Assume it has leaked.
+> 2. **Rotate it immediately on GitLab** — User Settings → Access Tokens →
+>    revoke the leaked token, then issue a fresh one. Do this *before* anything
+>    else; revocation is the only thing that actually stops the leak.
+> 3. **Scrub it from history** if it was ever committed (`git filter-repo` /
+>    BFG), then force-push the cleaned history.
+> 4. **Never put the new token in a remote URL** (it lands in `.git/config` and
+>    shows up in `git remote -v`).
+
+Configure auth out-of-band instead of in the URL:
+
+- **GitHub**: fine-grained PAT (repo `DataliaAuto`, Contents: read/write) supplied
+  via a credential helper, not the URL. An in-memory cache is set locally
   (`git config --local credential.helper 'cache --timeout=1800'`), so the
   token is **not** written to `.git/config`.
-- **GitLab**: existing token in the `origin` URL.
+- **GitLab**: authenticate with a **git credential helper** (the OS keychain /
+  `credential.helper`) **or an SSH key** — *not* a token baked into the `origin`
+  URL. Keep the remote as a clean `https://gitlab.com/…/autodatalia.git`
+  (or `git@gitlab.com:…` for SSH) and let the helper supply the credential.
 
-`git@`-style SSH was abandoned for this checkout because the available SSH
-key is passphrase-encrypted and couldn't be used non-interactively.
+If the available SSH key is passphrase-encrypted and can't be used
+non-interactively, add it to an `ssh-agent` once per session (`ssh-add`) rather
+than falling back to a token embedded in the URL.

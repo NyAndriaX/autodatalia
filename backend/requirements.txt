@@ -15,7 +15,11 @@ tzdata==2025.2
 uvicorn[standard]==0.34.2
 PyJWT==2.8.0
 passlib==1.7.4
-bcrypt==4.1.2
+# Pinned to 4.0.1: passlib 1.7.4 reads bcrypt.__about__.__version__, which
+# bcrypt 4.1+ removed — that triggers "(trapped) error reading bcrypt
+# version" and can break password hashing. 4.0.1 is the last release
+# passlib 1.7.4 reads cleanly.
+bcrypt==4.0.1
 # PyMySQL: pure-Python MariaDB/MySQL driver for the shared application
 # database used by auth, OAuth token storage, runtime settings, posts,
 # automation rules, messages, video jobs, and cost logs.

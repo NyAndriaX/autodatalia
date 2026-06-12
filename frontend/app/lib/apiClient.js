@@ -28,6 +28,8 @@ export async function apiFetch(path, options = {}) {
     err.status = res.status;
     throw err;
   }
+  // No body to parse (e.g. logout returns 204) — calling res.json() here throws.
+  if (res.status === 204 || res.headers.get("content-length") === "0") return null;
   return res.json();
 }
 
@@ -44,6 +46,7 @@ export async function apiUpload(path, formData) {
     err.status = res.status;
     throw err;
   }
+  if (res.status === 204 || res.headers.get("content-length") === "0") return null;
   return res.json();
 }
 

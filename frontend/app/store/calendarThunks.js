@@ -56,12 +56,23 @@ export function schedulePostThunk({ post, date }) {
     const { getScheduleTimezone } = await import("../lib/timezone");
     const scheduled = {
       ...post,
+      // Stamp an optimistic id up front so we can find and reconcile this
+      // exact entry once the server returns a persisted id below (without
+      // it, the slice would assign its own id we couldn't reference back).
+      id: post.id ?? `cal-${Date.now()}`,
       scheduledDate: date,
       status: post.status === "draft" ? "scheduled" : post.status ?? "scheduled",
       timezone: post.timezone || getScheduleTimezone(),
     };
     dispatch(addScheduledPost(scheduled));
     const persisted = await createPost(scheduled);
+    if (persisted) {
+      // Reconcile the optimistic entry with the server row: swap our
+      // client-generated `cal-` id for the persisted id so reschedule/cancel
+      // during the optimistic window hit the backend with an id it knows.
+      dispatch(removeScheduledPost(scheduled.id));
+      dispatch(addScheduledPost(persisted));
+    }
     dispatch(
       addNotification({
         message: persisted ? "Post scheduled." : "Scheduled locally (backend offline).",

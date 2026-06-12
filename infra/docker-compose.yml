@@ -1,3 +1,7 @@
+# Pin the project name so volumes/networks are `datalia_*` regardless of the
+# host directory name, matching the prod compose and DEPLOY.md references.
+name: datalia
+
 services:
   mariadb:
     image: mariadb:11.4
@@ -69,7 +73,7 @@ services:
       TIKTOK_CLIENT_KEY: ${TIKTOK_CLIENT_KEY:-}
       TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
       TIKTOK_DOMAIN_VERIFY: ${TIKTOK_DOMAIN_VERIFY:-}
-      TIKTOK_SCOPES: ${TIKTOK_SCOPES:-user.info.basic,video.upload,video.publish}
+      TIKTOK_SCOPES: ${TIKTOK_SCOPES:-user.info.basic,video.upload}
       LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
       LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}

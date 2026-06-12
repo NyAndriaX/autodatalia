@@ -57,7 +57,7 @@ Decision: ship the backend as a Docker image. Three concrete reasons:
 ## Deployment stack
 
 ```
-┌─ datalia.com ──────────────────────────┐
+┌─ datalia.app ──────────────────────────┐
 │  Caddy (reverse proxy, Let's Encrypt)   │    Team's own server
 │    ├─ caption-api container             │    Docker Compose stack
 │    │    FastAPI + uvicorn               │

@@ -186,8 +186,12 @@ Per-platform handlers:
   full-screen); 1:1 and 4:5 are accepted but letterboxed; 16:9 is
   rejected by TikTok for photos.
 - `publish_linkedin`: live. Text-only posts via `/rest/posts`; single
-  image via the upload + asset reference flow with polling. Video not
-  yet supported.
+  image via the Images API (initializeUpload → PUT bytes → poll); video
+  via the Videos API (`_linkedin_upload_video`: initializeUpload →
+  PUT each byte-range part capturing ETags → finalizeUpload → poll).
+  Image media carries `altText`, video media carries `title`. Access
+  tokens auto-refresh via `resolve_linkedin_access_token` (oauth.py),
+  mirroring TikTok. Video path is implemented but not yet live-verified.
 
 Error surfacing: `_meta_error_message()` parses Meta's
 `{"error":{"message":...,"code":...}}` payload so the notification
@@ -399,7 +403,7 @@ GOOGLE_CLIENT_SECRET=
 | Facebook   | ✅    | ✅ text + photo + video + multi-photo carousel | Confirmed working in May 24 testing. `attached_media` MUST be JSON-encoded array (see AGENTS.md). |
 | Instagram  | ✅    | ✅ single image + video + multi-slide carousel | Reached through Meta with legacy scopes (`instagram_basic`, `instagram_content_publish`). Carousel confirmed on a stable HTTPS domain (image children unpolled; parent-create backoff for Meta eventual consistency). |
 | TikTok     | ✅    | ✅ photo carousels + video | Default photo ratio 9:16. Inbox + direct post modes supported. |
-| LinkedIn   | ✅    | ✅ text + single image | OAuth + member info + Posts API implemented. Video not yet supported. End-to-end smoke pending a connected token locally. |
+| LinkedIn   | ✅    | ✅ text + image + video | OAuth + member info + Posts API. Video via the chunked Videos API; access-token auto-refresh (~60-day lifetime). End-to-end (esp. video) pending a connected token — implemented, not yet live-verified. |
 | Google     | partial | n/a (sign-in only) | Awaiting `GOOGLE_CLIENT_SECRET`. |
 
 ---
@@ -446,11 +450,77 @@ GOOGLE_CLIENT_SECRET=
   ("image URL not fetchable") was a dev-tunnel artifact; carousels publish
   on a stable HTTPS domain. Image children are no longer polled; the
   parent container create uses an 8-attempt backoff for eventual consistency.
-- **Telegram bot** — backend wired (`telegram_validation.py`,
-  `/telegram/webhook`, inline approve/reject/edit/schedule). Live test
-  blocked on `TELEGRAM_BOT_TOKEN` + `TELEGRAM_DEFAULT_CHAT_ID` env vars.
+- **Telegram bot** — now a SINGLE shared bot configured only via env
+  (`TELEGRAM_BOT_TOKEN`); the webhook self-registers on startup
+  (`register_webhook()` in the lifespan calls Telegram `setWebhook` with
+  the env `TELEGRAM_WEBHOOK_SECRET` as `secret_token`). The per-tenant bot
+  token was removed from `runtime_config.EDITABLE_KEYS` and from the
+  Settings UI — only the per-user **chat id** remains editable. Live test
+  still needs `TELEGRAM_BOT_TOKEN` + a chat id + a public base URL
+  (`PUBLIC_BASE_URL`/`OAUTH_REDIRECT_BASE`) set in prod.
 
 ---
+
+## Changes — 2026-06-12 security + hardening pass
+
+A multi-agent audit (deploy, backend, frontend, config, docs) plus targeted
+implementation. Highlights, by area:
+
+**Multi-tenant isolation & auth (`auth.py`, `routes.py`, `oauth.py`, `services.py`, `scheduler.py`):**
+- Per-user reads/mutations are now scoped at the data layer. `user_id<=0` is
+  a bounded **global** tenant (sees only global-scoped rows), not
+  "owns everything." Cross-tenant id → 404.
+- **OAuth tokens are per-user only.** `oauth_start`/callback require a real
+  authenticated user (`user_id>0`) for meta/tiktok/linkedin; tokens are never
+  written to the shared global scope. (Legacy global-scope tokens from before
+  this change need a one-time reconnect.)
+- Removed `?token=` query-param auth (log-leak), removed the synthetic
+  "Global Admin" identity, gated the shared `BACKEND_AUTH_TOKEN` off when
+  `ALLOW_OPEN_AUTH=false` (prod). Registration race closed with a locked
+  transaction. `bcrypt` 72-byte truncation guarded. AI cache + daily
+  rate-limit now keyed per tenant.
+
+**SSRF (`net_guard.py` new, `publish.py`, `video_jobs.py`, `media_generation.py`, `runtime_config.py`):**
+- `net_guard.assert_safe_url` / `safe_get_async` reject private / loopback /
+  link-local / reserved / metadata (169.254.169.254) targets and re-validate
+  every redirect hop. Wired into all server-side fetches of user/tenant URLs,
+  including tenant-set `ai_api_base_url` / `ai_image_api_base_url`.
+
+**Secrets & deploy (`config.py`, `infra/*`, `DEPLOY.md`, `.git/config`):**
+- `config.py` rejects `__GENERATE__` placeholder secrets in production; the
+  env example ships empty values so the empty-string prod guard fires.
+  `infra/gen-secrets.sh` (new) fills empty secrets via `openssl`.
+- **GitLab PAT scrubbed** from `.git/config` (origin URL) and
+  `GITHUB-WORKFLOW.md` — treat as compromised and **rotate on GitLab**.
+- `.env.production.example` domains corrected to `datalia.app`
+  (`api.` / `app.`). `DEPLOY.md` fixed: writes secrets into the env file,
+  adds the frontend DNS record, notes `API_DOMAIN` change needs `--build`
+  (frontend bakes `NEXT_PUBLIC_API_BASE_URL`), corrects backup volume names.
+- Compose: `name: datalia`, dead AI model default fixed, Caddy `depends_on`
+  loosened to `service_started` (one DB typo no longer kills all TLS),
+  `LINKEDIN_API_VERSION` + auth-rate-limit vars passed through.
+- `bcrypt` pinned `4.0.1` (passlib 1.7.4 compat); `init_db` moved off the
+  event loop (`asyncio.to_thread`); DSN parser preserves query params and
+  fails fast without a db name; Telegram webhook secret compared
+  constant-time.
+
+**Frontend (`apiClient.js`, `authThunks.js`, `messagesService.js`, `calendarThunks.js`):**
+- `apiFetch` tolerates 204/empty bodies (logout no longer throws); the
+  notifications feed no longer fabricates seed data on real errors; null-user
+  guard on login/register; optimistic calendar posts reconcile to the
+  server id.
+
+**Telegram → single env bot:** see Known issues above. Bot token is env-only,
+webhook self-registers on boot, per-tenant token removed from backend +
+Settings UI, chat id retained.
+
+**LinkedIn → refresh + video:** access-token auto-refresh
+(`resolve_linkedin_access_token`) wired into the publish path; video posting
+implemented via the chunked Videos API. Both pending live verification.
+
+> **Review before deploy:** the tenancy / OAuth-scope / SSRF changes are
+> behavior-changing. Run the backend suite + a staging smoke test, rotate the
+> GitLab token, and plan the one-time OAuth reconnect for legacy users.
 
 ## Recent decisions (with rationale)
 

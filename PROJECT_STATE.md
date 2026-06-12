@@ -117,7 +117,7 @@ table would lose posts, rules, OAuth tokens and runtime API keys.
 | Facebook | ✅ | ✅ Text + photo + video + multi-photo carousel | Confirmed live. `attached_media` is sent as a JSON-encoded array. |
 | Instagram | ✅ | ✅ Single image + video + multi-slide carousel | Carousel confirmed working on a stable HTTPS domain. Image carousels skip per-child polling; parent-create retries up to 8× (~42s) to ride out Meta eventual consistency (the old 9004/100-subcode-33 on ngrok-style hosts). |
 | TikTok | ✅ | ✅ Photo carousels + video | `audit_mode="direct"` default with scope-aware downgrade. 24h token auto-refresh on every publish. |
-| LinkedIn | ✅ | ✅ Text + single image | End-to-end pending a connected token. |
+| LinkedIn | ✅ | ✅ Text + single image + video | Token auto-refresh added (~60-day lifetime). Video via chunked Videos API. End-to-end (esp. video) pending a connected token — implemented, not yet live-verified. |
 | Google | Sign-in only | n/a | Awaiting `GOOGLE_CLIENT_SECRET`. |
 
 The scheduler now surfaces every requested platform's outcome — no more silent IG/TikTok drops. Unconnected platforms emit explicit `meta_not_connected` / `tiktok_not_connected` / `no_instagram_business_linked_to_page` errors in the bell feed.
@@ -125,7 +125,7 @@ The scheduler now surfaces every requested platform's outcome — no more silent
 ## Known gaps (deliberately documented, not blocked)
 
 - **i18n coverage** is shipped for the layout shell + 4 main views. The bundles are complete; remaining views need `useTranslations` wiring. Fall-through behaviour is safe (English text shows for keys not yet swapped).
-- **LinkedIn video publishing** — text + image works; video unimplemented.
+- **LinkedIn video publishing** — text, image, and video implemented (chunked Videos API); video pending live end-to-end verification.
 - **Engagement metrics** (reach, impressions, post performance) are not wired. Analytics view labels them as "Sample data — engagement metrics not yet wired."
 - **OpenRouter balance** — the bundled dev `AI_IMAGE_API_KEY` is low on credit; a fresh free-tier signup or a $5 top-up unlocks Nano Banana again. Detection: image gen returns HTTP 402 with `"requires more credits"`.
 

@@ -55,6 +55,7 @@ from .services import (
     posts_update,
     delete_media,
     rate_guard,
+    rate_key_for,
     rate_tick,
     save_caption_file,
     save_upload,
@@ -78,13 +79,16 @@ auth_required = Depends(require_token)
 _OPEN_AUTOMATION_STATUSES = {"awaiting_validation", "scheduled"}
 
 
-def _record_belongs_to_user(record: dict[str, Any] | None, user_id: int) -> bool:
-    if record is None:
-        return False
-    if user_id <= 0:
-        return True
-    owner = str(record.get("user_id") or "")
-    return owner == str(user_id)
+def _scope_user_id(user_id: int) -> int | None:
+    """Map a request's caller id to the data-layer scope owner.
+
+    A real JWT user (id > 0) scopes to its own tenant. The shared/global
+    scope (id <= 0, reached only via BACKEND_AUTH_TOKEN or dev open mode)
+    is its OWN bounded tenant, represented as ``None`` so the db layer maps
+    it to ``scope_key == "global"``. Returning ``None`` here is NOT
+    "everything" — it is a single, bounded scope just like any user.
+    """
+    return user_id if user_id > 0 else None
 
 
 def _rule_schedule_signature(rule: dict[str, Any]) -> dict[str, Any]:
@@ -114,10 +118,13 @@ def _rule_candidate_signature(rule: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _rule_open_posts(rule_id: str) -> list[dict[str, Any]]:
+def _rule_open_posts(rule_id: str, *, user_id: int) -> list[dict[str, Any]]:
+    # Scope to the caller's own posts — the rule's ownership was already
+    # verified by the handler, and a rule's generated posts live in the same
+    # scope as the rule, so a per-user read here cannot leak across tenants.
     return [
         post
-        for post in posts_list(all_users=True)
+        for post in posts_list(user_id=_scope_user_id(user_id))
         if post.get("source_rule_id") == rule_id
         and post.get("status") in _OPEN_AUTOMATION_STATUSES
     ]
@@ -126,11 +133,12 @@ def _rule_open_posts(rule_id: str) -> list[dict[str, Any]]:
 def _cancel_open_rule_posts(
     rule_id: str,
     *,
+    user_id: int,
     reason: str,
     message: str,
 ) -> list[str]:
     touched: list[str] = []
-    for post in _rule_open_posts(rule_id):
+    for post in _rule_open_posts(rule_id, user_id=user_id):
         posts_update(
             post["id"],
             {
@@ -138,6 +146,8 @@ def _cancel_open_rule_posts(
                 "error": reason,
                 "validated_at": None,
             },
+            user_id=_scope_user_id(user_id),
+            scoped=True,
         )
         messages_append(
             {
@@ -150,8 +160,13 @@ def _cancel_open_rule_posts(
     return touched
 
 
-def _reset_rule_fire_cursor(rule_id: str) -> dict[str, Any] | None:
-    return automation_update(rule_id, {"last_fire_at": 0, "last_error": ""})
+def _reset_rule_fire_cursor(rule_id: str, *, user_id: int) -> dict[str, Any] | None:
+    return automation_update(
+        rule_id,
+        {"last_fire_at": 0, "last_error": ""},
+        user_id=_scope_user_id(user_id),
+        scoped=True,
+    )
 
 
 # ── Utility endpoints ──────────────────────────────────────────────────
@@ -308,7 +323,7 @@ async def generate(
     user_id: int = Depends(require_token),
 ) -> GenerateResponse:
     """Prompt-driven generation for the editor's "Generate via AI" button."""
-    client = _client_id(request)
+    client = rate_key_for(user_id, _client_id(request))
     rate_guard(client)
     variants, usage, model = await generate_post_variants(
         prompt=body.prompt,
@@ -349,7 +364,7 @@ async def transform(
     user_id: int = Depends(require_token),
 ) -> TransformResponse:
     """Quick AI actions (shorten / expand / tone) on existing content."""
-    client = _client_id(request)
+    client = rate_key_for(user_id, _client_id(request))
     rate_guard(client)
     text, usage, _model = await transform_content(
         body.content, body.action, user_id=user_id
@@ -369,7 +384,7 @@ async def hashtags(
     user_id: int = Depends(require_token),
 ) -> HashtagsResponse:
     """Suggest hashtags for a post — fast-tier (cheap) by design."""
-    client = _client_id(request)
+    client = rate_key_for(user_id, _client_id(request))
     rate_guard(client)
     tags, usage = await generate_hashtags(
         body.content, max_tags=body.max_tags, user_id=user_id
@@ -648,18 +663,36 @@ async def publish(
                 "audit_downgraded": requested_audit != effective_audit,
             })
         else:
-            # LinkedIn — stub for now; still flow through so the response
-            # includes one row per requested target.
-            record = tokens.get(platform) or {}
-            resolved.append({
-                "platform": platform,
-                "id": t.id,
-                "label": t.label or t.id,
-                "access_token": record.get("access_token", ""),
-                "media_url": t_media_url,
-                "media_urls": t_media_urls,
-                "media_kind": t.media_kind or "image",
-            })
+            # LinkedIn. Refresh the access token if it's expired (LinkedIn
+            # tokens last ~60 days); resolve_linkedin_access_token persists the
+            # refreshed token and returns None when there's no connection.
+            from .oauth import resolve_linkedin_access_token
+            token = await resolve_linkedin_access_token(scoped_user_id)
+            record = _load_tokens(scoped_user_id).get("linkedin") or {}
+            # The author must be the stored member URN (urn:li:person:…),
+            # captured at connect time — fall back to the requested target id.
+            author_urn = record.get("urn") or t.id
+            if not token:
+                resolved.append({
+                    "platform": platform,
+                    "id": author_urn,
+                    "label": t.label or t.id,
+                    "access_token": "",
+                    "media_url": t_media_url,
+                    "media_urls": t_media_urls,
+                    "media_kind": t.media_kind or "image",
+                    "_unresolved_reason": "linkedin_not_connected",
+                })
+            else:
+                resolved.append({
+                    "platform": platform,
+                    "id": author_urn,
+                    "label": t.label or t.id,
+                    "access_token": token,
+                    "media_url": t_media_url,
+                    "media_urls": t_media_urls,
+                    "media_kind": t.media_kind or "image",
+                })
 
     # Apply the user's per-platform aspect ratio choice — the cropped
     # variant is what the platform actually receives.
@@ -847,10 +880,14 @@ async def patch_post(
     body: PostUpdate,
     user_id: int = Depends(require_token),
 ) -> Post:
-    existing = next((post for post in posts_list(all_users=True) if post.get("id") == post_id), None)
-    if not _record_belongs_to_user(existing, user_id):
-        raise HTTPException(status_code=404, detail="Post not found.")
-    updated = posts_update(post_id, body.model_dump())
+    # Scope the lookup AND the mutation to the caller at the data layer —
+    # a tenant can never patch a post outside its own scope.
+    updated = posts_update(
+        post_id,
+        body.model_dump(),
+        user_id=_scope_user_id(user_id),
+        scoped=True,
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="Post not found.")
     return Post(**updated)
@@ -858,10 +895,9 @@ async def patch_post(
 
 @router.delete("/posts/{post_id}", dependencies=[auth_required])
 async def delete_post(post_id: str, user_id: int = Depends(require_token)) -> dict[str, bool]:
-    existing = next((post for post in posts_list(all_users=True) if post.get("id") == post_id), None)
-    if not _record_belongs_to_user(existing, user_id):
-        raise HTTPException(status_code=404, detail="Post not found.")
-    if not posts_delete(post_id):
+    # Scope the delete to the caller at the data layer — a tenant can only
+    # delete a post in its own scope (lookup miss → 404).
+    if not posts_delete(post_id, user_id=_scope_user_id(user_id), scoped=True):
         raise HTTPException(status_code=404, detail="Post not found.")
     return {"deleted": True}
 
@@ -888,8 +924,8 @@ async def get_automation_rule(
     rule_id: str,
     user_id: int = Depends(require_token),
 ) -> AutomationRule:
-    rule = automation_get(rule_id)
-    if rule is None or not _record_belongs_to_user(rule, user_id):
+    rule = automation_get(rule_id, user_id=_scope_user_id(user_id), scoped=True)
+    if rule is None:
         raise HTTPException(status_code=404, detail="Automation rule not found.")
     return AutomationRule(**rule)
 
@@ -924,14 +960,16 @@ async def patch_automation_rule(
 ) -> AutomationRule:
     # Apply the full body as a patch — automation_update treats None as "skip"
     # so callers can omit fields they don't want to overwrite by sending null.
-    existing = automation_get(rule_id)
-    if existing is None or not _record_belongs_to_user(existing, user_id):
+    existing = automation_get(rule_id, user_id=_scope_user_id(user_id), scoped=True)
+    if existing is None:
         raise HTTPException(status_code=404, detail="Automation rule not found.")
     patch = body.model_dump(
         exclude={"id", "user_id", "created_at", "updated_at", "last_fire_at", "last_error"}
     )
     patch["user_id"] = existing.get("user_id") or (str(user_id) if user_id > 0 else None)
-    updated = automation_update(rule_id, patch)
+    updated = automation_update(
+        rule_id, patch, user_id=_scope_user_id(user_id), scoped=True
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="Automation rule not found.")
     schedule_changed = _rule_schedule_signature(existing) != _rule_schedule_signature(updated)
@@ -939,19 +977,21 @@ async def patch_automation_rule(
     if not updated.get("active", True):
         _cancel_open_rule_posts(
             rule_id,
+            user_id=user_id,
             reason="rule_deactivated",
             message=(
                 "Auto-generated post {post_id} was cancelled because its rule "
                 "was deactivated."
             ),
         )
-        updated = _reset_rule_fire_cursor(rule_id) or updated
+        updated = _reset_rule_fire_cursor(rule_id, user_id=user_id) or updated
     else:
         if schedule_changed:
-            updated = _reset_rule_fire_cursor(rule_id) or updated
+            updated = _reset_rule_fire_cursor(rule_id, user_id=user_id) or updated
         if candidate_changed:
             _cancel_open_rule_posts(
                 rule_id,
+                user_id=user_id,
                 reason="rule_changed_after_generation",
                 message=(
                     "Auto-generated post {post_id} was cancelled because its "
@@ -967,18 +1007,19 @@ async def delete_automation_rule(
     rule_id: str,
     user_id: int = Depends(require_token),
 ) -> dict[str, bool]:
-    existing = automation_get(rule_id)
-    if existing is None or not _record_belongs_to_user(existing, user_id):
+    existing = automation_get(rule_id, user_id=_scope_user_id(user_id), scoped=True)
+    if existing is None:
         raise HTTPException(status_code=404, detail="Automation rule not found.")
     _cancel_open_rule_posts(
         rule_id,
+        user_id=user_id,
         reason="rule_deleted",
         message=(
             "Auto-generated post {post_id} was cancelled because its rule "
             "was deleted."
         ),
     )
-    if not automation_delete(rule_id):
+    if not automation_delete(rule_id, user_id=_scope_user_id(user_id), scoped=True):
         raise HTTPException(status_code=404, detail="Automation rule not found.")
     return {"deleted": True}
 

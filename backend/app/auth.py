@@ -16,12 +16,50 @@ from .db import (
     create_user,
     get_user_by_email,
     get_user_by_id,
-    verify_password,
-    get_password_hash,
+    verify_password as _db_verify_password,
+    get_password_hash as _db_get_password_hash,
 )
 from .runtime_config import set_active_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+# bcrypt silently truncates the input to 72 BYTES. Without an explicit guard
+# two distinct passwords that share the first 72 bytes hash identically and
+# become interchangeable at login — a real auth-bypass for long passphrases.
+# We reject anything longer than the limit on BOTH hashing and verification so
+# the truncation can never be exploited (and an over-long stored hash can never
+# be matched by a truncated candidate).
+BCRYPT_MAX_PASSWORD_BYTES = 72
+
+
+def _reject_overlong_password(password: str) -> None:
+    if len((password or "").encode("utf-8")) > BCRYPT_MAX_PASSWORD_BYTES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Password must be at most {BCRYPT_MAX_PASSWORD_BYTES} bytes "
+                "(bcrypt truncates longer inputs, which would make distinct "
+                "passwords interchangeable)."
+            ),
+        )
+
+
+def get_password_hash(password: str) -> str:
+    """Hash a password, refusing inputs longer than bcrypt's 72-byte limit."""
+    _reject_overlong_password(password)
+    return _db_get_password_hash(password)
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password, treating an over-long candidate as a non-match.
+
+    Returning False (instead of comparing a silently-truncated prefix) closes
+    the truncation-collision hole on the verification side too.
+    """
+    if len((plain_password or "").encode("utf-8")) > BCRYPT_MAX_PASSWORD_BYTES:
+        return False
+    return _db_verify_password(plain_password, hashed_password)
 
 
 class LoginRequest(BaseModel):
@@ -133,26 +171,40 @@ def _user_payload(user: dict[str, Any]) -> dict[str, Any]:
 
 
 def require_token(request: Request) -> int:
-    """Extract and verify the JWT from the Authorization header. Returns user_id."""
+    """Extract and verify the JWT from the Authorization header or cookie.
+
+    Returns the user_id. A real JWT user yields its own id (> 0). The
+    shared/global tenant is represented as 0 and is only reachable via the
+    server-to-server BACKEND_AUTH_TOKEN or (dev-only) open-auth mode.
+
+    NOTE: tokens are accepted ONLY from the Authorization header or the
+    session cookie. The previous ``?token=`` query-parameter path was removed:
+    URLs land in access logs, browser history and Referer headers, so a JWT in
+    the query string leaks the session. Nothing in the codebase depends on it
+    (the frontend apiClient always sends an Authorization header / cookie).
+    """
     auth = request.headers.get("authorization") or ""
     presented = ""
     if auth.lower().startswith("bearer "):
         presented = auth.split(" ", 1)[1].strip()
     if not presented:
         presented = request.cookies.get(COOKIE_NAME, "").strip()
-    if not presented:
-        presented = request.query_params.get("token", "")
 
-    # Fallback to the global token for backward compatibility if configured
-    if settings.backend_auth_token and hmac.compare_digest(presented, settings.backend_auth_token):
+    # Shared server-to-server token. This is a NON-INTERACTIVE machine
+    # identity that maps to the bounded 'global' tenant — never a real user.
+    # It is disabled when open auth is off (production), so a leaked shared
+    # token cannot be replayed as an interactive session in prod unless the
+    # operator has explicitly opted into open auth.
+    if (
+        settings.backend_auth_token
+        and settings.allow_open_auth
+        and hmac.compare_digest(presented, settings.backend_auth_token)
+    ):
         set_active_user(None)
-        return 0  # Global/shared runtime settings scope
+        return 0  # Global/shared runtime settings scope (bounded tenant)
 
     if not presented:
-        if settings.backend_auth_token:
-            set_active_user(None)
-            raise HTTPException(status_code=401, detail="Missing authorization token.")
-        if settings.allow_open_auth:
+        if settings.allow_open_auth and not settings.backend_auth_token:
             set_active_user(None)
             return 0  # Explicit dev-only open mode uses the shared scope
         set_active_user(None)
@@ -171,11 +223,89 @@ def require_token(request: Request) -> int:
         raise HTTPException(status_code=401, detail="Invalid token.")
 
 
+class _RegistrationClosed(Exception):
+    """Raised inside the registration transaction when a user already exists."""
+
+
+class _EmailTaken(Exception):
+    """Raised inside the registration transaction on a duplicate email."""
+
+
+# Named advisory lock that serialises the first-user/admin bootstrap decision.
+# GET_LOCK is process-/connection-agnostic and deadlock-free (unlike a
+# FOR-UPDATE gap lock on the empty users range, which deadlocks contenders),
+# so concurrent registrations queue cleanly and only the first one inserts.
+_REGISTER_LOCK_NAME = "datalia_register_first_user"
+_REGISTER_LOCK_TIMEOUT_SECONDS = 10
+
+
+def _register_first_user_atomic(
+    email: str, password_hash: str, full_name: str
+) -> int:
+    """Create the first (admin) user under a serialising advisory lock.
+
+    Closes the first-user race: two concurrent POST /auth/register could both
+    read count_users()==0 and both become admin. We take a named advisory lock
+    (``GET_LOCK``), re-check the count while holding it, insert if still zero,
+    and release. The second contender waits on the lock, then sees count > 0
+    and is rejected with a clean 403 (no second admin is ever created).
+
+    Note on Google sign-in: the FIRST user (whoever they are) becomes admin and
+    closes open registration — this is the intended single-admin bootstrap.
+    A Google-created first user has no password_hash, so they sign in via Google
+    only; that is by design, not a lockout (additional members are provisioned
+    via Google sign-in, see CLAUDE.md). Password self-registration is a
+    bootstrap-only path for the very first admin.
+    """
+    from .db import _connect  # local import: only auth needs the raw conn here
+
+    conn = _connect()  # autocommit=True
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT GET_LOCK(%s, %s) AS got",
+            (_REGISTER_LOCK_NAME, _REGISTER_LOCK_TIMEOUT_SECONDS),
+        )
+        got = (cur.fetchone() or {}).get("got")
+        if got != 1:
+            # Couldn't acquire the lock in time — fail closed rather than risk
+            # a second admin. The client can retry.
+            raise HTTPException(
+                status_code=503,
+                detail="Registration is busy. Please retry in a moment.",
+            )
+        try:
+            cur.execute("SELECT COUNT(*) AS n FROM users")
+            existing = int((cur.fetchone() or {}).get("n") or 0)
+            if existing > 0:
+                raise _RegistrationClosed()
+            # Defensive duplicate-email check (UNIQUE index is the real guard).
+            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+            if cur.fetchone():
+                raise _EmailTaken()
+            cur.execute(
+                "INSERT INTO users (email, password_hash, full_name, role) "
+                "VALUES (%s, %s, %s, %s)",
+                (email, password_hash, full_name, "admin"),
+            )
+            return int(cur.lastrowid)
+        finally:
+            try:
+                cur.execute("SELECT RELEASE_LOCK(%s)", (_REGISTER_LOCK_NAME,))
+                cur.fetchall()
+            except Exception:
+                pass
+    finally:
+        conn.close()
+
+
 @router.post("/register", response_model=AuthResponse)
 async def register(
     req: RegisterRequest, response: Response, request: Request
 ) -> dict[str, Any]:
     rate_key = _auth_rate_limit_check("register", request, req.email)
+    # Reject the obvious closed/duplicate cases early (cheap, no lock) — the
+    # authoritative, race-free decision happens inside the locked transaction.
     if count_users() > 0:
         _auth_rate_limit_record_failure(rate_key)
         raise HTTPException(
@@ -185,11 +315,22 @@ async def register(
     if get_user_by_email(req.email):
         _auth_rate_limit_record_failure(rate_key)
         raise HTTPException(status_code=400, detail="Email already registered.")
-    
+
     password_hash = get_password_hash(req.password)
-    user_id = create_user(req.email, password_hash, req.name)
+    try:
+        user_id = _register_first_user_atomic(req.email, password_hash, req.name)
+    except _RegistrationClosed:
+        _auth_rate_limit_record_failure(rate_key)
+        raise HTTPException(
+            status_code=403,
+            detail="Registration is closed after the first admin user.",
+        )
+    except _EmailTaken:
+        _auth_rate_limit_record_failure(rate_key)
+        raise HTTPException(status_code=400, detail="Email already registered.")
+
     user = get_user_by_id(user_id)
-    
+
     token = create_jwt_token(user_id)
     _set_session_cookie(response, token)
     _auth_rate_limit_reset(rate_key)
@@ -233,14 +374,17 @@ async def logout(response: Response) -> Response:
 
 @router.get("/me")
 async def get_me(user_id: int = Depends(require_token)) -> dict[str, Any]:
+    # The shared/global scope (user_id <= 0) is a NON-INTERACTIVE machine
+    # identity, not a person. We must NOT mint a synthetic "Global Admin" here:
+    # combined with require_token returning 0 for the shared token, that handed
+    # any holder of the shared token a full admin session with no real user.
+    # /me is an interactive "who am I" endpoint, so the only valid answer for a
+    # non-user identity is 401. Real server-to-server callers don't need /me.
     if user_id <= 0:
-        if settings.backend_auth_token:
-            # Global dummy user
-            return {"id": "1", "email": "team@datalia.app", "name": "Global Admin", "role": "admin"}
         raise HTTPException(status_code=401, detail="Not signed in.")
-    
+
     user = get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
-    
+
     return _user_payload(user)

@@ -4,6 +4,11 @@
 #   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 #   docker compose -f docker-compose.prod.yml --env-file .env.production logs -f
 
+# Pin the project name so volumes/networks are deterministically `datalia_*`
+# regardless of the host directory name — DEPLOY.md's backup/restore commands
+# reference `datalia_mariadb-data` etc.
+name: datalia
+
 services:
   mariadb:
     image: mariadb:11.4
@@ -48,11 +53,15 @@ services:
       options:
         max-size: "20m"
         max-file: "5"
+    # Only wait for upstreams to *start*, not pass their healthcheck. A
+    # backend/DB misconfig must not block Caddy from coming up: we still want
+    # it to provision/renew TLS certs and serve a 502 for the broken upstream
+    # rather than taking down HTTPS for every host.
     depends_on:
       caption-api:
-        condition: service_healthy
+        condition: service_started
       frontend:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
       interval: 30s
@@ -85,14 +94,16 @@ services:
     environment:
       AI_API_BASE_URL: ${AI_API_BASE_URL:-https://openrouter.ai/api/v1}
       AI_API_KEY: ${AI_API_KEY:-}
-      AI_MODEL: ${AI_MODEL:-google/gemini-3.1-flash-lite}
-      AI_MODEL_FAST: ${AI_MODEL_FAST:-google/gemini-3.1-flash-lite}
+      AI_MODEL: ${AI_MODEL:-google/gemini-2.5-flash}
+      AI_MODEL_FAST: ${AI_MODEL_FAST:-google/gemini-2.5-flash}
       AI_MODEL_PREMIUM: ${AI_MODEL_PREMIUM:-}
       AI_INCLUDE_IMAGES: ${AI_INCLUDE_IMAGES:-false}
       AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-200}
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS}
       BACKEND_AUTH_TOKEN: ${BACKEND_AUTH_TOKEN}
       ALLOW_OPEN_AUTH: ${ALLOW_OPEN_AUTH:-false}
+      AUTH_RATE_LIMIT_ATTEMPTS: ${AUTH_RATE_LIMIT_ATTEMPTS:-10}
+      AUTH_RATE_LIMIT_WINDOW_SECONDS: ${AUTH_RATE_LIMIT_WINDOW_SECONDS:-300}
       TUNNEL_ENABLED: "false"
       OAUTH_REDIRECT_BASE: https://${API_DOMAIN}
       PUBLIC_BASE_URL: https://${API_DOMAIN}
@@ -107,6 +118,7 @@ services:
       TIKTOK_UPLOAD_MODE: ${TIKTOK_UPLOAD_MODE:-file}
       LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
       LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
+      LINKEDIN_API_VERSION: ${LINKEDIN_API_VERSION:-202603}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       JWT_SECRET: ${JWT_SECRET:-}
@@ -145,13 +157,17 @@ services:
       context: ../frontend
       args:
         - NEXT_PUBLIC_API_BASE_URL=https://${API_DOMAIN}
-    container_name: datalia-frontend
+    # Container name matches the service name Caddy's `reverse_proxy
+    # frontend:3000` resolves, keeping prod symmetric with that hostname.
+    container_name: frontend
     restart: always
     expose:
       - "3000"
+    # Start once the API container is up; don't gate on its healthcheck so a
+    # backend issue doesn't keep the frontend (and Caddy) from coming up.
     depends_on:
       caption-api:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000 >/dev/null 2>&1 || exit 1"]
       interval: 30s

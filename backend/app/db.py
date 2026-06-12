@@ -8,7 +8,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import pymysql
 from passlib.context import CryptContext
@@ -32,7 +32,22 @@ def _database_params(*, database_override: str | None = None) -> dict[str, Any]:
         db_name = database_override
         if db_name is None:
             db_name = parsed.path.lstrip("/") or None
-        return {
+        # Fail fast on a DSN with no database. Passing database=None to
+        # pymysql connects without selecting a schema, so every query would
+        # then fail with "No database selected" far from the real cause.
+        if db_name is None:
+            raise RuntimeError(
+                "DATABASE_URL must include a database name "
+                "(e.g. mysql://user:pw@host:3306/datalia)."
+            )
+        # Preserve query params (e.g. ?charset=utf8mb4&ssl=true) instead of
+        # silently dropping everything after '?'. urlparse keeps them out of
+        # .path, but they were never threaded through to pymysql before.
+        query = parse_qs(parsed.query)
+        charset = (query.get("charset") or ["utf8mb4"])[0]
+        ssl_raw = (query.get("ssl") or [""])[0].strip().lower()
+        use_ssl = ssl_raw in {"1", "true", "yes", "on", "required"}
+        params: dict[str, Any] = {
             "host": parsed.hostname or os.getenv("MARIADB_HOST", "mariadb"),
             "port": parsed.port or int(os.getenv("MARIADB_PORT", "3306")),
             "user": unquote(parsed.username or os.getenv("MARIADB_USER", "datalia")),
@@ -40,32 +55,36 @@ def _database_params(*, database_override: str | None = None) -> dict[str, Any]:
                 parsed.password or os.getenv("MARIADB_PASSWORD", "datalia")
             ),
             "database": db_name,
+            "charset": charset,
         }
+        if use_ssl:
+            params["ssl"] = {"ssl": {}}
+        return params
     return {
         "host": os.getenv("MARIADB_HOST", "mariadb"),
         "port": int(os.getenv("MARIADB_PORT", "3306")),
         "user": os.getenv("MARIADB_USER", "datalia"),
         "password": os.getenv("MARIADB_PASSWORD", "datalia"),
         "database": database_override or os.getenv("MARIADB_DATABASE", "datalia"),
+        "charset": "utf8mb4",
     }
 
 
 def _connect(*, database_override: str | None = None):
     params = _database_params(database_override=database_override)
-    return pymysql.connect(
-        host=params["host"],
-        port=params["port"],
-        user=params["user"],
-        password=params["password"],
-        database=params["database"],
-        autocommit=True,
-        charset="utf8mb4",
-        cursorclass=pymysql.cursors.DictCursor,
-    )
-
-
-def _connect_server():
-    return _connect(database_override=None if settings.database_url else None)
+    connect_kwargs: dict[str, Any] = {
+        "host": params["host"],
+        "port": params["port"],
+        "user": params["user"],
+        "password": params["password"],
+        "database": params["database"],
+        "autocommit": True,
+        "charset": params.get("charset", "utf8mb4"),
+        "cursorclass": pymysql.cursors.DictCursor,
+    }
+    if params.get("ssl"):
+        connect_kwargs["ssl"] = params["ssl"]
+    return pymysql.connect(**connect_kwargs)
 
 
 def _scope_key(user_id: str | int | None = None) -> str:

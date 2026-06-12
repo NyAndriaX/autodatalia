@@ -81,6 +81,12 @@ class Settings(BaseModel):
 # session token with it, so we refuse to use it when ENV=production.
 _JWT_DEFAULT_INSECURE = "super-secret-default-key-change-in-prod"
 
+# Placeholder emitted by the deploy scaffolding (env templates / install
+# scripts) where a real secret should have been generated. If it survives
+# into a production boot it means a secret was never filled in, so we
+# refuse to start rather than run with a known, guessable value.
+_GENERATE_PLACEHOLDER = "__GENERATE__"
+
 
 def _env_name() -> str:
     return os.getenv("ENV", "development").strip().lower()
@@ -98,6 +104,25 @@ def _resolve_allow_open_auth() -> bool:
 
 
 def _validate_security_settings(settings_obj: Settings) -> None:
+    if _is_production_env():
+        # Refuse to boot if any secret still carries the deploy-scaffolding
+        # placeholder. A surviving '__GENERATE__' means the value was never
+        # filled in, so running with it would be a known, guessable secret.
+        # JWT_SECRET is checked separately in _resolve_jwt_secret(); the rest
+        # are validated here (some are read straight from the env by db.py,
+        # but the check still happens at the same production boot).
+        placeholder_checks = {
+            "BACKEND_AUTH_TOKEN": settings_obj.backend_auth_token,
+            "TELEGRAM_WEBHOOK_SECRET": settings_obj.telegram_webhook_secret,
+            "MARIADB_PASSWORD": os.getenv("MARIADB_PASSWORD", ""),
+            "MARIADB_ROOT_PASSWORD": os.getenv("MARIADB_ROOT_PASSWORD", ""),
+        }
+        for name, value in placeholder_checks.items():
+            if value and _GENERATE_PLACEHOLDER in value:
+                raise RuntimeError(
+                    f"{name} still contains the '__GENERATE__' placeholder. "
+                    "Generate a real secret and set it before deploying."
+                )
     if _is_production_env() and settings_obj.allow_open_auth:
         raise RuntimeError("ALLOW_OPEN_AUTH must be false in production.")
     if _is_production_env() and not settings_obj.cors_allow_origins:
@@ -130,6 +155,12 @@ def _resolve_jwt_secret() -> str:
     """
     secret = os.getenv("JWT_SECRET", "").strip()
     env = _env_name()
+    if _is_production_env() and _GENERATE_PLACEHOLDER in secret:
+        raise RuntimeError(
+            "JWT_SECRET still contains the '__GENERATE__' placeholder. "
+            "Generate a real secret (openssl rand -hex 32) and set it "
+            "before deploying — see DEPLOY.md."
+        )
     if secret and secret != _JWT_DEFAULT_INSECURE:
         return secret
     if _is_production_env():
