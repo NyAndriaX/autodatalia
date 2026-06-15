@@ -51,8 +51,10 @@ services:
       start_period: 20s
       retries: 3
     environment:
+      # AI provider KEYS are per-user — each account sets its own in the app's
+      # Settings (stored per-tenant in MariaDB). Intentionally NOT global env
+      # vars. Only non-secret defaults (base URL / model / limits) live here.
       AI_API_BASE_URL: ${AI_API_BASE_URL:-https://openrouter.ai/api/v1}
-      AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-google/gemini-3.1-flash-lite}
       AI_MODEL_FAST: ${AI_MODEL_FAST:-google/gemini-3.1-flash-lite}
       AI_MODEL_PREMIUM: ${AI_MODEL_PREMIUM:-}
@@ -91,11 +93,11 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_DEFAULT_CHAT_ID: ${TELEGRAM_DEFAULT_CHAT_ID:-}
       TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      # Image/video provider keys are also per-user (Settings UI). Only the
+      # non-secret model/base-url defaults stay here.
       AI_IMAGE_API_BASE_URL: ${AI_IMAGE_API_BASE_URL:-}
-      AI_IMAGE_API_KEY: ${AI_IMAGE_API_KEY:-}
       AI_IMAGE_MODEL: ${AI_IMAGE_MODEL:-}
       AI_VIDEO_API_BASE_URL: ${AI_VIDEO_API_BASE_URL:-}
-      AI_VIDEO_API_KEY: ${AI_VIDEO_API_KEY:-}
       AI_VIDEO_MODEL: ${AI_VIDEO_MODEL:-}
       REPLICATE_API_TOKEN: ${REPLICATE_API_TOKEN:-}
       REPLICATE_VIDEO_MODEL: ${REPLICATE_VIDEO_MODEL:-lightricks/ltx-video}
@@ -123,9 +125,17 @@ services:
     build:
       context: ../frontend
       args:
-        - NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+        # The browser calls the frontend's OWN origin at /api/backend; Next.js
+        # rewrites that to the backend service internally (same-origin = no CORS
+        # and the session cookie just works). Override only for special setups.
+        - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-/api/backend}
     container_name: datalia-frontend
     restart: always
+    environment:
+      # Proxy target for the /api/backend rewrite above. MUST be the backend's
+      # internal address or every API call 404s. Defaults to the compose
+      # service name, which resolves on the shared network.
+      INTERNAL_API_BASE_URL: ${INTERNAL_API_BASE_URL:-http://caption-api:8000}
     ports:
       - "3005:3000"
     depends_on:
