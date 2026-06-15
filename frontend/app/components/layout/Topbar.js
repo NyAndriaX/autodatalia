@@ -23,10 +23,10 @@ import {
 import { logoutThunk } from "../../store/authThunks";
 import { apiHealthCheck } from "../../lib/apiClient";
 import { useIsMobile } from "../../lib/useIsMobile";
+import WorkspaceControls from "./WorkspaceControls";
 import {
   Search,
   Bell,
-  MessageSquare,
   ChevronDown,
   X,
   LogOut,
@@ -91,11 +91,6 @@ const buildViewMeta = (t) => ({
   },
 });
 
-const CONNECTIVITY_DOT = {
-  online: "var(--status-approved)",
-  offline: "var(--status-error)",
-  unknown: "var(--text-muted)",
-};
 
 const RESULT_ICON = { post: FileText, template: FileText, media: ImageIcon };
 
@@ -118,7 +113,7 @@ export default function Topbar() {
   const tCommon = useTranslations("common");
   const tLang = useTranslations("languages");
   const VIEW_META = useMemo(() => buildViewMeta(t), [t]);
-  const { activeView, notifications, searchQuery, sidebarCollapsed, connectivity, theme, search, messages, aiUsage, locale } =
+  const { activeView, notifications, searchQuery, sidebarCollapsed, theme, search, messages, aiUsage, locale } =
     useSelector((state) => state.ui);
   const authUser = useSelector((state) => state.auth.user);
   const isMobile = useIsMobile();
@@ -181,7 +176,6 @@ export default function Topbar() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  const backendStatus = connectivity?.backend ?? "unknown";
   const initials = authUser?.initials || "DT";
   const resultsVisible = showResults && searchQuery.trim() && searchView === activeView;
 
@@ -481,20 +475,8 @@ export default function Topbar() {
           {resolved === "dark" ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
         </button>
 
-        {/* Backend / Telegram status */}
-        <button
-          id="telegram-status"
-          className={`${btnGhost} flex items-center gap-2`}
-          title={t("backendStatus", { status: backendStatus })}
-          aria-label={t("backendStatus", { status: backendStatus })}
-        >
-          <MessageSquare size={18} aria-hidden="true" />
-          <span
-            className="w-2 h-2 rounded-full transition-colors duration-500"
-            style={{ background: CONNECTIVITY_DOT[backendStatus] }}
-            aria-hidden="true"
-          />
-        </button>
+        {/* Workspace switcher + invitations inbox */}
+        {!isMobile && <WorkspaceControls />}
 
         {/* Notifications / messages */}
         <div className="relative" ref={notifRef}>

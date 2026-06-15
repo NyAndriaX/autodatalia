@@ -193,15 +193,100 @@ def create_workspace_with_owner(name: str, owner_user_id: int) -> int:
 # Resolution helpers (the security-critical reads used by authz)
 # ---------------------------------------------------------------------------
 def get_active_workspace_id(user_id: int) -> int | None:
-    """The user's workspace (single membership in MVP). None if not a member."""
+    """The user's ACTIVE workspace (multi-workspace membership + switcher).
+
+    Prefers ``users.active_workspace_id`` when the user is still a member of it;
+    otherwise falls back to their earliest membership. None if they belong to no
+    workspace.
+    """
     if not user_id or int(user_id) <= 0:
         return None
-    row = _fetchone(
+    uid = int(user_id)
+    row = _fetchone("SELECT active_workspace_id FROM users WHERE id = %s", (uid,))
+    active = (row or {}).get("active_workspace_id")
+    if active and get_membership(uid, int(active)):
+        return int(active)
+    first = _fetchone(
         "SELECT workspace_id FROM workspace_members WHERE user_id = %s "
         "ORDER BY id ASC LIMIT 1",
-        (int(user_id),),
+        (uid,),
     )
-    return int(row["workspace_id"]) if row else None
+    return int(first["workspace_id"]) if first else None
+
+
+def switch_workspace(user_id: int, workspace_id: int) -> bool:
+    """Set the user's active workspace. False if they aren't a member of it."""
+    if not get_membership(int(user_id), int(workspace_id)):
+        return False
+    _execute(
+        "UPDATE users SET active_workspace_id = %s WHERE id = %s",
+        (int(workspace_id), int(user_id)),
+    )
+    return True
+
+
+def list_user_workspaces(user_id: int) -> list[dict[str, Any]]:
+    """Every workspace the user belongs to, with their role there + which is active."""
+    uid = int(user_id)
+    active = get_active_workspace_id(uid)
+    rows = _fetchall(
+        """
+        SELECT w.id, w.name, w.owner_user_id, r.name AS role_name
+        FROM workspace_members m
+        JOIN workspaces w ON w.id = m.workspace_id
+        JOIN roles r ON r.id = m.role_id
+        WHERE m.user_id = %s
+        ORDER BY m.created_at ASC
+        """,
+        (uid,),
+    )
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        wid = int(r["id"])
+        out.append(
+            {
+                "id": wid,
+                "name": r["name"],
+                "role": r["role_name"],
+                "is_owner": int(r["owner_user_id"]) == uid,
+                "is_active": wid == active,
+            }
+        )
+    return out
+
+
+def list_invitations_for_email(email: str) -> list[dict[str, Any]]:
+    """Pending invitations addressed to this email — the invitee's inbox."""
+    return _fetchall(
+        """
+        SELECT i.id, i.workspace_id, i.role_id, r.name AS role_name,
+               w.name AS workspace_name, i.created_at, i.expires_at
+        FROM workspace_invitations i
+        JOIN roles r ON r.id = i.role_id
+        JOIN workspaces w ON w.id = i.workspace_id
+        WHERE i.email = %s AND i.accepted_at IS NULL
+        ORDER BY i.created_at DESC
+        """,
+        ((email or "").strip().lower(),),
+    )
+
+
+def get_invitation(invitation_id: int) -> dict[str, Any] | None:
+    return _fetchone(
+        "SELECT * FROM workspace_invitations WHERE id = %s", (int(invitation_id),)
+    )
+
+
+def delete_invitation_by_id(invitation_id: int) -> bool:
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM workspace_invitations WHERE id = %s", (int(invitation_id),)
+        )
+        return cur.rowcount > 0
+    finally:
+        conn.close()
 
 
 def get_membership(user_id: int, workspace_id: int) -> dict[str, Any] | None:

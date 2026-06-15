@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -21,9 +22,10 @@ from .auth import (
     _auth_rate_limit_record_failure,
     _auth_rate_limit_reset,
     _send_email,
+    require_token,
 )
 from .authz import WorkspaceContext, require_permission, require_workspace
-from .db import get_user_by_email
+from .db import get_user_by_email, get_user_by_id
 
 log = logging.getLogger("datalia.workspaces")
 router = APIRouter(tags=["workspace"])
@@ -41,6 +43,10 @@ class MemberRoleBody(BaseModel):
 class RoleBody(BaseModel):
     name: str = ""
     permissions: list[str] = []
+
+
+class SwitchBody(BaseModel):
+    workspace_id: int
 
 
 # ── Workspace ─────────────────────────────────────────────────────────────
@@ -92,11 +98,12 @@ async def members_invite(
     if not role or int(role.get("workspace_id") or 0) != ctx.workspace_id:
         raise HTTPException(400, "Unknown role for this workspace.")
     rate_key = _auth_rate_limit_check("invite", request, f"{ctx.workspace_id}:{email}")
-    # Single-membership MVP: reject inviting someone who already has a workspace.
+    # Multi-workspace: a person may belong to many workspaces — only block
+    # re-inviting someone already in THIS one.
     existing = get_user_by_email(email)
-    if existing and workspaces.get_active_workspace_id(int(existing["id"])):
+    if existing and workspaces.get_membership(int(existing["id"]), ctx.workspace_id):
         _auth_rate_limit_record_failure(rate_key)
-        raise HTTPException(400, "That account already belongs to a workspace.")
+        raise HTTPException(400, "That person is already a member of this workspace.")
     token = workspaces.create_invitation(
         ctx.workspace_id, email, body.role_id, ctx.user_id
     )
@@ -217,4 +224,74 @@ async def invitations_revoke(
 ) -> dict[str, Any]:
     if not workspaces.delete_invitation(ctx.workspace_id, invitation_id):
         raise HTTPException(404, "Invitation not found.")
+    return {"ok": True}
+
+
+# ── Multi-workspace: list mine + switch the active one ──────────────────────
+@router.get("/workspaces")
+async def my_workspaces(
+    ctx: WorkspaceContext = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Every workspace the caller belongs to (drives the switcher)."""
+    return {"workspaces": workspaces.list_user_workspaces(ctx.user_id)}
+
+
+@router.post("/workspace/switch")
+async def workspace_switch(
+    body: SwitchBody,
+    ctx: WorkspaceContext = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Switch the caller's active workspace (membership is verified). The client
+    should re-fetch /auth/me to pick up the new role + permissions."""
+    if not workspaces.switch_workspace(ctx.user_id, body.workspace_id):
+        raise HTTPException(403, "You are not a member of that workspace.")
+    return {"ok": True, "workspace_id": body.workspace_id}
+
+
+# ── Invitations inbox (the invitee's own pending invites) ───────────────────
+def _caller_email(user_id: int) -> str:
+    if user_id <= 0:
+        raise HTTPException(401, "Not signed in.")
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(401, "Not signed in.")
+    return str(user["email"]).strip().lower()
+
+
+@router.get("/invitations/mine")
+async def invitations_mine(user_id: int = Depends(require_token)) -> dict[str, Any]:
+    """Pending invitations addressed to the signed-in user (accept/refuse)."""
+    return {"invitations": workspaces.list_invitations_for_email(_caller_email(user_id))}
+
+
+@router.post("/invitations/{invitation_id}/accept")
+async def invitation_accept(
+    invitation_id: int, user_id: int = Depends(require_token)
+) -> dict[str, Any]:
+    email = _caller_email(user_id)
+    inv = workspaces.get_invitation(invitation_id)
+    if not inv or inv.get("accepted_at"):
+        raise HTTPException(404, "Invitation not found.")
+    if str(inv["email"]).strip().lower() != email:
+        raise HTTPException(403, "This invitation isn't addressed to you.")
+    if float(inv.get("expires_at") or 0) < time.time():
+        workspaces.delete_invitation_by_id(int(inv["id"]))
+        raise HTTPException(400, "This invitation has expired.")
+    workspaces.add_member(int(inv["workspace_id"]), user_id, int(inv["role_id"]))
+    workspaces.consume_invitation(int(inv["id"]))
+    workspaces.switch_workspace(user_id, int(inv["workspace_id"]))
+    return {"ok": True, "workspace_id": int(inv["workspace_id"])}
+
+
+@router.post("/invitations/{invitation_id}/refuse")
+async def invitation_refuse(
+    invitation_id: int, user_id: int = Depends(require_token)
+) -> dict[str, Any]:
+    email = _caller_email(user_id)
+    inv = workspaces.get_invitation(invitation_id)
+    if not inv:
+        raise HTTPException(404, "Invitation not found.")
+    if str(inv["email"]).strip().lower() != email:
+        raise HTTPException(403, "This invitation isn't addressed to you.")
+    workspaces.delete_invitation_by_id(int(inv["id"]))
     return {"ok": True}

@@ -187,6 +187,20 @@ def init_db(*, retries: int = 30, delay: float = 1.0) -> None:
                     # any users created before roles existed keep admin-level
                     # capability until an explicit role-management flow exists.
                     cur.execute("UPDATE users SET role = 'admin'")
+                # active_workspace_id: which of the user's workspaces is current
+                # (multi-workspace membership + switcher). NULL => fall back to
+                # their earliest membership.
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS n FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users'
+                      AND COLUMN_NAME = 'active_workspace_id'
+                    """
+                )
+                if int((cur.fetchone() or {}).get("n") or 0) == 0:
+                    cur.execute(
+                        "ALTER TABLE users ADD COLUMN active_workspace_id BIGINT NULL"
+                    )
                 cur.execute(
                     f"""
                     CREATE TABLE IF NOT EXISTS {_DOC_TABLE} (

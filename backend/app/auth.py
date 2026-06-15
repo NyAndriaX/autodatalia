@@ -572,16 +572,18 @@ async def accept_invite(
             raise HTTPException(status_code=400, detail="A password is required to create your account.")
         password_hash = get_password_hash(req.password)
         user_id = create_user(email, password_hash, req.name or "", role="member")
+        # Every user also owns a personal workspace (admin there); they can
+        # switch to it later.
+        workspaces.create_workspace_with_owner(
+            workspaces.workspace_name_for(req.name, email), user_id
+        )
     else:
         user_id = int(user["id"])
-        # Single-membership MVP — never pull an existing-workspace user into
-        # another workspace (and never escalate the caller's own account).
-        if workspaces.get_active_workspace_id(user_id):
-            _auth_rate_limit_record_failure(rate_key)
-            raise HTTPException(status_code=400, detail="This account already belongs to a workspace.")
 
     workspaces.add_member(workspace_id, user_id, role_id)
     workspaces.consume_invitation(int(inv["id"]))
+    # Land the user in the workspace they just joined.
+    workspaces.switch_workspace(user_id, workspace_id)
 
     user_row = get_user_by_id(user_id)
     token = create_jwt_token(user_id)

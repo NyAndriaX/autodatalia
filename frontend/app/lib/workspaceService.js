@@ -95,3 +95,44 @@ export async function revokeInvitation(invitationId) {
     method: "DELETE",
   });
 }
+
+// ── Multi-workspace: list mine + switch ─────────────────────────────────────
+export async function fetchMyWorkspaces() {
+  if (offline()) return [];
+  try {
+    const data = await apiFetch("/workspaces");
+    return Array.isArray(data?.workspaces) ? data.workspaces : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function switchWorkspace(workspaceId) {
+  return apiFetch("/workspace/switch", {
+    method: "POST",
+    body: JSON.stringify({ workspace_id: workspaceId }),
+  });
+}
+
+// ── Invitations inbox (the signed-in user's own invites) ────────────────────
+export async function fetchMyInvitations() {
+  if (offline()) return [];
+  try {
+    const data = await apiFetch("/invitations/mine");
+    return Array.isArray(data?.invitations) ? data.invitations : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function acceptInvitation(invitationId) {
+  return apiFetch(`/invitations/${encodeURIComponent(invitationId)}/accept`, {
+    method: "POST",
+  });
+}
+
+export async function refuseInvitation(invitationId) {
+  return apiFetch(`/invitations/${encodeURIComponent(invitationId)}/refuse`, {
+    method: "POST",
+  });
+}
