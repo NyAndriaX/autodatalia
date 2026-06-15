@@ -41,7 +41,9 @@ import {
   Coins,
   ExternalLink,
   Globe,
+  ArrowRight,
 } from "lucide-react";
+import { hasPermission } from "../../lib/permissions";
 
 const buildViewMeta = (t) => ({
   dashboard: {
@@ -112,6 +114,8 @@ export default function Topbar() {
   const t = useTranslations("topbar");
   const tCommon = useTranslations("common");
   const tLang = useTranslations("languages");
+  const tSidebar = useTranslations("sidebar");
+  const tCreation = useTranslations("creation");
   const VIEW_META = useMemo(() => buildViewMeta(t), [t]);
   const { activeView, notifications, searchQuery, sidebarCollapsed, theme, search, messages, aiUsage, locale } =
     useSelector((state) => state.ui);
@@ -211,6 +215,37 @@ export default function Topbar() {
     setMobileSearchOpen(false);
   };
 
+  // Navigable destinations (sidebar views + admin screens) surfaced in the
+  // search dropdown so typing e.g. "create" jumps to the right page.
+  const navTargets = [
+    { key: "dashboard", label: tSidebar("dashboard") },
+    { key: "creation", label: tCreation("title") },
+    { key: "calendar", label: tSidebar("calendar") },
+    { key: "library", label: tSidebar("library") },
+    { key: "automation", label: tSidebar("automation") },
+    { key: "videos", label: tSidebar("videos") },
+    { key: "analytics", label: tSidebar("analytics") },
+    { key: "credits", label: tSidebar("credits") },
+    { key: "settings", label: tCommon("settings") },
+    { key: "members", label: "Utilisateurs", perm: "members.read" },
+    { key: "roles", label: "Rôles & permissions", perm: "roles.read" },
+  ];
+  const navQuery = searchQuery.trim().toLowerCase();
+  const navMatches = navQuery
+    ? navTargets.filter(
+        (n) =>
+          (!n.perm || hasPermission(authUser, n.perm)) &&
+          n.label.toLowerCase().includes(navQuery),
+      )
+    : [];
+
+  const onNavClick = (key) => {
+    dispatch(setActiveView(key));
+    dispatch(clearSearch());
+    setShowResults(false);
+    setMobileSearchOpen(false);
+  };
+
   // Focus the field when the mobile search overlay opens.
   useEffect(() => {
     if (mobileSearchOpen) {
@@ -294,46 +329,81 @@ export default function Topbar() {
             boxShadow: "var(--shadow-dropdown)",
           }}
         >
-          <div
-            className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]"
-            style={{
-              color: "var(--text-tertiary)",
-              borderBottom: "1px solid var(--border-default)",
-              background: "var(--bg-elevated)",
-            }}
-          >
-            {t("searchResults")}
-          </div>
-          {search.status === "loading" ? (
-            <div className="flex items-center gap-2 px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
-              <Loader2 size={14} className="animate-spin" /> {t("searchInProgress")}
-            </div>
-          ) : search.results.length === 0 ? (
-            <div className="px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
-              {t("noResultsFor", { query: searchQuery })}
-            </div>
-          ) : (
-            <ul className="max-h-72 overflow-y-auto py-1">
-              {search.results.map((r) => {
-                const Icon = RESULT_ICON[r.type] || FileText;
-                return (
-                  <li key={r.id}>
+          {navMatches.length > 0 && (
+            <>
+              <div
+                className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]"
+                style={{
+                  color: "var(--text-tertiary)",
+                  borderBottom: "1px solid var(--border-default)",
+                  background: "var(--bg-elevated)",
+                }}
+              >
+                Navigation
+              </div>
+              <ul className="max-h-72 overflow-y-auto py-1">
+                {navMatches.map((n) => (
+                  <li key={`nav-${n.key}`}>
                     <button
                       className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-200 hover:bg-[var(--bg-card-hover)]"
-                      onClick={() => onResultClick(r)}
+                      onClick={() => onNavClick(n.key)}
                       onMouseDown={(e) => e.preventDefault()}
                     >
-                      <Icon size={15} style={{ color: "var(--text-muted)" }} aria-hidden="true" />
+                      <ArrowRight size={15} style={{ color: "var(--text-muted)" }} aria-hidden="true" />
                       <span className="flex-1 min-w-0">
-                        <span className="block text-sm truncate" style={{ color: "var(--text-primary)" }}>{r.title}</span>
-                        <span className="block text-[11px] truncate" style={{ color: "var(--text-muted)" }}>{r.subtitle}</span>
+                        <span className="block text-sm truncate" style={{ color: "var(--text-primary)" }}>{n.label}</span>
                       </span>
-                      <span className={`${badgeDraft} capitalize`}>{r.type}</span>
+                      <span className={`${badgeDraft} capitalize`}>Page</span>
                     </button>
                   </li>
-                );
-              })}
-            </ul>
+                ))}
+              </ul>
+            </>
+          )}
+          {(search.status === "loading" || search.results.length > 0 || navMatches.length === 0) && (
+            <>
+              <div
+                className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]"
+                style={{
+                  color: "var(--text-tertiary)",
+                  borderBottom: "1px solid var(--border-default)",
+                  background: "var(--bg-elevated)",
+                }}
+              >
+                {t("searchResults")}
+              </div>
+              {search.status === "loading" ? (
+                <div className="flex items-center gap-2 px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
+                  <Loader2 size={14} className="animate-spin" /> {t("searchInProgress")}
+                </div>
+              ) : search.results.length === 0 ? (
+                <div className="px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
+                  {t("noResultsFor", { query: searchQuery })}
+                </div>
+              ) : (
+                <ul className="max-h-72 overflow-y-auto py-1">
+                  {search.results.map((r) => {
+                    const Icon = RESULT_ICON[r.type] || FileText;
+                    return (
+                      <li key={r.id}>
+                        <button
+                          className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-200 hover:bg-[var(--bg-card-hover)]"
+                          onClick={() => onResultClick(r)}
+                          onMouseDown={(e) => e.preventDefault()}
+                        >
+                          <Icon size={15} style={{ color: "var(--text-muted)" }} aria-hidden="true" />
+                          <span className="flex-1 min-w-0">
+                            <span className="block text-sm truncate" style={{ color: "var(--text-primary)" }}>{r.title}</span>
+                            <span className="block text-[11px] truncate" style={{ color: "var(--text-muted)" }}>{r.subtitle}</span>
+                          </span>
+                          <span className={`${badgeDraft} capitalize`}>{r.type}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </>
           )}
         </div>
       )}

@@ -135,6 +135,8 @@ async def members_change_role(
     body: MemberRoleBody,
     ctx: WorkspaceContext = Depends(require_permission("members.manage")),
 ) -> dict[str, Any]:
+    if user_id == ctx.user_id:
+        raise HTTPException(400, "You can't change your own role.")
     if not workspaces.get_membership(user_id, ctx.workspace_id):
         raise HTTPException(404, "Member not found.")
     if not workspaces.change_member_role(ctx.workspace_id, user_id, body.role_id):
@@ -185,6 +187,8 @@ async def roles_update(
     role = workspaces.get_role(role_id)
     if not role or int(role.get("workspace_id") or 0) != ctx.workspace_id:
         raise HTTPException(404, "Role not found.")
+    if role["is_system"]:
+        raise HTTPException(400, "Built-in roles can't be modified.")
     workspaces.update_role(
         role_id,
         name=(body.name.strip() or None) if body.name else None,

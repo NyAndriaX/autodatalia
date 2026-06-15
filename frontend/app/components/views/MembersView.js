@@ -131,7 +131,7 @@ export default function MembersView() {
       dataIndex: "role_name",
       width: 200,
       render: (roleName, m) =>
-        m.is_owner || !canManage ? (
+        m.is_owner || m.is_self || !canManage ? (
           <Tag color={m.is_owner ? "gold" : "blue"}>{roleName}</Tag>
         ) : (
           <Select

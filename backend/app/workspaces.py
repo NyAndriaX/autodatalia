@@ -521,10 +521,13 @@ def update_role(role_id: int, *, name: str | None = None, permissions=None) -> b
     role = get_role(role_id)
     if not role:
         return False
-    # System roles can't be renamed; the Owner role's permissions are immutable.
-    if name is not None and not role["is_system"]:
+    # Built-in (system) roles are immutable — neither the name nor the
+    # permission set can change (Owner/Admin/Editor/Viewer stay as seeded).
+    if role["is_system"]:
+        return False
+    if name is not None:
         _execute("UPDATE roles SET name = %s WHERE id = %s", (name, int(role_id)))
-    if permissions is not None and role["name"] != OWNER_ROLE_NAME:
+    if permissions is not None:
         set_role_permissions(role_id, permissions)
     return True
 

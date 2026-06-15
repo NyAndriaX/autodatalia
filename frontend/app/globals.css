@@ -224,19 +224,18 @@ p  { margin: 0; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
 
 /* ─── Transitions de thème ────────────────────────────────────────────*/
-:root[data-theme-transitioning],
-:root[data-theme-transitioning] *,
-:root[data-theme-transitioning] *::before,
-:root[data-theme-transitioning] *::after {
-  transition:
-    background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-    background-image 0.3s cubic-bezier(0.4, 0, 0.2, 1),
-    color            0.3s cubic-bezier(0.4, 0, 0.2, 1),
-    border-color     0.3s cubic-bezier(0.4, 0, 0.2, 1),
-    fill             0.3s cubic-bezier(0.4, 0, 0.2, 1),
-    stroke           0.3s cubic-bezier(0.4, 0, 0.2, 1),
-    box-shadow       0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+/* The theme flip is animated with the View Transitions API (see AppBootstrap):
+   the browser crossfades a snapshot of the whole page on the compositor, so it
+   stays smooth no matter how many widgets are mounted — instead of animating
+   background/box-shadow on every element (which janked on heavy pages). */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.35s;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+/* Browsers without View Transitions just flip instantly — no per-element
+   transition, so no segment-by-segment lag. */
 
 /* ─── Focus visible global ────────────────────────────────────────────*/
 :focus-visible {

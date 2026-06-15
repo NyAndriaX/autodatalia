@@ -17,6 +17,20 @@ export function restoreSessionThunk() {
   };
 }
 
+// Quiet re-fetch of /auth/me — refreshes the user's role + permissions (e.g.
+// after an admin changed their role) WITHOUT the "restoring" status flicker.
+// Keeps the current session on a transient failure.
+export function refreshUserThunk() {
+  return async (dispatch) => {
+    try {
+      const user = await authService.restore();
+      if (user) dispatch(authSuccess(user));
+    } catch {
+      /* keep current session */
+    }
+  };
+}
+
 export function loginThunk(credentials) {
   return async (dispatch) => {
     dispatch(authStart("authenticating"));
