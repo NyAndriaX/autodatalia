@@ -902,5 +902,59 @@
     "night": "Nuit",
     "now": "Maintenant",
     "done": "Terminé"
+  },
+  "permissions": {
+    "groups": {
+      "content": "Contenu",
+      "ai": "IA",
+      "media": "Médias",
+      "automation": "Automatisation",
+      "connections": "Connexions",
+      "settings": "Paramètres",
+      "team": "Équipe & accès"
+    },
+    "labels": {
+      "posts": {
+        "read": "Voir les publications",
+        "create": "Créer des publications",
+        "update": "Modifier les publications",
+        "delete": "Supprimer les publications",
+        "publish": "Publier"
+      },
+      "ai": {
+        "generate": "Générer du texte (IA)"
+      },
+      "media": {
+        "generate": "Générer des médias (IA)",
+        "read": "Voir la médiathèque",
+        "upload": "Téléverser des médias",
+        "delete": "Supprimer des médias"
+      },
+      "automation": {
+        "read": "Voir les automatisations",
+        "write": "Gérer les automatisations",
+        "validate": "Valider les automatisations"
+      },
+      "connections": {
+        "read": "Voir les connexions",
+        "manage": "Gérer les connexions"
+      },
+      "settings": {
+        "read": "Voir les paramètres",
+        "manage": "Gérer les paramètres et clés"
+      },
+      "members": {
+        "read": "Voir les membres",
+        "invite": "Inviter des membres",
+        "manage": "Gérer les membres"
+      },
+      "roles": {
+        "read": "Voir les rôles",
+        "manage": "Gérer les rôles"
+      },
+      "workspace": {
+        "manage": "Gérer le workspace"
+      }
+    }
   }
 }

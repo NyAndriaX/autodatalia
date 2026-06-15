@@ -902,5 +902,59 @@
     "night": "Night",
     "now": "Now",
     "done": "Done"
+  },
+  "permissions": {
+    "groups": {
+      "content": "Content",
+      "ai": "AI",
+      "media": "Media",
+      "automation": "Automation",
+      "connections": "Connections",
+      "settings": "Settings",
+      "team": "Team & access"
+    },
+    "labels": {
+      "posts": {
+        "read": "View posts",
+        "create": "Create posts",
+        "update": "Edit posts",
+        "delete": "Delete posts",
+        "publish": "Publish"
+      },
+      "ai": {
+        "generate": "Generate text (AI)"
+      },
+      "media": {
+        "generate": "Generate media (AI)",
+        "read": "View media library",
+        "upload": "Upload media",
+        "delete": "Delete media"
+      },
+      "automation": {
+        "read": "View automations",
+        "write": "Manage automations",
+        "validate": "Validate automations"
+      },
+      "connections": {
+        "read": "View connections",
+        "manage": "Manage connections"
+      },
+      "settings": {
+        "read": "View settings",
+        "manage": "Manage settings & keys"
+      },
+      "members": {
+        "read": "View members",
+        "invite": "Invite members",
+        "manage": "Manage members"
+      },
+      "roles": {
+        "read": "View roles",
+        "manage": "Manage roles"
+      },
+      "workspace": {
+        "manage": "Manage workspace"
+      }
+    }
   }
 }

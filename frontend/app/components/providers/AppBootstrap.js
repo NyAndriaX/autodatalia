@@ -82,7 +82,7 @@ export default function AppBootstrap() {
       html.dataset.themeTransitioning = "true";
       const t = window.setTimeout(() => {
         delete html.dataset.themeTransitioning;
-      }, 180);
+      }, 360);
       applyTheme(next);
       storeThemePref(theme);
       return () => window.clearTimeout(t);
@@ -98,7 +98,7 @@ export default function AppBootstrap() {
         document.documentElement.dataset.themeTransitioning = "true";
         window.setTimeout(() => {
           delete document.documentElement.dataset.themeTransitioning;
-        }, 180);
+        }, 360);
         lastApplied.current = resolved;
       }
       applyTheme(resolved);

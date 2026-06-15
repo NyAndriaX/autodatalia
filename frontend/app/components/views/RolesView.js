@@ -16,11 +16,8 @@ import {
   PlusOutlined,
   DeleteOutlined,
 } from "@ant-design/icons";
-import {
-  PERMISSION_GROUPS,
-  PERMISSION_GROUP_LABELS,
-} from "../../lib/permissions";
-import { usePermission } from "../../lib/permissions";
+import { useTranslations } from "next-intl";
+import { PERMISSION_GROUPS, usePermission } from "../../lib/permissions";
 import {
   fetchRoles,
   createRole,
@@ -34,6 +31,7 @@ const NEW_ROLE = { id: null, name: "", permissions: [], is_system: false };
 
 export default function RolesView() {
   const canManage = usePermission("roles.manage");
+  const tp = useTranslations("permissions");
   const [roles, setRoles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState(null); // {id, name, permissions, is_system}
@@ -216,7 +214,7 @@ export default function RolesView() {
                       color: "var(--text-primary)",
                     }}
                   >
-                    {PERMISSION_GROUP_LABELS[group] || group}
+                    {tp(`groups.${group}`)}
                   </div>
                   <div
                     style={{
@@ -232,7 +230,9 @@ export default function RolesView() {
                         disabled={locked || ownerLocked}
                         onChange={(e) => toggle(perm, e.target.checked)}
                       >
-                        <span style={{ fontSize: 12 }}>{perm}</span>
+                        <span style={{ fontSize: 12 }} title={perm}>
+                          {tp(`labels.${perm}`)}
+                        </span>
                       </Checkbox>
                     ))}
                   </div>

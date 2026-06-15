@@ -733,14 +733,6 @@ export default function SettingsView() {
         </Section>
       )}
 
-      {/* bouton bas de page */}
-      <div className="mt-6 flex justify-end">
-        <button type="button" onClick={handleSave}
-          className={`${btnPrimary} inline-flex items-center gap-2`}>
-          <Settings size={14} /> {t("saveAllBottom")}
-        </button>
-      </div>
-
     </div>
   );
 }
