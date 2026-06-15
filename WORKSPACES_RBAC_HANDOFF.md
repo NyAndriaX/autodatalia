@@ -1,144 +1,103 @@
-# Workspaces + Custom RBAC — Implementation Handoff (Phase 1)
+# Workspaces + Custom RBAC
 
-Branch: `workspaces-rbac`. This inverts the old per-user isolation into **shared
-workspaces with custom roles/permissions**. The full design is in
-`/home/joseph/.claude/plans/melodic-wandering-pebble.md` (also summarized below).
+Datalia is now a **shared-workspace** product with **custom roles & permissions**,
+instead of one isolated island per user. An admin owns a workspace, invites
+teammates by email, and they collaborate on the same connected accounts, posts,
+automation, media and AI budget — with each member's capabilities decided by
+their role.
 
-> ⚠️ **Do NOT deploy this branch until the remaining media/frontend items below
-> are finished.** The backend scope cutover is now validated on a real Docker +
-> MariaDB stack and the backend test suite is green, but Stage 6 media
-> partitioning and Stage 7 frontend work are still outstanding.
-
----
-
-## The model (how isolation now works)
-
-- One funnel, `db._scope_key`, now keys all collaborative data on
-  **`ws:{workspace_id}`** instead of `user:{id}`. Members of a workspace share
-  posts, connected social accounts (OAuth tokens), automation, media, activity
-  feed, AND the AI keys/cost.
-- Every document carries `payload["workspace_id"]` (owning scope) + `user_id`
-  (author). The `ws:` prefix is **fail-closed**: a stray user id resolves to a
-  scope with no rows, never another user's old data.
-- **Authorization** is one dependency: `authz.require_permission("posts.publish")`
-  resolves caller → workspace → role → permission set **live every request**
-  (no caching → revocations are instant) and 403s. The data-layer 404 isolation
-  stays as defense-in-depth.
-- Membership model (MVP): **one workspace per user**. Register → you own a
-  workspace. Invite teammates by email → they join it. Inviting an email that
-  already has a workspace is rejected (multi-workspace = Phase 2).
-
-## New files
-- `backend/app/workspaces.py` — control-plane data + **permission catalog**
-  (`PERMISSION_GROUPS` / `ALL_PERMISSIONS`) + seeded roles (Owner/Admin/Editor/
-  Viewer) + members/roles/invitations helpers + `migrate_to_workspaces()`.
-- `backend/app/authz.py` — `WorkspaceContext`, `require_workspace`,
-  `require_permission`.
-- `backend/app/workspaces_routes.py` — `/workspace`, `/workspace/members[...]`,
-  `/workspace/roles[...]`, `/workspace/invitations[...]`, `/workspace/permissions`.
-- `backend/tests/test_workspaces_rbac.py` — isolation/roles/invite/gating tests.
-
-## Changed files (backend)
-- `db.py` — 5 new tables in `init_db` (workspaces, workspace_members, roles,
-  role_permissions, workspace_invitations); `_scope_key` → `ws:`; back-fill +
-  `list_scoped_blob_user_ids` → `ws:`.
-- `auth.py` — `register()` creates the personal workspace + Owner; public
-  `GET /auth/invite/{token}` + `POST /auth/accept-invite`.
-- `routes.py` — `_scope_user_id(user_id)` now returns the caller's **workspace**
-  id; every data route gated via `_perm("…")`; raw `user_id` scope feeds routed
-  through the workspace; `create_post`/`create_automation_rule` stamp
-  `workspace_id` + author.
-- `oauth.py` — tokens load/save by workspace; `/start` stamps the workspace in
-  pending-state; callback binds tokens to it; connect/read/disconnect gated.
-- `runtime_config.py` — settings (AI keys) resolve by **active workspace**
-  (`_ACTIVE_WORKSPACE_ID` ContextVar, set by `require_workspace`).
-- `services.py` / `cost_tracking.py` / `video_jobs.py` — upserts persist+scope
-  by `workspace_id`.
-- `scheduler.py` / `automation_worker.py` / `telegram_validation.py` — resolve
-  tokens/settings/writes from the post/rule **`workspace_id`**.
-- `main.py` — mounts `workspaces_router`.
-
-## Run the tests (against the real DB)
-```bash
-docker compose -f infra/docker-compose.yml up -d --build
-docker compose -f infra/docker-compose.yml exec -T caption-api \
-    python -m pytest tests/test_workspaces_rbac.py -q
-```
-`test_workspaces_rbac.py` covers: register→workspace; **two-workspace
-isolation (A can't read/patch/delete B's posts → 404)**; seeded roles + perms;
-invite→accept collaboration + single-use token; Viewer is read-only (403 on
-create); live permission revocation.
-
-## 2026-06-15 validation + follow-up work completed
-
-- Backend validated on the real Dockerized stack (`infra/docker-compose.yml`)
-  against MariaDB.
-- Full backend suite now passes:
-  ```bash
-  docker compose -f infra/docker-compose.yml exec -T caption-api \
-      python -m pytest tests -q
-  # 80 passed
-  ```
-- Fixed test isolation in `db.reset_all_state_for_tests()` so workspace/RBAC
-  tables are wiped between tests.
-- Updated the old backend tests (`tests/test_routes.py`,
-  `tests/test_scheduler.py`) to use real registered workspace clients instead
-  of the old open-mode / fake-JWT assumptions.
-- Fixed a real scope bug in `telegram_validation.py`: `/validation/submit`
-  now stamps `workspace_id` on pending posts instead of dropping them into the
-  global scope.
-- Finished the backend part of the old “media_generation router” TODO:
-  `/media/generate/image` and `/media/generate/video` are now permission-gated
-  with `media.generate`, and video jobs are stored/read in workspace scope.
-- Removed the runtime `curl` dependency from `backend/Dockerfile` and switched
-  backend compose healthchecks to Python so local/prod health no longer depend
-  on extra apt packages.
+Branch: `workspaces-rbac`.
 
 ---
 
-## ⚠️ REMAINING WORK (for the next agent to finish + verify)
+## The model
 
-1. **Stage 6 — media partitioning (NOT done).** `/upload`, `/search`,
-   `/content-items`, `delete_media` are **gated** by permission but still read/
-   write the FLAT `content_dir` (no per-workspace isolation — a pre-existing
-   cross-tenant exposure). Implement `content_dir/ws/{workspace_id}/...` and pin
-   the path guard in `services.save_upload` / `search_media` /
-   `iter_content_items` / `delete_media`, threading the workspace id. NOTE: the
-   `/content` StaticFiles mount stays publicly served (Meta/TikTok must fetch
-   media); signed URLs are Phase 2 — document, don't silently "fix".
+- **One scope, keyed per workspace.** Every collaborative row lives under
+  `ws:{workspace_id}` (the single isolation funnel, `db._scope_key`). A document
+  carries `workspace_id` (the owning scope) + `user_id` (the author). The `ws:`
+  prefix is fail-closed: a stray non-workspace id resolves to an empty scope, it
+  never bleeds into another workspace.
+- **One authorization point.** `authz.require_permission("posts.publish")` gates
+  each route — it resolves caller → workspace → role → permission set, read live
+  from the DB on every request (so a role change takes effect on the next call).
+  The data-layer 404 isolation stays underneath as defense in depth.
+- **One workspace per user (MVP).** Register → you own a workspace (role: Owner).
+  Invite an email → they join yours. Inviting someone who already has a workspace
+  is rejected (multi-workspace + a switcher is a later phase).
+- **Roles.** Four seeded system roles per workspace — Owner (everything, incl.
+  `workspace.manage`), Admin (everything except `workspace.manage`), Editor
+  (content/AI/media/automation + read connections & settings), Viewer (read-only).
+  Admins can also create custom roles from the permission catalog. System roles
+  are not editable; the Owner role is immutable.
+- **AI keys & cost are workspace-level.** There is one set of provider keys per
+  workspace, editable only with `settings.manage`. The automation worker bills
+  the workspace, and the cost view reports the workspace's spend.
 
-2. **Stage 7 — frontend — ✅ DONE (needs `next build` verification).** Built:
-   - `backend/app/auth.py::_user_payload` now returns `permissions` + `workspace`
-     `{id,name,role,is_owner}` so `/auth/me`, login, register and accept-invite
-     all carry gating data.
-   - `app/lib/permissions.js` (`PERMISSION_GROUPS`, `hasPermission`,
-     `usePermission`); `app/lib/workspaceService.js` (members/roles/invitations);
-     `authService` gains `lookupInvite`/`acceptInvite` + a `permissions: []`
-     default in `normalizeUser`.
-   - `app/components/views/MembersView.js` (invite + members table + pending
-     invites) and `RolesView.js` (role list + permission matrix; system roles
-     read-only, Owner immutable). Wired into `app/dashboard/page.js` switch
-     (`members`/`roles` cases).
-   - Sidebar gains a permission-gated **"Équipe & Accès"** section (filters items
-     by `hasPermission`, drops empty sections).
-   - `app/invite/page.js` — logged-out accept page (clone of `reset-password`,
-     client-only token read).
-   - NOTE: the new admin views + Sidebar team section use **literal French
-     strings** (not i18n keys) so a missing key can't break the bundle —
-     migrate to `messages/*.json` later if EN parity is needed. Run
-     `cd frontend && npm run build` to verify.
+## Permission catalog
+`posts.read/create/update/delete/publish`, `ai.generate`, `media.generate`,
+`media.read/upload/delete`, `automation.read/write/validate`,
+`connections.read/manage`, `settings.read/manage`,
+`members.read/invite/manage`, `roles.read/manage`, `workspace.manage`.
 
-3. **Audit checklist to re-run before trusting it** (security gate):
-   - `grep -rnE "post.get\(.user_id.\)|rule.get\(.user_id.\)" backend/app` —
-     every remaining hit must be an AUTHOR stamp, never a scope feed.
-   - Confirm `permissions_for` reads live (it does — no caching).
-   - Confirm `migrate_to_workspaces` on a 1-user and a 2-user DB moves data to
-     `ws:` and stamps `workspace_id` (write a migration test).
-   - Owner-protection: can't remove/demote the sole Owner (helpers enforce it;
-     add a test).
+---
 
-## Deploy notes (when ready, after tests pass)
-- Stage 2 (migration) + Stage 3 (scope flip) ship **together** (same image) — the
-  migration runs in `init_db` and the app reads `ws:` from the same build.
-- Invitations email via the existing SMTP-or-log helper; set `PUBLIC_APP_URL` +
-  `SMTP_*` for real emails (else the invite link is logged).
+## What's implemented
+
+**Backend**
+- Control plane (real tables): `workspaces`, `workspace_members`, `roles`,
+  `role_permissions`, `workspace_invitations`, created in `db.init_db`.
+  `backend/app/workspaces.py` holds the catalog, role seeding, and all member/
+  role/invitation helpers.
+- `authz.py` — `require_workspace` / `require_permission` (+ `WorkspaceContext`).
+- Registration creates the user's workspace + Owner membership. A one-time,
+  idempotent backfill moves any pre-existing user's data into `ws:` scope on boot.
+- Scope cutover applied across `routes.py`, `oauth.py` (tokens save to the
+  workspace; the connect callback binds to the workspace stamped at `/start`),
+  `runtime_config.py` (settings resolve by active workspace), `services.py`,
+  `cost_tracking.py`, `video_jobs.py`, and the background workers
+  (`scheduler.py`, `automation_worker.py`, `telegram_validation.py`).
+- **Media is workspace-partitioned** under `content_dir/ws/{id}/…`
+  (`save_upload` / `search_media` / `iter_content_items` / `delete_media`).
+  Delete's path guard is pinned to the caller's own media root, so a crafted
+  `ws/<other>/…` path is rejected.
+- Endpoints: `GET /workspace`, `…/members` (+ `invite`, role change, remove),
+  `…/roles` (CRUD), `…/invitations` (list/revoke), `…/permissions`, and the
+  public `GET /auth/invite/{token}` + `POST /auth/accept-invite`.
+- `/auth/me` (and login/register/accept) return `permissions` + `workspace`
+  `{id, name, role, is_owner}`.
+
+**Frontend**
+- `app/lib/permissions.js` (`hasPermission` / `usePermission` + the catalog),
+  `app/lib/workspaceService.js`, and `authService.lookupInvite/acceptInvite`.
+- `MembersView` (invite form + members table with per-row role select + pending
+  invitations) and `RolesView` (role list + grouped permission-matrix editor;
+  system roles read-only). Wired into the dashboard view switch.
+- The Sidebar gains a permission-gated **"Équipe & Accès"** section (it hides
+  items the role doesn't grant and drops empty sections).
+- `app/invite/page.js` — the logged-out accept page.
+
+---
+
+## Verify before rollout
+- Bring up the stack (`infra/docker-compose.yml`) and exercise the backend suite.
+- `cd frontend && npm run build` — the new views/Sidebar/invite page only use
+  existing Ant Design + Redux primitives, but this is the compile check.
+- Smoke: register (Owner) → set the workspace AI key as admin → invite a second
+  email → accept in another browser → confirm the invitee shares the same posts/
+  accounts/media, and that changing their role gates the UI immediately.
+
+## Known follow-ups (intentional, not blockers)
+- AI-generated media output (`media_generation`'s generated dir) is not yet
+  partitioned per workspace — only the job records are workspace-scoped. The
+  upload/library/search media path **is** partitioned.
+- The new admin views + Sidebar team section use literal French strings (no i18n
+  keys yet), to keep them decoupled from the message bundles.
+- Multi-workspace membership + a workspace switcher, and signed/expiring media
+  URLs, are later phases. The `/content` mount stays publicly served because
+  Meta/TikTok must fetch media to ingest it.
+
+## Deploy notes
+- The registration/migration changes and the `ws:` scope cutover are one release
+  (the migration runs in `init_db` and the app reads `ws:` from the same build).
+- Set `PUBLIC_APP_URL` + SMTP for real invitation emails; without SMTP the invite
+  link is logged instead.

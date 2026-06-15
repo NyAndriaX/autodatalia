@@ -796,7 +796,11 @@ async def publish(
     response_model=UploadResponse,
     dependencies=[_perm("media.upload")],
 )
-async def upload(request: Request, file: UploadFile = File(...)) -> UploadResponse:
+async def upload(
+    request: Request,
+    file: UploadFile = File(...),
+    user_id: int = Depends(require_token),
+) -> UploadResponse:
     """Store an uploaded image/video and return its served URL.
 
     URL precedence (each must be publicly fetchable for Meta/IG to ingest):
@@ -805,7 +809,7 @@ async def upload(request: Request, file: UploadFile = File(...)) -> UploadRespon
       3. tunnel helper (returns the configured public URL when enabled)
       4. request.base_url — last-resort localhost; Meta will reject it
     """
-    meta = await save_upload(file)
+    meta = await save_upload(file, workspace_id=_scope_user_id(user_id))
     base = (
         os.environ.get("PUBLIC_BASE_URL")
         or await tunnel.wait_for_tunnel(timeout=5.0)
@@ -824,10 +828,12 @@ async def upload(request: Request, file: UploadFile = File(...)) -> UploadRespon
     "/media/{path:path}",
     dependencies=[_perm("media.delete")],
 )
-async def delete_media_route(path: str) -> dict[str, Any]:
+async def delete_media_route(
+    path: str, user_id: int = Depends(require_token)
+) -> dict[str, Any]:
     """Remove a previously-uploaded media file by its content-dir-relative path."""
     try:
-        removed = delete_media(path)
+        removed = delete_media(path, workspace_id=_scope_user_id(user_id))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     if not removed:
@@ -836,7 +842,9 @@ async def delete_media_route(path: str) -> dict[str, Any]:
 
 
 @router.get("/search", response_model=SearchResponse, dependencies=[_perm("media.read")])
-async def search(request: Request, q: str = "") -> SearchResponse:
+async def search(
+    request: Request, q: str = "", user_id: int = Depends(require_token)
+) -> SearchResponse:
     """Search media in the content directory (posts/templates → Airtable TBD).
 
     Each media hit carries a `url` and `kind` so the frontend Media Library
@@ -855,7 +863,7 @@ async def search(request: Request, q: str = "") -> SearchResponse:
     )
     base = base.rstrip("/")
     hits = []
-    for hit in search_media(q):
+    for hit in search_media(q, workspace_id=_scope_user_id(user_id)):
         hits.append(
             {
                 **hit,
@@ -1053,7 +1061,9 @@ async def delete_automation_rule(
 # ── Content endpoints ─────────────────────────────────────────────────
 
 @router.get("/content-items", dependencies=[_perm("media.read")])
-async def list_content(request: Request) -> dict[str, Any]:
+async def list_content(
+    request: Request, user_id: int = Depends(require_token)
+) -> dict[str, Any]:
     url = await tunnel.wait_for_tunnel(timeout=15.0)
     base = url or str(request.base_url).rstrip("/")
 
@@ -1064,7 +1074,7 @@ async def list_content(request: Request) -> dict[str, Any]:
             "description": item["description"],
             "image_url": f"{base}/content/{item['relative_path']}",
         }
-        for item in iter_content_items()
+        for item in iter_content_items(workspace_id=_scope_user_id(user_id))
     ]
     return {"count": len(items), "items": items}
 
@@ -1082,7 +1092,7 @@ async def generate_content_captions(
         print("WARNING: No tunnel URL — image_url will be internal-only.")
         print("         Use image_base64 for Instagram uploads instead.")
 
-    items = iter_content_items()
+    items = iter_content_items(workspace_id=_scope_user_id(user_id))
     if body.limit is not None:
         items = items[: body.limit]
 

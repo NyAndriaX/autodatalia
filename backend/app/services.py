@@ -125,15 +125,37 @@ def read_description(image_path: Path) -> str:
     return ""
 
 
-def iter_content_items() -> list[dict[str, Any]]:
-    """Scan the content directory and return metadata for every image found.
+def _media_root(workspace_id: int | str | None = None) -> Path:
+    """Resolve the media directory for a workspace.
+
+    Media is isolated per workspace under ``content_dir/ws/{id}`` so members of
+    one workspace never see another's uploads. A missing/non-positive id falls
+    back to ``content_dir`` itself (the bounded global scope). The returned path
+    is always inside ``content_dir`` and is served by the public /content mount
+    as ``/content/ws/{id}/<file>``.
+    """
+    root = settings.content_dir
+    if workspace_id in (None, "", 0, "0"):
+        return root
+    try:
+        wid = int(workspace_id)
+    except (TypeError, ValueError):
+        return root
+    return root / "ws" / str(wid) if wid > 0 else root
+
+
+def iter_content_items(*, workspace_id: int | str | None = None) -> list[dict[str, Any]]:
+    """Scan a workspace's content directory and return metadata for every image.
 
     Skips pipeline derivatives so caption generation doesn't redo the same
     image once per crop variant (4 calls for one upload would be billed
     individually otherwise).
     """
     items: list[dict[str, Any]] = []
-    for image_path in sorted(settings.content_dir.rglob("*")):
+    media_root = _media_root(workspace_id)
+    if not media_root.exists():
+        return items
+    for image_path in sorted(media_root.rglob("*")):
         if not image_path.is_file():
             continue
         if image_path.suffix.lower() not in IMAGE_EXTENSIONS:
@@ -939,21 +961,29 @@ def _unique_path(directory: Path, filename: str) -> Path:
         i += 1
 
 
-def delete_media(relative_path: str) -> bool:
-    """Delete a previously-uploaded media file by its content-dir-relative path.
+def delete_media(
+    relative_path: str, *, workspace_id: int | str | None = None
+) -> bool:
+    """Delete a media file by its content-dir-relative path.
 
-    Returns True if removed, False if not found. Raises ValueError if the
-    path tries to escape the content directory (defense in depth — we never
-    want a `../etc/passwd` deletion).
+    Returns True if removed, False if not found. Raises ValueError if the path
+    escapes the workspace's media directory — the guard is pinned to
+    ``_media_root(workspace_id)`` so a workspace can only delete its OWN media
+    (a crafted ``ws/<other>/...`` path resolves outside the caller's root and
+    is rejected), as well as blocking classic ``../`` traversal.
     """
     if not relative_path:
         raise ValueError("Empty path.")
-    root = settings.content_dir.resolve()
-    target = (root / relative_path).resolve()
+    content_root = settings.content_dir.resolve()
+    media_root = _media_root(workspace_id).resolve()
+    # The public id/relative_path is content-dir-relative (e.g. "ws/3/a.jpg");
+    # resolve it from the content root, then require it to live under the
+    # caller's own media root.
+    target = (content_root / relative_path).resolve()
     try:
-        target.relative_to(root)
+        target.relative_to(media_root)
     except ValueError as exc:
-        raise ValueError("Path escapes content directory.") from exc
+        raise ValueError("Path escapes the workspace media directory.") from exc
     if not target.is_file():
         return False
     target.unlink()
@@ -1123,8 +1153,10 @@ async def _normalize_video_for_publishing(src: Path) -> Path:
     return final
 
 
-async def save_upload(file: UploadFile) -> dict[str, str]:
-    """Persist an uploaded file to the content dir; return its metadata.
+async def save_upload(
+    file: UploadFile, *, workspace_id: int | str | None = None
+) -> dict[str, str]:
+    """Persist an uploaded file to the workspace's content dir; return metadata.
 
     For videos, also normalise the codec to H.264 + AAC MP4 so the publish
     path doesn't trip over TikTok's `file_format_check_failed` later.
@@ -1132,9 +1164,10 @@ async def save_upload(file: UploadFile) -> dict[str, str]:
     spinner, and we'd rather the upload take 5-30s extra than return a
     file that fails at publish time.
     """
-    settings.content_dir.mkdir(parents=True, exist_ok=True)
+    media_root = _media_root(workspace_id)
+    media_root.mkdir(parents=True, exist_ok=True)
     safe = _safe_filename(file.filename or "upload")
-    dest = _unique_path(settings.content_dir, safe)
+    dest = _unique_path(media_root, safe)
     suffix = dest.suffix.lower()
     kind = _upload_kind_for(file, suffix)
 
@@ -1195,8 +1228,10 @@ def _is_derivative_filename(name: str) -> bool:
     return bool(_DERIVATIVE_PATTERN.search(stem))
 
 
-def search_media(query: str, limit: int = 50) -> list[dict[str, str]]:
-    """Search the content directory for media matching `query`.
+def search_media(
+    query: str, limit: int = 50, *, workspace_id: int | str | None = None
+) -> list[dict[str, str]]:
+    """Search a workspace's content directory for media matching `query`.
 
     Empty query returns up to `limit` items (acts as a listing endpoint for
     the Media Library). Posts/templates live in Airtable (not wired yet) so
@@ -1209,7 +1244,10 @@ def search_media(query: str, limit: int = 50) -> list[dict[str, str]]:
     """
     q = query.strip().lower()
     hits: list[dict[str, str]] = []
-    for path in sorted(settings.content_dir.rglob("*")):
+    media_root = _media_root(workspace_id)
+    if not media_root.exists():
+        return hits
+    for path in sorted(media_root.rglob("*")):
         if not path.is_file():
             continue
         suffix = path.suffix.lower()

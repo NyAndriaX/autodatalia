@@ -167,3 +167,26 @@ def test_permission_change_is_live():
     assert member.post(
         "/posts", json={"scheduledDate": "2026-06-02", "content": "no"}
     ).status_code == 403
+
+
+# ── 7. Uploaded media is isolated per workspace ───────────────────────────
+def test_media_is_isolated_between_workspaces():
+    settings.allow_open_auth = False
+    a, b = _new_client(), _new_client()
+    _register(a, "amedia@x.com", "A")
+    _register(b, "bmedia@x.com", "B")
+
+    up = a.post("/upload", files={"file": ("secret.png", b"\x89PNG fake-bytes", "image/png")})
+    assert up.status_code == 200, up.text
+    rel = up.json()["url"].split("/content/", 1)[1]  # ws/{aWorkspace}/secret.png
+    assert rel.startswith("ws/")
+
+    # A sees its upload in the library + content-items; B sees neither.
+    assert any(h["id"] == rel for h in a.get("/search").json()["results"])
+    assert all((h.get("id") or "") != rel for h in b.get("/search").json()["results"])
+    assert all(it["relative_path"] != rel for it in b.get("/content-items").json()["items"])
+
+    # B cannot delete A's media — the path resolves outside B's media root (400).
+    assert b.delete(f"/media/{rel}").status_code == 400
+    # A can delete its own.
+    assert a.delete(f"/media/{rel}").status_code == 200

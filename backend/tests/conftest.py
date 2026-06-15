@@ -93,6 +93,9 @@ def _isolate_state():
             p.unlink()
     for p in TEST_CONTENT.glob("runtime_settings_user_*.json"):
         p.unlink()
+    # Wipe per-workspace media dirs (auto-increment resets to 1 each test, so a
+    # stale ws/1 would otherwise leak into the next test's workspace).
+    shutil.rmtree(TEST_CONTENT / "ws", ignore_errors=True)
     # Reset the AI cache (global slice + every per-tenant slice) and the
     # per-tenant daily rate-limit counters so tests don't leak across each other.
     _AI_CACHE.clear()
