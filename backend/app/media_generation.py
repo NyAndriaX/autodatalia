@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from PIL import Image, ImageDraw, ImageFont
 
 from .auth import require_token
+from .authz import require_permission
 from .config import settings
 from .net_guard import assert_safe_url, safe_get_async
 from .models import (
@@ -31,6 +32,7 @@ from .models import (
     VideoModelsResponse,
 )
 from .runtime_config import resolved_settings
+from .workspaces import get_active_workspace_id
 
 try:
     from imageio_ffmpeg import get_ffmpeg_exe as _get_ffmpeg_exe
@@ -53,6 +55,12 @@ def _generated_dir() -> Path:
     path = settings.content_dir / "generated"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _workspace_scope(user_id: int) -> int | None:
+    if not user_id or int(user_id) <= 0:
+        return None
+    return get_active_workspace_id(int(user_id))
 
 
 def _safe_stub(prompt: str) -> str:
@@ -541,17 +549,27 @@ def _response_for(request: Request, path: Path, *, kind: str, provider: str, pro
     )
 
 
-@router.post("/media/generate/image", response_model=GeneratedMediaResponse)
+@router.post(
+    "/media/generate/image",
+    response_model=GeneratedMediaResponse,
+    dependencies=[Depends(require_permission("media.generate"))],
+)
 async def generate_image(
     request: Request,
     body: ImageGenerationRequest,
     user_id: int = Depends(require_token),
 ) -> GeneratedMediaResponse:
-    path, provider = await _generate_image_file(body.prompt, body.ratio, user_id=user_id)
+    workspace_id = _workspace_scope(user_id)
+    path, provider = await _generate_image_file(
+        body.prompt, body.ratio, user_id=workspace_id
+    )
     return _response_for(request, path, kind="image", provider=provider, prompt=body.prompt)
 
 
-@router.post("/media/generate/video")
+@router.post(
+    "/media/generate/video",
+    dependencies=[Depends(require_permission("media.generate"))],
+)
 async def generate_video(
     request: Request,
     body: VideoGenerationRequest,
@@ -567,6 +585,7 @@ async def generate_video(
     enforce ~60s timeouts.
     """
     from .video_jobs import create_job, run_job
+    workspace_id = _workspace_scope(user_id)
     if body.async_mode:
         job = create_job(
             prompt=body.prompt,
@@ -574,7 +593,7 @@ async def generate_video(
             duration_seconds=body.duration_seconds,
             image_filename=body.image_filename,
             provider=body.provider,
-            user_id=user_id,
+            user_id=workspace_id,
             model_id=body.model_id or body.fal_model,
             fal_model=body.fal_model,
             quality=body.quality,
@@ -590,7 +609,7 @@ async def generate_video(
         duration_seconds=body.duration_seconds,
         image_filename=body.image_filename,
         provider=body.provider,
-        user_id=user_id,
+        user_id=workspace_id,
         model_id=body.model_id or body.fal_model,
         fal_model=body.fal_model,
         quality=body.quality,
@@ -642,8 +661,9 @@ async def video_jobs_list(
     user_id: int = Depends(require_token),
 ) -> VideoJobsResponse:
     from .video_jobs import list_jobs
+    workspace_id = _workspace_scope(user_id)
     return VideoJobsResponse(
-        jobs=[VideoJob(**j) for j in list_jobs(user_id=user_id)]
+        jobs=[VideoJob(**j) for j in list_jobs(user_id=workspace_id)]
     )
 
 
@@ -653,7 +673,8 @@ async def video_jobs_get(
     user_id: int = Depends(require_token),
 ) -> VideoJob:
     from .video_jobs import get_job
-    job = get_job(job_id, user_id=user_id)
+    workspace_id = _workspace_scope(user_id)
+    job = get_job(job_id, user_id=workspace_id)
     if not job:
         raise HTTPException(404, "Video job not found.")
     return VideoJob(**job)
@@ -665,7 +686,8 @@ async def video_jobs_delete(
     user_id: int = Depends(require_token),
 ) -> dict[str, Any]:
     from .video_jobs import delete_job, get_job
-    job = get_job(job_id, user_id=user_id)
+    workspace_id = _workspace_scope(user_id)
+    job = get_job(job_id, user_id=workspace_id)
     if not job or not delete_job(job_id):
         raise HTTPException(404, "Video job not found.")
     return {"deleted": True}

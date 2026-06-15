@@ -27,6 +27,7 @@ from .services import (
     posts_update,
 )
 from .runtime_config import resolved_settings
+from .workspaces import get_active_workspace_id
 
 # fire_post lives in scheduler — re-used here so a manual Telegram
 # approval publishes immediately without waiting for the scheduler tick.
@@ -489,6 +490,12 @@ def _pending_post_payload(
     *,
     user_id: str | int | None = None,
 ) -> dict[str, Any]:
+    workspace_id = None
+    try:
+        if user_id not in (None, "", 0):
+            workspace_id = get_active_workspace_id(int(user_id))
+    except (TypeError, ValueError):
+        workspace_id = None
     return {
         "id": body.post_id,
         "content": body.content.strip(),
@@ -501,6 +508,7 @@ def _pending_post_payload(
         "ratios": body.ratios,
         "tiktok": body.tiktok,
         "validation_requested_at": time.time(),
+        "workspace_id": workspace_id,
         "user_id": str(user_id) if user_id not in (None, "", 0) else None,
     }
 

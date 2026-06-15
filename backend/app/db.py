@@ -358,8 +358,17 @@ def reset_all_state_for_tests() -> None:
     try:
         cur = conn.cursor()
         cur.execute(f"DELETE FROM {_DOC_TABLE}")
+        cur.execute("DELETE FROM workspace_invitations")
+        cur.execute("DELETE FROM role_permissions")
+        cur.execute("DELETE FROM workspace_members")
+        cur.execute("DELETE FROM roles")
+        cur.execute("DELETE FROM workspaces")
         cur.execute("DELETE FROM users")
         cur.execute(f"ALTER TABLE {_DOC_TABLE} AUTO_INCREMENT = 1")
+        cur.execute("ALTER TABLE workspace_invitations AUTO_INCREMENT = 1")
+        cur.execute("ALTER TABLE workspace_members AUTO_INCREMENT = 1")
+        cur.execute("ALTER TABLE roles AUTO_INCREMENT = 1")
+        cur.execute("ALTER TABLE workspaces AUTO_INCREMENT = 1")
         cur.execute("ALTER TABLE users AUTO_INCREMENT = 1")
     finally:
         conn.close()

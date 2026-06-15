@@ -4,10 +4,10 @@ Branch: `workspaces-rbac`. This inverts the old per-user isolation into **shared
 workspaces with custom roles/permissions**. The full design is in
 `/home/joseph/.claude/plans/melodic-wandering-pebble.md` (also summarized below).
 
-> ⚠️ **Do NOT deploy this branch until the tests below pass against a real DB.**
-> The scope cutover is leak-sensitive and could not be run on the build VM (no
-> database / low RAM). The whole backend compiles (`python -m py_compile
-> backend/app/*.py`), but compiling ≠ correct.
+> ⚠️ **Do NOT deploy this branch until the remaining media/frontend items below
+> are finished.** The backend scope cutover is now validated on a real Docker +
+> MariaDB stack and the backend test suite is green, but Stage 6 media
+> partitioning and Stage 7 frontend work are still outstanding.
 
 ---
 
@@ -69,19 +69,36 @@ isolation (A can't read/patch/delete B's posts → 404)**; seeded roles + perms;
 invite→accept collaboration + single-use token; Viewer is read-only (403 on
 create); live permission revocation.
 
+## 2026-06-15 validation + follow-up work completed
+
+- Backend validated on the real Dockerized stack (`infra/docker-compose.yml`)
+  against MariaDB.
+- Full backend suite now passes:
+  ```bash
+  docker compose -f infra/docker-compose.yml exec -T caption-api \
+      python -m pytest tests -q
+  # 80 passed
+  ```
+- Fixed test isolation in `db.reset_all_state_for_tests()` so workspace/RBAC
+  tables are wiped between tests.
+- Updated the old backend tests (`tests/test_routes.py`,
+  `tests/test_scheduler.py`) to use real registered workspace clients instead
+  of the old open-mode / fake-JWT assumptions.
+- Fixed a real scope bug in `telegram_validation.py`: `/validation/submit`
+  now stamps `workspace_id` on pending posts instead of dropping them into the
+  global scope.
+- Finished the backend part of the old “media_generation router” TODO:
+  `/media/generate/image` and `/media/generate/video` are now permission-gated
+  with `media.generate`, and video jobs are stored/read in workspace scope.
+- Removed the runtime `curl` dependency from `backend/Dockerfile` and switched
+  backend compose healthchecks to Python so local/prod health no longer depend
+  on extra apt packages.
+
 ---
 
 ## ⚠️ REMAINING WORK (for the next agent to finish + verify)
 
-1. **Update the EXISTING tests.** `tests/test_routes.py`, `test_scheduler.py`,
-   `test_automation_worker.py` were written for the old open-mode/per-user model.
-   Now gated routes require a real workspace, so they will 401/403/404 until the
-   fixtures register a real user (who gets a workspace) and drive requests with
-   that session cookie. Also: `test_auth_login_…` asserts `role == "admin"`; the
-   `users.role` column is now cosmetic (everyone is "member"; the *workspace*
-   role is authoritative) — update that assertion.
-
-2. **Stage 6 — media partitioning (NOT done).** `/upload`, `/search`,
+1. **Stage 6 — media partitioning (NOT done).** `/upload`, `/search`,
    `/content-items`, `delete_media` are **gated** by permission but still read/
    write the FLAT `content_dir` (no per-workspace isolation — a pre-existing
    cross-tenant exposure). Implement `content_dir/ws/{workspace_id}/...` and pin
@@ -90,12 +107,7 @@ create); live permission revocation.
    `/content` StaticFiles mount stays publicly served (Meta/TikTok must fetch
    media); signed URLs are Phase 2 — document, don't silently "fix".
 
-3. **media_generation.py router — gate it.** Add
-   `dependencies=[Depends(require_permission("media.generate"))]` to
-   `/media/generate/image|video` and scope the video-job `user_id` to the
-   workspace (mirror the routes.py pattern). I did NOT touch that file.
-
-4. **Stage 7 — frontend (NOT started).** Build per the plan
+2. **Stage 7 — frontend (NOT started).** Build per the plan
    (`melodic-wandering-pebble.md` → Frontend section): `app/lib/permissions.js`
    (`hasPermission`/`usePermission`), gate the Sidebar "Équipe & Accès" section,
    add `app/components/views/MembersView.js` + `RolesView.js` (+ `adminUI.js`
@@ -106,7 +118,7 @@ create); live permission revocation.
    `/auth/me` already rides the new `workspace`/`permissions` fields through
    `authService.normalizeUser` (add `permissions: []` default there).
 
-5. **Audit checklist to re-run before trusting it** (security gate):
+3. **Audit checklist to re-run before trusting it** (security gate):
    - `grep -rnE "post.get\(.user_id.\)|rule.get\(.user_id.\)" backend/app` —
      every remaining hit must be an AUTHOR stamp, never a scope feed.
    - Confirm `permissions_for` reads live (it does — no caching).
