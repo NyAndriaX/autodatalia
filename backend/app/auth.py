@@ -30,6 +30,7 @@ from .db import (
     get_password_hash as _db_get_password_hash,
 )
 from .runtime_config import set_active_user
+from . import workspaces
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,12 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
+
+
+class AcceptInviteRequest(BaseModel):
+    token: str
+    name: str = ""
+    password: str = ""
 
 
 class AuthResponse(BaseModel):
@@ -280,6 +287,12 @@ async def register(
             _auth_rate_limit_record_failure(rate_key)
             raise HTTPException(status_code=400, detail="Email already registered.")
         raise
+
+    # Every new account owns a personal workspace (they are its Owner/admin), so
+    # a signed-in user always has a workspace to operate in and can invite others.
+    workspaces.create_workspace_with_owner(
+        workspaces.workspace_name_for(req.name, req.email), user_id
+    )
 
     user = get_user_by_id(user_id)
     token = create_jwt_token(user_id)
@@ -488,3 +501,76 @@ async def reset_password(
     _set_session_cookie(response, token_jwt)
     _auth_rate_limit_reset(rate_key)
     return {"user": _user_payload(user)}
+
+
+# --- Workspace invitations (accept flow) -----------------------------------
+@router.get("/invite/{token}")
+async def invite_preview(token: str) -> dict[str, Any]:
+    """Public: preview an invitation so the accept page can show the workspace,
+    role and whether the invitee needs to create an account."""
+    inv = workspaces.get_invitation_by_token((token or "").strip())
+    if (
+        not inv
+        or inv.get("accepted_at")
+        or float(inv.get("expires_at") or 0) < time.time()
+    ):
+        raise HTTPException(status_code=400, detail="This invitation is invalid or has expired.")
+    ws = workspaces.get_workspace(int(inv["workspace_id"])) or {}
+    role = workspaces.get_role(int(inv["role_id"])) or {}
+    return {
+        "email": inv["email"],
+        "workspace_name": ws.get("name"),
+        "role_name": role.get("name"),
+        "needs_account": get_user_by_email(str(inv["email"])) is None,
+    }
+
+
+@router.post("/accept-invite", response_model=AuthResponse)
+async def accept_invite(
+    req: AcceptInviteRequest, response: Response, request: Request
+) -> dict[str, Any]:
+    """Public: accept a workspace invitation. Binds strictly to the invited
+    email (never the caller's identity), single-use, expiring. Creates the user
+    if needed, joins them to the workspace with the invited role, signs them in.
+    """
+    rate_key = _auth_rate_limit_check("accept_invite", request, (req.token or "")[:16])
+    inv = workspaces.get_invitation_by_token((req.token or "").strip())
+    if (
+        not inv
+        or inv.get("accepted_at")
+        or float(inv.get("expires_at") or 0) < time.time()
+    ):
+        _auth_rate_limit_record_failure(rate_key)
+        raise HTTPException(status_code=400, detail="This invitation is invalid or has expired.")
+
+    email = str(inv["email"]).strip().lower()
+    workspace_id = int(inv["workspace_id"])
+    role_id = int(inv["role_id"])
+
+    user = get_user_by_email(email)
+    if user is None:
+        if not req.password:
+            _auth_rate_limit_record_failure(rate_key)
+            raise HTTPException(status_code=400, detail="A password is required to create your account.")
+        password_hash = get_password_hash(req.password)
+        user_id = create_user(email, password_hash, req.name or "", role="member")
+    else:
+        user_id = int(user["id"])
+        # Single-membership MVP — never pull an existing-workspace user into
+        # another workspace (and never escalate the caller's own account).
+        if workspaces.get_active_workspace_id(user_id):
+            _auth_rate_limit_record_failure(rate_key)
+            raise HTTPException(status_code=400, detail="This account already belongs to a workspace.")
+
+    workspaces.add_member(workspace_id, user_id, role_id)
+    workspaces.consume_invitation(int(inv["id"]))
+
+    user_row = get_user_by_id(user_id)
+    token = create_jwt_token(user_id)
+    _set_session_cookie(response, token)
+    _auth_rate_limit_reset(rate_key)
+    return {
+        "user": _user_payload(
+            user_row or {"id": user_id, "email": email, "full_name": req.name, "role": "member"}
+        )
+    }

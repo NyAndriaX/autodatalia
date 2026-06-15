@@ -178,45 +178,36 @@ def _ratio_for_image(rule: dict[str, Any]) -> str:
 
 
 def _resolve_rule_user_id(rule: dict[str, Any]) -> int | None:
-    raw_user_id = rule.get("user_id")
-    if raw_user_id not in (None, "", 0, "0"):
+    """Resolve a rule's owning WORKSPACE id (kept under this name to avoid a
+    wide rename; the value is a workspace id now). Tokens, AI keys and the
+    generated post all scope to this workspace."""
+    raw_ws = rule.get("workspace_id")
+    if raw_ws not in (None, "", 0, "0"):
         try:
-            normalized = int(raw_user_id)
+            normalized = int(raw_ws)
         except (TypeError, ValueError):
             normalized = None
         else:
             if normalized > 0:
                 return normalized
-    try:
-        only_user_id = get_only_user_id()
-    except Exception:
-        log.warning("[automation] could not infer legacy rule owner", exc_info=True)
-        only_user_id = None
-    if only_user_id is None:
-        owner_candidates = {
-            *list_scoped_blob_user_ids("runtime_settings"),
-            *list_scoped_blob_user_ids("oauth_tokens"),
-        }
-        if len(owner_candidates) == 1:
-            only_user_id = next(iter(owner_candidates))
-    if only_user_id and rule.get("id"):
-        # Back-fill the inferred owner WITHOUT bumping updated_at. This runs
-        # mid-scan in tick(); going through automation_update() would treat
-        # the user_id write as a real edit (it's not in the operational-only
-        # set {last_fire_at, last_error}), bump updated_at, and trip the
-        # "rule_changed_after_generation" cancellation on approval. Resolving
-        # the owner is operational-only, so we upsert directly and preserve
-        # the existing updated_at / sort_ts.
-        rule["user_id"] = str(only_user_id)
-        preserved_updated_at = rule.get("updated_at")
+    # Legacy fallback for a single-workspace install: infer from scoped blobs
+    # (these now return ws: ids). Back-fill without bumping updated_at so the
+    # write isn't treated as a real rule edit.
+    owner_candidates = {
+        *list_scoped_blob_user_ids("runtime_settings"),
+        *list_scoped_blob_user_ids("oauth_tokens"),
+    }
+    only_ws = next(iter(owner_candidates)) if len(owner_candidates) == 1 else None
+    if only_ws and rule.get("id"):
+        rule["workspace_id"] = only_ws
         upsert_collection_document(
             "automation_rules",
             rule["id"],
             rule,
-            user_id=only_user_id,
-            sort_ts=preserved_updated_at,
+            user_id=only_ws,
+            sort_ts=rule.get("updated_at"),
         )
-    return only_user_id
+    return only_ws
 
 
 async def _generate_media_for_rule(
@@ -325,7 +316,9 @@ async def generate_candidate(rule: dict[str, Any], fire_epoch: float) -> dict[st
         "source_rule_updated_at": rule.get("updated_at"),
         "scheduled_for": fire_epoch,
         "auto_generated_at": time.time(),
-        "user_id": str(rule_user_id) if rule_user_id else None,
+        # workspace_id = owning scope; automation has no human author.
+        "workspace_id": rule_user_id,
+        "user_id": None,
     }
     post = posts_create(payload)
 
@@ -426,7 +419,7 @@ async def regenerate_for_post(post: dict[str, Any]) -> dict[str, Any]:
         "timeout_prompt_message_id": None,
         "regenerated_at": time.time(),
         "source_rule_updated_at": rule.get("updated_at"),
-        "user_id": str(rule_user_id) if rule_user_id else post.get("user_id"),
+        "workspace_id": rule_user_id or post.get("workspace_id"),
     }) or post
 
     chat_id = post.get("telegram_chat_id") or (
@@ -472,7 +465,7 @@ async def _scan_timeouts(now: float) -> list[str]:
             continue
         if post.get("timeout_prompt_sent_at"):
             continue  # already prompted
-        cfg = resolved_settings(post.get("user_id"))
+        cfg = resolved_settings(post.get("workspace_id"))
         chat_id = str(
             post.get("telegram_chat_id") or cfg.telegram_default_chat_id or ""
         ).strip()
@@ -480,7 +473,7 @@ async def _scan_timeouts(now: float) -> list[str]:
             continue
         try:
             msg_id = await send_timeout_prompt(
-                post, chat_id, user_id=post.get("user_id")
+                post, chat_id, user_id=post.get("workspace_id")
             )
         except Exception as exc:
             log.exception("[automation] timeout prompt failed for %s", post.get("id"))

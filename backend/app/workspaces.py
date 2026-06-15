@@ -1,0 +1,557 @@
+"""Workspaces + custom RBAC control plane (Phase 1).
+
+Real MariaDB tables (created in ``db.init_db``) hold the authorization control
+plane — workspaces, memberships, roles, role_permissions, invitations. Tenant
+*data* stays in ``app_documents`` but is scoped by ``ws:{workspace_id}`` (see
+``db._scope_key``) so members of a workspace collaborate on the same data while
+remaining isolated from other workspaces.
+
+This module is intentionally side-effect free at import time: it only defines the
+permission catalog and pure data helpers. Seeding happens per workspace at
+registration / migration time.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import secrets
+import time
+from typing import Any
+
+from .db import _DOC_TABLE, _connect, _execute, _fetchall, _fetchone
+
+log = logging.getLogger("datalia.workspaces")
+
+# ---------------------------------------------------------------------------
+# Permission catalog — the single allowlist that BOTH the role editor and
+# `authz.require_permission` validate against. Grouped by area to drive the
+# frontend permission matrix. Adding a permission here is the only way to make
+# it assignable; an unknown key is silently dropped on write (see
+# `set_role_permissions`) so a client can never grant a permission the backend
+# doesn't enforce.
+# ---------------------------------------------------------------------------
+PERMISSION_GROUPS: dict[str, tuple[str, ...]] = {
+    "content": (
+        "posts.read",
+        "posts.create",
+        "posts.update",
+        "posts.delete",
+        "posts.publish",
+    ),
+    "ai": ("ai.generate", "media.generate"),
+    "media": ("media.read", "media.upload", "media.delete"),
+    "automation": ("automation.read", "automation.write", "automation.validate"),
+    "connections": ("connections.read", "connections.manage"),
+    "settings": ("settings.read", "settings.manage"),
+    "team": (
+        "members.read",
+        "members.invite",
+        "members.manage",
+        "roles.read",
+        "roles.manage",
+        "workspace.manage",
+    ),
+}
+
+ALL_PERMISSIONS: frozenset[str] = frozenset(
+    p for perms in PERMISSION_GROUPS.values() for p in perms
+)
+
+_READ_PERMISSIONS: frozenset[str] = frozenset(
+    p for p in ALL_PERMISSIONS if p.endswith(".read")
+)
+
+# Editor: full content/AI/media/automation, can see (not manage) connections &
+# settings, but no team administration and no key rotation.
+_EDITOR_PERMISSIONS: frozenset[str] = frozenset(
+    {
+        "posts.read",
+        "posts.create",
+        "posts.update",
+        "posts.delete",
+        "posts.publish",
+        "ai.generate",
+        "media.generate",
+        "media.read",
+        "media.upload",
+        "media.delete",
+        "automation.read",
+        "automation.write",
+        "automation.validate",
+        "connections.read",
+        "settings.read",
+    }
+)
+
+# Seeded per-workspace default roles. Order matters: Owner is created first and
+# assigned to the workspace creator. All four are is_system (not deletable;
+# Owner is immutable). `workspace.manage` (rename / transfer / delete) is
+# Owner-only.
+DEFAULT_ROLES: tuple[dict[str, Any], ...] = (
+    {"name": "Owner", "permissions": ALL_PERMISSIONS},
+    {"name": "Admin", "permissions": ALL_PERMISSIONS - {"workspace.manage"}},
+    {"name": "Editor", "permissions": _EDITOR_PERMISSIONS},
+    {"name": "Viewer", "permissions": _READ_PERMISSIONS},
+)
+
+OWNER_ROLE_NAME = "Owner"
+DEFAULT_INVITE_ROLE_NAME = "Editor"
+INVITATION_TTL_SECONDS = 7 * 24 * 3600
+
+
+def _now() -> float:
+    return time.time()
+
+
+def workspace_name_for(full_name: str | None, email: str | None) -> str:
+    """A friendly default name for a user's personal workspace."""
+    base = (full_name or "").strip() or (email or "").split("@", 1)[0].strip()
+    base = base or "My"
+    return f"{base}'s workspace"
+
+
+# ---------------------------------------------------------------------------
+# Workspace / role / membership creation (used by registration + migration)
+# ---------------------------------------------------------------------------
+def create_workspace(name: str, owner_user_id: int) -> int:
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO workspaces (name, owner_user_id, created_at) VALUES (%s, %s, %s)",
+            (name, int(owner_user_id), _now()),
+        )
+        return int(cur.lastrowid)
+    finally:
+        conn.close()
+
+
+def _create_role_row(workspace_id: int, name: str, *, is_system: bool = False) -> int:
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO roles (workspace_id, name, is_system, created_at) "
+            "VALUES (%s, %s, %s, %s)",
+            (int(workspace_id), name, 1 if is_system else 0, _now()),
+        )
+        return int(cur.lastrowid)
+    finally:
+        conn.close()
+
+
+def set_role_permissions(role_id: int, permissions: "frozenset[str] | set[str] | list[str] | tuple[str, ...]") -> None:
+    """Replace a role's permission set. Unknown keys are dropped (only catalog
+    permissions can ever be granted)."""
+    valid = sorted({p for p in permissions if p in ALL_PERMISSIONS})
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM role_permissions WHERE role_id = %s", (int(role_id),))
+        for perm in valid:
+            cur.execute(
+                "INSERT INTO role_permissions (role_id, permission_key) VALUES (%s, %s)",
+                (int(role_id), perm),
+            )
+    finally:
+        conn.close()
+
+
+def seed_default_roles(workspace_id: int) -> dict[str, int]:
+    """Create the four system roles for a workspace; return {name: role_id}."""
+    out: dict[str, int] = {}
+    for spec in DEFAULT_ROLES:
+        role_id = _create_role_row(workspace_id, spec["name"], is_system=True)
+        set_role_permissions(role_id, spec["permissions"])
+        out[spec["name"]] = role_id
+    return out
+
+
+def add_member(workspace_id: int, user_id: int, role_id: int) -> None:
+    _execute(
+        "INSERT INTO workspace_members (workspace_id, user_id, role_id, created_at) "
+        "VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE role_id = VALUES(role_id)",
+        (int(workspace_id), int(user_id), int(role_id), _now()),
+    )
+
+
+def create_workspace_with_owner(name: str, owner_user_id: int) -> int:
+    """Atomic-ish bootstrap: workspace + seeded roles + owner membership.
+
+    Used by registration and by the legacy migration so a user can never exist
+    without a workspace. Returns the new workspace id.
+    """
+    workspace_id = create_workspace(name, owner_user_id)
+    roles = seed_default_roles(workspace_id)
+    add_member(workspace_id, owner_user_id, roles[OWNER_ROLE_NAME])
+    return workspace_id
+
+
+# ---------------------------------------------------------------------------
+# Resolution helpers (the security-critical reads used by authz)
+# ---------------------------------------------------------------------------
+def get_active_workspace_id(user_id: int) -> int | None:
+    """The user's workspace (single membership in MVP). None if not a member."""
+    if not user_id or int(user_id) <= 0:
+        return None
+    row = _fetchone(
+        "SELECT workspace_id FROM workspace_members WHERE user_id = %s "
+        "ORDER BY id ASC LIMIT 1",
+        (int(user_id),),
+    )
+    return int(row["workspace_id"]) if row else None
+
+
+def get_membership(user_id: int, workspace_id: int) -> dict[str, Any] | None:
+    return _fetchone(
+        "SELECT * FROM workspace_members WHERE user_id = %s AND workspace_id = %s",
+        (int(user_id), int(workspace_id)),
+    )
+
+
+def permissions_for(user_id: int, workspace_id: int) -> set[str]:
+    """Effective permission set for a user IN a workspace, read live from the DB.
+
+    The JOIN on workspace_members is the authorization boundary: if the user is
+    not a member of that workspace the result is empty. Never cached — role,
+    permission, and membership changes take effect on the next call.
+    """
+    rows = _fetchall(
+        """
+        SELECT rp.permission_key AS pk
+        FROM workspace_members m
+        JOIN role_permissions rp ON rp.role_id = m.role_id
+        WHERE m.user_id = %s AND m.workspace_id = %s
+        """,
+        (int(user_id), int(workspace_id)),
+    )
+    return {r["pk"] for r in rows if r.get("pk") in ALL_PERMISSIONS}
+
+
+def role_name_for(user_id: int, workspace_id: int) -> str | None:
+    row = _fetchone(
+        """
+        SELECT r.name AS name
+        FROM workspace_members m JOIN roles r ON r.id = m.role_id
+        WHERE m.user_id = %s AND m.workspace_id = %s
+        """,
+        (int(user_id), int(workspace_id)),
+    )
+    return row["name"] if row else None
+
+
+# ---------------------------------------------------------------------------
+# Workspace + role reads
+# ---------------------------------------------------------------------------
+def get_workspace(workspace_id: int) -> dict[str, Any] | None:
+    return _fetchone(
+        "SELECT id, name, owner_user_id, created_at FROM workspaces WHERE id = %s",
+        (int(workspace_id),),
+    )
+
+
+def get_role(role_id: int) -> dict[str, Any] | None:
+    row = _fetchone(
+        "SELECT id, workspace_id, name, is_system FROM roles WHERE id = %s",
+        (int(role_id),),
+    )
+    if not row:
+        return None
+    row["is_system"] = bool(row["is_system"])
+    row["permissions"] = [
+        r["permission_key"]
+        for r in _fetchall(
+            "SELECT permission_key FROM role_permissions WHERE role_id = %s",
+            (int(role_id),),
+        )
+    ]
+    return row
+
+
+def list_roles(workspace_id: int) -> list[dict[str, Any]]:
+    roles = _fetchall(
+        "SELECT id, name, is_system FROM roles WHERE workspace_id = %s ORDER BY id ASC",
+        (int(workspace_id),),
+    )
+    for r in roles:
+        r["is_system"] = bool(r["is_system"])
+        r["permissions"] = [
+            p["permission_key"]
+            for p in _fetchall(
+                "SELECT permission_key FROM role_permissions WHERE role_id = %s",
+                (int(r["id"]),),
+            )
+        ]
+    return roles
+
+
+def get_role_id_by_name(workspace_id: int, name: str) -> int | None:
+    row = _fetchone(
+        "SELECT id FROM roles WHERE workspace_id = %s AND name = %s",
+        (int(workspace_id), name),
+    )
+    return int(row["id"]) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Invitation token hashing (raw token is emailed; only the hash is stored)
+# ---------------------------------------------------------------------------
+def hash_invite_token(token: str) -> str:
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
+
+
+def new_invite_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+# ---------------------------------------------------------------------------
+# One-time migration: flat per-user data -> per-workspace
+# ---------------------------------------------------------------------------
+# Document collections whose rows carry a per-item owner; the migration stamps
+# payload["workspace_id"] on these so background workers can resolve scope.
+# Blob collections (oauth_tokens, runtime_settings, ai_cache, blobs) only need
+# their scope_key moved — their payload is opaque content, not an owned record.
+_OWNED_DOC_COLLECTIONS = frozenset(
+    {"posts", "automation_rules", "messages", "video_jobs", "cost_logs"}
+)
+
+
+def _rescope_user_data(user_id: int, workspace_id: int) -> int:
+    """Move every app_documents row from ``user:{uid}`` to ``ws:{wsid}`` and
+    stamp ``workspace_id`` on owned documents. Returns rows moved."""
+    old_scope = f"user:{int(user_id)}"
+    new_scope = f"ws:{int(workspace_id)}"
+    rows = _fetchall(
+        f"SELECT collection_name, doc_id, sort_ts, payload_json, created_at "
+        f"FROM {_DOC_TABLE} WHERE scope_key = %s",
+        (old_scope,),
+    )
+    if not rows:
+        return 0
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        for r in rows:
+            try:
+                payload = json.loads(r["payload_json"]) if r["payload_json"] else {}
+            except Exception:
+                payload = {}
+            if (
+                isinstance(payload, dict)
+                and r["collection_name"] in _OWNED_DOC_COLLECTIONS
+            ):
+                payload["workspace_id"] = int(workspace_id)
+            encoded = json.dumps(payload, ensure_ascii=False)
+            cur.execute(
+                f"INSERT INTO {_DOC_TABLE} "
+                "(collection_name, scope_key, doc_id, sort_ts, payload_json, "
+                "created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s) "
+                "ON DUPLICATE KEY UPDATE payload_json=VALUES(payload_json), "
+                "sort_ts=VALUES(sort_ts), updated_at=VALUES(updated_at)",
+                (
+                    r["collection_name"],
+                    new_scope,
+                    r["doc_id"],
+                    r["sort_ts"],
+                    encoded,
+                    r["created_at"],
+                    _now(),
+                ),
+            )
+            cur.execute(
+                f"DELETE FROM {_DOC_TABLE} "
+                "WHERE collection_name=%s AND scope_key=%s AND doc_id=%s",
+                (r["collection_name"], old_scope, r["doc_id"]),
+            )
+        return len(rows)
+    finally:
+        conn.close()
+
+
+def is_owner(workspace_id: int, user_id: int) -> bool:
+    ws = get_workspace(workspace_id)
+    return bool(ws and int(ws["owner_user_id"]) == int(user_id))
+
+
+# ---------------------------------------------------------------------------
+# Members
+# ---------------------------------------------------------------------------
+def list_members(workspace_id: int) -> list[dict[str, Any]]:
+    return _fetchall(
+        """
+        SELECT m.user_id, m.role_id, r.name AS role_name,
+               u.email, u.full_name, m.created_at
+        FROM workspace_members m
+        JOIN roles r ON r.id = m.role_id
+        JOIN users u ON u.id = m.user_id
+        WHERE m.workspace_id = %s
+        ORDER BY m.created_at ASC
+        """,
+        (int(workspace_id),),
+    )
+
+
+def change_member_role(workspace_id: int, user_id: int, role_id: int) -> bool:
+    """Change a member's role. The role must belong to this workspace, and the
+    sole Owner cannot be demoted (would orphan the workspace)."""
+    role = get_role(role_id)
+    if not role or int(role.get("workspace_id") or 0) != int(workspace_id):
+        return False
+    if is_owner(workspace_id, user_id) and role["name"] != OWNER_ROLE_NAME:
+        return False  # never demote the workspace owner
+    _execute(
+        "UPDATE workspace_members SET role_id = %s WHERE workspace_id = %s AND user_id = %s",
+        (int(role_id), int(workspace_id), int(user_id)),
+    )
+    return True
+
+
+def remove_member(workspace_id: int, user_id: int) -> bool:
+    if is_owner(workspace_id, user_id):
+        return False  # the owner cannot be removed
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM workspace_members WHERE workspace_id = %s AND user_id = %s",
+            (int(workspace_id), int(user_id)),
+        )
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Roles (write)
+# ---------------------------------------------------------------------------
+def create_role(workspace_id: int, name: str, permissions) -> int:
+    role_id = _create_role_row(workspace_id, name, is_system=False)
+    set_role_permissions(role_id, permissions)
+    return role_id
+
+
+def update_role(role_id: int, *, name: str | None = None, permissions=None) -> bool:
+    role = get_role(role_id)
+    if not role:
+        return False
+    # System roles can't be renamed; the Owner role's permissions are immutable.
+    if name is not None and not role["is_system"]:
+        _execute("UPDATE roles SET name = %s WHERE id = %s", (name, int(role_id)))
+    if permissions is not None and role["name"] != OWNER_ROLE_NAME:
+        set_role_permissions(role_id, permissions)
+    return True
+
+
+def delete_role(workspace_id: int, role_id: int) -> tuple[bool, str]:
+    role = get_role(role_id)
+    if not role or int(role.get("workspace_id") or 0) != int(workspace_id):
+        return False, "not_found"
+    if role["is_system"]:
+        return False, "system_role"
+    used = _fetchone(
+        "SELECT COUNT(*) AS n FROM workspace_members WHERE role_id = %s", (int(role_id),)
+    )
+    if int((used or {}).get("n") or 0) > 0:
+        return False, "role_in_use"
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM role_permissions WHERE role_id = %s", (int(role_id),))
+        cur.execute("DELETE FROM roles WHERE id = %s", (int(role_id),))
+    finally:
+        conn.close()
+    return True, "ok"
+
+
+# ---------------------------------------------------------------------------
+# Invitations
+# ---------------------------------------------------------------------------
+def create_invitation(workspace_id: int, email: str, role_id: int, invited_by: int) -> str:
+    """Create an invitation and return the RAW token (emailed; only its hash is
+    stored)."""
+    token = new_invite_token()
+    _execute(
+        "INSERT INTO workspace_invitations "
+        "(workspace_id, email, role_id, token_hash, invited_by, expires_at, "
+        "accepted_at, created_at) VALUES (%s, %s, %s, %s, %s, %s, NULL, %s)",
+        (
+            int(workspace_id),
+            email.strip().lower(),
+            int(role_id),
+            hash_invite_token(token),
+            int(invited_by),
+            _now() + INVITATION_TTL_SECONDS,
+            _now(),
+        ),
+    )
+    return token
+
+
+def get_invitation_by_token(token: str) -> dict[str, Any] | None:
+    return _fetchone(
+        "SELECT * FROM workspace_invitations WHERE token_hash = %s",
+        (hash_invite_token(token),),
+    )
+
+
+def list_invitations(workspace_id: int, *, pending_only: bool = True) -> list[dict[str, Any]]:
+    q = (
+        "SELECT i.id, i.email, i.role_id, r.name AS role_name, i.expires_at, "
+        "i.accepted_at, i.created_at FROM workspace_invitations i "
+        "JOIN roles r ON r.id = i.role_id WHERE i.workspace_id = %s"
+    )
+    if pending_only:
+        q += " AND i.accepted_at IS NULL"
+    q += " ORDER BY i.created_at DESC"
+    return _fetchall(q, (int(workspace_id),))
+
+
+def delete_invitation(workspace_id: int, invitation_id: int) -> bool:
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM workspace_invitations WHERE id = %s AND workspace_id = %s",
+            (int(invitation_id), int(workspace_id)),
+        )
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def consume_invitation(invitation_id: int) -> None:
+    _execute(
+        "UPDATE workspace_invitations SET accepted_at = %s WHERE id = %s",
+        (_now(), int(invitation_id)),
+    )
+
+
+def migrate_to_workspaces() -> None:
+    """One-time, idempotent: give every existing user a personal workspace they
+    own, and move their ``user:{id}``-scoped data into ``ws:{workspace_id}``.
+
+    No-op once any workspace exists, so it is safe to call on every boot (it runs
+    from ``db.init_db`` right after ``migrate_legacy_state``). NOTE: this must be
+    deployed together with the ``_scope_key`` -> ``ws:`` cutover, otherwise the
+    running app (still reading ``user:``) would see the moved data as missing.
+    """
+    existing = _fetchone("SELECT COUNT(*) AS n FROM workspaces", ())
+    if int((existing or {}).get("n") or 0) > 0:
+        return
+    users = _fetchall("SELECT id, email, full_name FROM users ORDER BY id ASC", ())
+    if not users:
+        return  # fresh install — registration creates workspaces on demand
+    for u in users:
+        uid = int(u["id"])
+        ws_id = create_workspace_with_owner(
+            workspace_name_for(u.get("full_name"), u.get("email")), uid
+        )
+        moved = _rescope_user_data(uid, ws_id)
+        log.info(
+            "[workspaces] migrated user %s -> workspace %s (%s docs moved)",
+            uid,
+            ws_id,
+            moved,
+        )

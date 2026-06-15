@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from . import tunnel
 from .auth import require_token
+from .authz import require_permission
+from .workspaces import get_active_workspace_id
 from .models import (
     AutomationRule,
     AutomationRulesResponse,
@@ -76,19 +78,29 @@ router = APIRouter()
 # endpoints. Health and OAuth callback probes stay open.
 auth_required = Depends(require_token)
 
+
+def _perm(permission: str):
+    """Per-route permission gate: resolves the caller's workspace + role and
+    403s unless the role grants ``permission`` (see authz.require_permission)."""
+    return Depends(require_permission(permission))
+
+
 _OPEN_AUTOMATION_STATUSES = {"awaiting_validation", "scheduled"}
 
 
 def _scope_user_id(user_id: int) -> int | None:
-    """Map a request's caller id to the data-layer scope owner.
+    """Resolve the data-layer scope owner — the caller's WORKSPACE id.
 
-    A real JWT user (id > 0) scopes to its own tenant. The shared/global
-    scope (id <= 0, reached only via BACKEND_AUTH_TOKEN or dev open mode)
-    is its OWN bounded tenant, represented as ``None`` so the db layer maps
-    it to ``scope_key == "global"``. Returning ``None`` here is NOT
-    "everything" — it is a single, bounded scope just like any user.
+    Datalia is workspace-scoped: members of a workspace collaborate on the same
+    posts, connected accounts, automation and media. A request's user id maps to
+    its active workspace, and db._scope_key keys data on ``ws:{workspace_id}``.
+    user_id<=0 (the shared machine identity) has no workspace -> None -> the
+    bounded ``global`` scope. (Kept under this name so every existing scoped call
+    site re-points at once; the returned value is a workspace id.)
     """
-    return user_id if user_id > 0 else None
+    if not user_id or int(user_id) <= 0:
+        return None
+    return get_active_workspace_id(int(user_id))
 
 
 def _rule_schedule_signature(rule: dict[str, Any]) -> dict[str, Any]:
@@ -201,7 +213,7 @@ async def health() -> dict[str, Any]:
     return {"status": "ok", "dependencies": deps}
 
 
-@router.get("/stats", dependencies=[auth_required])
+@router.get("/stats", dependencies=[_perm("posts.read")])
 async def get_stats(user_id: int = Depends(require_token)) -> dict[str, Any]:
     """Aggregated content statistics for the dashboard KPI strip.
 
@@ -210,7 +222,8 @@ async def get_stats(user_id: int = Depends(require_token)) -> dict[str, Any]:
     """
     from .services import posts_list as _posts_list, messages_list
 
-    all_posts = _posts_list(user_id=user_id)
+    ws = _scope_user_id(user_id)
+    all_posts = _posts_list(user_id=ws)
     by_status: dict[str, int] = {
         "draft": 0,
         "scheduled": 0,
@@ -226,7 +239,7 @@ async def get_stats(user_id: int = Depends(require_token)) -> dict[str, Any]:
         if s in by_status:
             by_status[s] += 1
 
-    recent_messages = messages_list(user_id=user_id)[:5]
+    recent_messages = messages_list(user_id=ws)[:5]
 
     # Media asset count
     media_count = sum(
@@ -243,7 +256,7 @@ async def get_stats(user_id: int = Depends(require_token)) -> dict[str, Any]:
     }
 
 
-@router.get("/dashboard-summary", dependencies=[auth_required])
+@router.get("/dashboard-summary", dependencies=[_perm("posts.read")])
 async def dashboard_summary(user_id: int = Depends(require_token)) -> dict[str, Any]:
     """Rich summary payload for the dashboard view.
 
@@ -253,16 +266,17 @@ async def dashboard_summary(user_id: int = Depends(require_token)) -> dict[str, 
     from .services import posts_list as _posts_list, messages_list
     from .oauth import _load_tokens
 
-    all_posts = _posts_list(user_id=user_id)
+    ws = _scope_user_id(user_id)
+    all_posts = _posts_list(user_id=ws)
 
     by_status: dict[str, int] = {}
     for post in all_posts:
         s = post.get("status", "draft")
         by_status[s] = by_status.get(s, 0) + 1
 
-    recent_activity = messages_list(user_id=user_id)[:10]
+    recent_activity = messages_list(user_id=ws)[:10]
 
-    token_data = _load_tokens(user_id if user_id > 0 else None)
+    token_data = _load_tokens(ws)
     connected_providers = [
         provider
         for provider, data in token_data.items()
@@ -299,7 +313,7 @@ async def tunnel_status() -> dict[str, Any]:
     }
 
 
-@router.get("/messages", dependencies=[auth_required])
+@router.get("/messages", dependencies=[_perm("posts.read")])
 async def messages(user_id: int = Depends(require_token)) -> dict[str, list[Any]]:
     """Activity feed (publish events, validations…).
 
@@ -308,7 +322,7 @@ async def messages(user_id: int = Depends(require_token)) -> dict[str, list[Any]
     activity. Newest-first, capped at services.MAX_MESSAGES.
     """
     from .services import messages_list
-    return {"items": messages_list(user_id=user_id)}
+    return {"items": messages_list(user_id=_scope_user_id(user_id))}
 
 
 # ── Generation endpoints ──────────────────────────────────────────────
@@ -316,6 +330,7 @@ async def messages(user_id: int = Depends(require_token)) -> dict[str, list[Any]
 @router.post(
     "/generate",
     response_model=GenerateResponse,
+    dependencies=[_perm("ai.generate")],
 )
 async def generate(
     request: Request,
@@ -323,7 +338,8 @@ async def generate(
     user_id: int = Depends(require_token),
 ) -> GenerateResponse:
     """Prompt-driven generation for the editor's "Generate via AI" button."""
-    client = rate_key_for(user_id, _client_id(request))
+    ws = _scope_user_id(user_id)  # AI keys, cache, cost, rate-limit: per workspace
+    client = rate_key_for(ws, _client_id(request))
     rate_guard(client)
     variants, usage, model = await generate_post_variants(
         prompt=body.prompt,
@@ -333,7 +349,7 @@ async def generate(
         n=body.variants,
         image_filename=body.image_filename,
         quality=body.quality,
-        user_id=user_id,
+        user_id=ws,
     )
     if usage["total_tokens"] > 0:  # don't count free cache hits
         rate_tick(client)
@@ -358,6 +374,7 @@ def _tier_from_quality(quality: str, n: int) -> str:
 @router.post(
     "/transform",
     response_model=TransformResponse,
+    dependencies=[_perm("ai.generate")],
 )
 async def transform(
     request: Request,
@@ -365,10 +382,11 @@ async def transform(
     user_id: int = Depends(require_token),
 ) -> TransformResponse:
     """Quick AI actions (shorten / expand / tone) on existing content."""
-    client = rate_key_for(user_id, _client_id(request))
+    ws = _scope_user_id(user_id)
+    client = rate_key_for(ws, _client_id(request))
     rate_guard(client)
     text, usage, _model = await transform_content(
-        body.content, body.action, user_id=user_id
+        body.content, body.action, user_id=ws
     )
     if usage["total_tokens"] > 0:
         rate_tick(client)
@@ -378,6 +396,7 @@ async def transform(
 @router.post(
     "/hashtags",
     response_model=HashtagsResponse,
+    dependencies=[_perm("ai.generate")],
 )
 async def hashtags(
     request: Request,
@@ -385,15 +404,16 @@ async def hashtags(
     user_id: int = Depends(require_token),
 ) -> HashtagsResponse:
     """Suggest hashtags for a post — fast-tier (cheap) by design."""
-    client = rate_key_for(user_id, _client_id(request))
+    ws = _scope_user_id(user_id)
+    client = rate_key_for(ws, _client_id(request))
     rate_guard(client)
     tags, usage = await generate_hashtags(
-        body.content, max_tags=body.max_tags, user_id=user_id
+        body.content, max_tags=body.max_tags, user_id=ws
     )
     if usage["total_tokens"] > 0:
         rate_tick(client)
     from .runtime_config import resolved_settings
-    current_settings = resolved_settings(user_id)
+    current_settings = resolved_settings(ws)
     return HashtagsResponse(
         hashtags=tags, usage=usage, model=current_settings.ai_model_fast
     )
@@ -402,7 +422,7 @@ async def hashtags(
 # ── Cost dashboard ────────────────────────────────────────────────────
 
 
-@router.get("/costs/summary", response_model=CostSummary, dependencies=[auth_required])
+@router.get("/costs/summary", response_model=CostSummary, dependencies=[_perm("settings.read")])
 async def costs_summary(
     period: str = "30d",
     user_id: int = Depends(require_token),
@@ -421,22 +441,22 @@ async def costs_summary(
         "session": None,
     }
     secs = seconds_by_label.get(period, 30 * 24 * 3600.0)
-    return CostSummary(**summarize(secs, user_id=user_id))
+    return CostSummary(**summarize(secs, user_id=_scope_user_id(user_id)))
 
 
-@router.get("/costs/log", response_model=CostLogResponse, dependencies=[auth_required])
+@router.get("/costs/log", response_model=CostLogResponse, dependencies=[_perm("settings.read")])
 async def costs_log(
     limit: int = 200,
     user_id: int = Depends(require_token),
 ) -> CostLogResponse:
     from .cost_tracking import list_logs
-    return CostLogResponse(entries=list_logs(limit=limit, user_id=user_id))
+    return CostLogResponse(entries=list_logs(limit=limit, user_id=_scope_user_id(user_id)))
 
 
 # ── Runtime-editable API keys ────────────────────────────────────────
 
 
-@router.get("/settings/keys", response_model=SettingsKeysResponse, dependencies=[auth_required])
+@router.get("/settings/keys", response_model=SettingsKeysResponse, dependencies=[_perm("settings.read")])
 async def settings_keys_get(
     user_id: int = Depends(require_token),
 ) -> SettingsKeysResponse:
@@ -447,13 +467,13 @@ async def settings_keys_get(
     allowlist.
     """
     from .runtime_config import snapshot_for_ui
-    return SettingsKeysResponse(keys=snapshot_for_ui(user_id))
+    return SettingsKeysResponse(keys=snapshot_for_ui(_scope_user_id(user_id)))
 
 
 @router.patch(
     "/settings/keys",
     response_model=SettingsKeysResponse,
-    dependencies=[auth_required],
+    dependencies=[_perm("settings.manage")],
 )
 async def settings_keys_patch(
     body: SettingsKeysUpdateRequest,
@@ -469,16 +489,17 @@ async def settings_keys_patch(
         apply_overrides_to_settings,
         snapshot_for_ui,
     )
-    save_overrides(body.updates, user_id=user_id)
-    if user_id <= 0:
+    ws = _scope_user_id(user_id)
+    save_overrides(body.updates, user_id=ws)
+    if ws is None:
         apply_overrides_to_settings()
-    return SettingsKeysResponse(keys=snapshot_for_ui(user_id))
+    return SettingsKeysResponse(keys=snapshot_for_ui(ws))
 
 
 # ── Publishing — fan post out to real social networks ────────────────
 
 
-@router.post("/publish", response_model=PublishResponse, dependencies=[auth_required])
+@router.post("/publish", response_model=PublishResponse, dependencies=[_perm("posts.publish")])
 async def publish(
     body: PublishRequest,
     user_id: int = Depends(require_token),
@@ -510,7 +531,7 @@ async def publish(
         # cryptic "param message is required" otherwise.
         raise HTTPException(400, "publish requires either content or media_url")
 
-    scoped_user_id = user_id if user_id > 0 else None
+    scoped_user_id = _scope_user_id(user_id)  # publish from the WORKSPACE's connected accounts
     tokens = _load_tokens(scoped_user_id)
     meta_record = tokens.get("meta") or {}
     user_meta_token = meta_record.get("access_token")
@@ -773,7 +794,7 @@ async def publish(
 @router.post(
     "/upload",
     response_model=UploadResponse,
-    dependencies=[auth_required],
+    dependencies=[_perm("media.upload")],
 )
 async def upload(request: Request, file: UploadFile = File(...)) -> UploadResponse:
     """Store an uploaded image/video and return its served URL.
@@ -801,7 +822,7 @@ async def upload(request: Request, file: UploadFile = File(...)) -> UploadRespon
 
 @router.delete(
     "/media/{path:path}",
-    dependencies=[auth_required],
+    dependencies=[_perm("media.delete")],
 )
 async def delete_media_route(path: str) -> dict[str, Any]:
     """Remove a previously-uploaded media file by its content-dir-relative path."""
@@ -814,7 +835,7 @@ async def delete_media_route(path: str) -> dict[str, Any]:
     return {"deleted": True, "path": path}
 
 
-@router.get("/search", response_model=SearchResponse, dependencies=[auth_required])
+@router.get("/search", response_model=SearchResponse, dependencies=[_perm("media.read")])
 async def search(request: Request, q: str = "") -> SearchResponse:
     """Search media in the content directory (posts/templates → Airtable TBD).
 
@@ -846,16 +867,16 @@ async def search(request: Request, q: str = "") -> SearchResponse:
 
 # ── Scheduled posts (calendar persistence) ────────────────────────────
 
-@router.get("/posts", response_model=PostsResponse, dependencies=[auth_required])
+@router.get("/posts", response_model=PostsResponse, dependencies=[_perm("posts.read")])
 async def list_posts(user_id: int = Depends(require_token)) -> PostsResponse:
-    """Return scheduled posts visible to the authenticated scope."""
-    return PostsResponse(posts=posts_list(user_id=user_id))
+    """Return scheduled posts for the caller's workspace."""
+    return PostsResponse(posts=posts_list(user_id=_scope_user_id(user_id)))
 
 
 @router.post(
     "/posts",
     response_model=Post,
-    dependencies=[auth_required],
+    dependencies=[_perm("posts.create")],
 )
 async def create_post(
     body: PostCreate,
@@ -865,6 +886,8 @@ async def create_post(
         **posts_create(
             {
                 **body.model_dump(),
+                # workspace_id = owning scope (collaboration); user_id = author.
+                "workspace_id": _scope_user_id(user_id),
                 "user_id": str(user_id) if user_id > 0 else None,
             }
         )
@@ -874,7 +897,7 @@ async def create_post(
 @router.patch(
     "/posts/{post_id}",
     response_model=Post,
-    dependencies=[auth_required],
+    dependencies=[_perm("posts.update")],
 )
 async def patch_post(
     post_id: str,
@@ -894,7 +917,7 @@ async def patch_post(
     return Post(**updated)
 
 
-@router.delete("/posts/{post_id}", dependencies=[auth_required])
+@router.delete("/posts/{post_id}", dependencies=[_perm("posts.delete")])
 async def delete_post(post_id: str, user_id: int = Depends(require_token)) -> dict[str, bool]:
     # Scope the delete to the caller at the data layer — a tenant can only
     # delete a post in its own scope (lookup miss → 404).
@@ -908,18 +931,18 @@ async def delete_post(post_id: str, user_id: int = Depends(require_token)) -> di
 # generate Posts. Endpoints are CRUD only — no firing logic lives here.
 
 
-@router.get("/automation-rules", response_model=AutomationRulesResponse, dependencies=[auth_required])
+@router.get("/automation-rules", response_model=AutomationRulesResponse, dependencies=[_perm("automation.read")])
 async def list_automation_rules(
     user_id: int = Depends(require_token),
 ) -> AutomationRulesResponse:
-    rules = [AutomationRule(**r) for r in automation_list(user_id=user_id)]
+    rules = [AutomationRule(**r) for r in automation_list(user_id=_scope_user_id(user_id))]
     return AutomationRulesResponse(rules=rules)
 
 
 @router.get(
     "/automation-rules/{rule_id}",
     response_model=AutomationRule,
-    dependencies=[auth_required],
+    dependencies=[_perm("automation.read")],
 )
 async def get_automation_rule(
     rule_id: str,
@@ -934,7 +957,7 @@ async def get_automation_rule(
 @router.post(
     "/automation-rules",
     response_model=AutomationRule,
-    dependencies=[auth_required],
+    dependencies=[_perm("automation.write")],
 )
 async def create_automation_rule(
     body: AutomationRule,
@@ -944,6 +967,8 @@ async def create_automation_rule(
     payload = body.model_dump(
         exclude={"id", "user_id", "created_at", "updated_at", "last_fire_at", "last_error"}
     )
+    # workspace_id = owning scope (collaboration); user_id = author.
+    payload["workspace_id"] = _scope_user_id(user_id)
     if user_id > 0:
         payload["user_id"] = str(user_id)
     return AutomationRule(**automation_create(payload))
@@ -952,7 +977,7 @@ async def create_automation_rule(
 @router.patch(
     "/automation-rules/{rule_id}",
     response_model=AutomationRule,
-    dependencies=[auth_required],
+    dependencies=[_perm("automation.write")],
 )
 async def patch_automation_rule(
     rule_id: str,
@@ -1003,7 +1028,7 @@ async def patch_automation_rule(
     return AutomationRule(**updated)
 
 
-@router.delete("/automation-rules/{rule_id}", dependencies=[auth_required])
+@router.delete("/automation-rules/{rule_id}", dependencies=[_perm("automation.write")])
 async def delete_automation_rule(
     rule_id: str,
     user_id: int = Depends(require_token),
@@ -1027,7 +1052,7 @@ async def delete_automation_rule(
 
 # ── Content endpoints ─────────────────────────────────────────────────
 
-@router.get("/content-items", dependencies=[auth_required])
+@router.get("/content-items", dependencies=[_perm("media.read")])
 async def list_content(request: Request) -> dict[str, Any]:
     url = await tunnel.wait_for_tunnel(timeout=15.0)
     base = url or str(request.base_url).rstrip("/")
@@ -1044,7 +1069,7 @@ async def list_content(request: Request) -> dict[str, Any]:
     return {"count": len(items), "items": items}
 
 
-@router.post("/captions/generate")
+@router.post("/captions/generate", dependencies=[_perm("ai.generate")])
 async def generate_content_captions(
     request: Request,
     body: CaptionRequest,
@@ -1070,7 +1095,7 @@ async def generate_content_captions(
     results: list[ContentItem] = []
     for item in items:
         captions = await generate_captions(
-            item, include_image=include_image, user_id=user_id
+            item, include_image=include_image, user_id=_scope_user_id(user_id)
         )
 
         if body.save_results:

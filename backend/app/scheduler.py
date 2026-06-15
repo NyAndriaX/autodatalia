@@ -164,7 +164,7 @@ async def fire_post(post: dict[str, Any]) -> dict[str, Any]:
     # post and correctly resolves the global tenant's tokens (consistent with
     # the per-user scoping in routes/oauth). `owner_scope` is threaded through
     # so token lookups and any owner-scoped writes use the same identity.
-    owner_scope = post.get("user_id")
+    owner_scope = post.get("workspace_id")  # the post's WORKSPACE owns the accounts
     targets, skipped = await build_targets_from_post(
         platforms=post.get("platforms") or {},
         media_url=media_url,

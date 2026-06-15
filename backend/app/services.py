@@ -1291,7 +1291,7 @@ def posts_create(payload: dict[str, Any]) -> dict[str, Any]:
             "posts",
             post["id"],
             post,
-            user_id=post.get("user_id"),
+            user_id=post.get("workspace_id"),
             sort_ts=post.get("published_at") or post.get("scheduled_for"),
         )
         return post
@@ -1347,7 +1347,7 @@ def posts_update(
             "posts",
             post_id,
             post,
-            user_id=post.get("user_id"),
+            user_id=post.get("workspace_id"),
             sort_ts=post.get("published_at") or post.get("scheduled_for"),
         )
         return post
@@ -1374,7 +1374,7 @@ def posts_delete(
         return delete_collection_document(
             "posts",
             post_id,
-            user_id=post.get("user_id"),
+            user_id=post.get("workspace_id"),
         )
 
 
@@ -1447,7 +1447,7 @@ def automation_create(payload: dict[str, Any]) -> dict[str, Any]:
             "automation_rules",
             rule["id"],
             rule,
-            user_id=rule.get("user_id"),
+            user_id=rule.get("workspace_id"),
             sort_ts=rule["updated_at"],
         )
         return rule
@@ -1486,7 +1486,7 @@ def automation_update(
             "automation_rules",
             rule_id,
             rule,
-            user_id=rule.get("user_id"),
+            user_id=rule.get("workspace_id"),
             sort_ts=rule["updated_at"],
         )
         return rule
@@ -1513,7 +1513,7 @@ def automation_delete(
         return delete_collection_document(
             "automation_rules",
             rule_id,
-            user_id=rule.get("user_id"),
+            user_id=rule.get("workspace_id"),
         )
 
 
@@ -1569,15 +1569,18 @@ def messages_append(message: dict[str, Any]) -> dict[str, Any]:
         record.setdefault("id", f"msg-{_uuid.uuid4().hex[:12]}")
         record.setdefault("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
         record.setdefault("read", False)
-        if not record.get("user_id") and record.get("post_id"):
+        # Messages (activity feed) are workspace-scoped. Resolve the owning
+        # workspace from the related post when not supplied; user_id stays the
+        # author for display.
+        if not record.get("workspace_id") and record.get("post_id"):
             post = get_collection_document("posts", str(record["post_id"]), all_scopes=True)
-            if post and post.get("user_id"):
-                record["user_id"] = post.get("user_id")
+            if post and post.get("workspace_id"):
+                record["workspace_id"] = post.get("workspace_id")
         upsert_collection_document(
             "messages",
             record["id"],
             record,
-            user_id=record.get("user_id"),
+            user_id=record.get("workspace_id"),
             sort_ts=time.time(),
         )
         return record

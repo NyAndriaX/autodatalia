@@ -433,7 +433,7 @@ async def _publish_manual(post: dict[str, Any], chat_id: str, fire_post) -> None
             {"status": "error", "error": f"manual_approve_publish: {exc}"[:300]},
         )
         text = f"⚠ Publishing post {post['id']} crashed: {exc}"
-    post_user_id = post.get("user_id")
+    post_user_id = post.get("workspace_id")
     if chat_id and _telegram_configured(post_user_id):
         try:
             await _telegram_call(
@@ -632,7 +632,7 @@ async def telegram_webhook(
             if not post:
                 await _answer_callback(callback_id, "Post no longer exists.")
                 return {"ok": True}
-            post_user_id = post.get("user_id")
+            post_user_id = post.get("workspace_id")
             if action == "a":
                 # Two paths:
                 #   Automation-sourced (has source_rule_id + scheduled_for
@@ -782,7 +782,7 @@ async def telegram_webhook(
             if not post:
                 await _answer_callback(callback_id, "Post no longer exists.")
                 return {"ok": True}
-            post_user_id = post.get("user_id")
+            post_user_id = post.get("workspace_id")
             if post.get("status") != "awaiting_validation":
                 await _answer_callback(
                     callback_id,

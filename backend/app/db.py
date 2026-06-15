@@ -87,20 +87,27 @@ def _connect(*, database_override: str | None = None):
     return pymysql.connect(**connect_kwargs)
 
 
-def _scope_key(user_id: str | int | None = None) -> str:
-    if user_id in (None, "", 0, "0"):
+def _scope_key(scope_owner_id: str | int | None = None) -> str:
+    """Map a WORKSPACE id to its data-isolation scope key.
+
+    Every collaborative collection is partitioned by ``ws:{workspace_id}``. The
+    argument is a workspace id (resolved from membership by authz), NOT a user
+    id. A clean ``ws:`` prefix means any stray non-workspace id fails closed
+    (resolves to a scope with no rows) rather than leaking ``user:`` era data.
+    """
+    if scope_owner_id in (None, "", 0, "0"):
         return "global"
     try:
-        normalized = int(user_id)
+        normalized = int(scope_owner_id)
     except (TypeError, ValueError):
         return "global"
     if normalized <= 0:
         return "global"
-    return f"user:{normalized}"
+    return f"ws:{normalized}"
 
 
-def _user_id_from_scope(scope_key: str) -> str | None:
-    if scope_key.startswith("user:"):
+def _workspace_id_from_scope(scope_key: str) -> str | None:
+    if scope_key.startswith("ws:"):
         return scope_key.split(":", 1)[1]
     return None
 
@@ -197,9 +204,84 @@ def init_db(*, retries: int = 30, delay: float = 1.0) -> None:
                     ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
                     """
                 )
+                # --- Workspaces + RBAC control plane (real tables, not the
+                # doc-store: authz must be read BEFORE the scope is known, and
+                # we need UNIQUE constraints + joins). Tenant DATA stays in
+                # app_documents, re-scoped to ws:{id}. ---
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS workspaces (
+                        id            BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                        name          VARCHAR(255) NOT NULL,
+                        owner_user_id BIGINT NOT NULL,
+                        created_at    DOUBLE NOT NULL,
+                        KEY idx_owner (owner_user_id)
+                    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS workspace_members (
+                        id           BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                        workspace_id BIGINT NOT NULL,
+                        user_id      BIGINT NOT NULL,
+                        role_id      BIGINT NOT NULL,
+                        created_at   DOUBLE NOT NULL,
+                        UNIQUE KEY uq_ws_user (workspace_id, user_id),
+                        KEY idx_user (user_id),
+                        KEY idx_ws (workspace_id)
+                    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS roles (
+                        id           BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                        workspace_id BIGINT NOT NULL,
+                        name         VARCHAR(64) NOT NULL,
+                        is_system    TINYINT(1) NOT NULL DEFAULT 0,
+                        created_at   DOUBLE NOT NULL,
+                        UNIQUE KEY uq_ws_role (workspace_id, name),
+                        KEY idx_ws (workspace_id)
+                    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS role_permissions (
+                        role_id        BIGINT NOT NULL,
+                        permission_key VARCHAR(64) NOT NULL,
+                        PRIMARY KEY (role_id, permission_key),
+                        KEY idx_role (role_id)
+                    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS workspace_invitations (
+                        id           BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                        workspace_id BIGINT NOT NULL,
+                        email        VARCHAR(255) NOT NULL,
+                        role_id      BIGINT NOT NULL,
+                        token_hash   CHAR(64) NOT NULL,
+                        invited_by   BIGINT NOT NULL,
+                        expires_at   DOUBLE NOT NULL,
+                        accepted_at  DOUBLE NULL,
+                        created_at   DOUBLE NOT NULL,
+                        UNIQUE KEY uq_token (token_hash),
+                        KEY idx_ws_email (workspace_id, email)
+                    ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+                    """
+                )
             finally:
                 conn.close()
             migrate_legacy_state()
+            # Backfill workspaces for any pre-workspace users + re-scope their
+            # data to ws:{id}. Idempotent (no-op once any workspace exists).
+            # Local import to avoid a db<->workspaces import cycle.
+            from .workspaces import migrate_to_workspaces
+
+            migrate_to_workspaces()
             log.info("[db] MariaDB schema ready")
             return
         except Exception as exc:  # noqa: BLE001
@@ -316,8 +398,10 @@ def list_collection_documents(
     out: list[dict[str, Any]] = []
     for row in rows:
         payload = _json_loads(row["payload_json"])
-        if isinstance(payload, dict) and "user_id" not in payload:
-            payload["user_id"] = _user_id_from_scope(row["scope_key"])
+        if isinstance(payload, dict) and "workspace_id" not in payload:
+            wsid = _workspace_id_from_scope(row["scope_key"])
+            if wsid is not None:
+                payload["workspace_id"] = int(wsid)
         out.append(payload)
     return out
 
@@ -342,8 +426,10 @@ def get_collection_document(
     if not row:
         return None
     payload = _json_loads(row["payload_json"])
-    if isinstance(payload, dict) and "user_id" not in payload:
-        payload["user_id"] = _user_id_from_scope(row["scope_key"])
+    if isinstance(payload, dict) and "workspace_id" not in payload:
+        wsid = _workspace_id_from_scope(row["scope_key"])
+        if wsid is not None:
+            payload["workspace_id"] = int(wsid)
     return payload
 
 
@@ -442,7 +528,7 @@ def list_scoped_blob_user_ids(name: str) -> list[int]:
         f"""
         SELECT DISTINCT scope_key
         FROM {_DOC_TABLE}
-        WHERE collection_name = %s AND doc_id = %s AND scope_key LIKE 'user:%%'
+        WHERE collection_name = %s AND doc_id = %s AND scope_key LIKE 'ws:%%'
         ORDER BY scope_key ASC
         """,
         ("blobs", name),
