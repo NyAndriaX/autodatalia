@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
+import { useTranslations } from "next-intl";
 import {
   Button,
   Input,
@@ -16,7 +17,6 @@ import {
   PlusOutlined,
   DeleteOutlined,
 } from "@ant-design/icons";
-import { useTranslations } from "next-intl";
 import { PERMISSION_GROUPS, usePermission } from "../../lib/permissions";
 import {
   fetchRoles,
@@ -30,8 +30,9 @@ const { Title, Text } = Typography;
 const NEW_ROLE = { id: null, name: "", permissions: [], is_system: false };
 
 export default function RolesView() {
-  const canManage = usePermission("roles.manage");
+  const t = useTranslations("team");
   const tp = useTranslations("permissions");
+  const canManage = usePermission("roles.manage");
   const [roles, setRoles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState(null); // {id, name, permissions, is_system}
@@ -70,23 +71,23 @@ export default function RolesView() {
   const onSave = async () => {
     const name = (draft.name || "").trim();
     if (!name) {
-      message.error("Le nom du rôle est requis.");
+      message.error(t("roleNameRequired"));
       return;
     }
     setSaving(true);
     try {
       if (draft.id) {
         await updateRole(draft.id, { name, permissions: draft.permissions });
-        message.success("Rôle mis à jour.");
+        message.success(t("roleSaved"));
       } else {
         await createRole(name, draft.permissions);
-        message.success("Rôle créé.");
+        message.success(t("roleCreated"));
       }
       const fresh = await reload();
       const match = fresh.find((r) => r.name === name);
       setDraft(match ? { ...match } : null);
     } catch (err) {
-      message.error(err?.message || "Échec de l'enregistrement du rôle.");
+      message.error(err?.message || t("roleSaveFailed"));
     } finally {
       setSaving(false);
     }
@@ -95,24 +96,20 @@ export default function RolesView() {
   const onDelete = async (role) => {
     try {
       await deleteRole(role.id);
-      message.success("Rôle supprimé.");
+      message.success(t("roleDeleted"));
       if (draft?.id === role.id) setDraft(null);
       reload();
     } catch (err) {
-      message.error(err?.message || "Impossible de supprimer ce rôle.");
+      message.error(err?.message || t("roleDeleteFailed"));
     }
   };
 
   return (
     <div style={{ height: "100%", overflowY: "auto", padding: 24, maxWidth: 980, margin: "0 auto" }}>
       <Title level={3} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <SafetyCertificateOutlined /> Rôles &amp; permissions
+        <SafetyCertificateOutlined /> {t("rolesTitle")}
       </Title>
-      <Text type="secondary">
-        Les rôles intégrés (Owner, Admin, Editor, Viewer) ne sont pas
-        modifiables. Créez des rôles personnalisés pour adapter finement les
-        accès.
-      </Text>
+      <Text type="secondary">{t("rolesSubtitle")}</Text>
 
       <div style={{ display: "flex", gap: 24, marginTop: 20, flexWrap: "wrap" }}>
         {/* Role list */}
@@ -124,7 +121,7 @@ export default function RolesView() {
               onClick={() => setDraft({ ...NEW_ROLE })}
               style={{ marginBottom: 12 }}
             >
-              Nouveau rôle
+              {t("newRole")}
             </Button>
           )}
           {roles.map((r) => (
@@ -149,12 +146,12 @@ export default function RolesView() {
             >
               <span style={{ fontWeight: 600 }}>{r.name}</span>
               {r.is_system ? (
-                <Tag color={r.name === "Owner" ? "gold" : "default"}>système</Tag>
+                <Tag color={r.name === "Owner" ? "gold" : "default"}>{t("systemRole")}</Tag>
               ) : canManage ? (
                 <Popconfirm
-                  title="Supprimer ce rôle ?"
-                  okText="Supprimer"
-                  cancelText="Annuler"
+                  title={t("deleteRoleConfirm")}
+                  okText={t("delete")}
+                  cancelText={t("cancel")}
                   onConfirm={(e) => {
                     e?.stopPropagation?.();
                     onDelete(r);
@@ -168,13 +165,13 @@ export default function RolesView() {
               ) : null}
             </div>
           ))}
-          {!loading && roles.length === 0 && <Empty description="Aucun rôle" />}
+          {!loading && roles.length === 0 && <Empty description={t("noRole")} />}
         </div>
 
         {/* Editor */}
         <div style={{ flex: 1, minWidth: 320 }}>
           {!draft ? (
-            <Empty description="Sélectionnez un rôle ou créez-en un" />
+            <Empty description={t("selectRolePrompt")} />
           ) : (
             <div
               style={{
@@ -195,7 +192,7 @@ export default function RolesView() {
                   marginBottom: 6,
                 }}
               >
-                Nom du rôle
+                {t("roleNameLabel")}
               </label>
               <Input
                 value={draft.name}
@@ -246,12 +243,12 @@ export default function RolesView() {
                   onClick={onSave}
                   style={{ marginTop: 8 }}
                 >
-                  {draft.id ? "Enregistrer" : "Créer le rôle"}
+                  {draft.id ? t("save") : t("createRole")}
                 </Button>
               )}
               {draft.is_system && (
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  Ce rôle intégré ne peut pas être modifié.
+                  {t("roleImmutable")}
                 </Text>
               )}
             </div>

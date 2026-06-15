@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useSelector } from "react-redux";
+import { useTranslations } from "next-intl";
 import {
   Table,
   Select,
@@ -27,7 +27,7 @@ import {
 const { Title, Text } = Typography;
 
 export default function MembersView() {
-  const user = useSelector((s) => s.auth.user);
+  const t = useTranslations("team");
   const canManage = usePermission("members.manage");
   const canInvite = usePermission("members.invite");
 
@@ -66,17 +66,17 @@ export default function MembersView() {
   const onInvite = async () => {
     const target = email.trim();
     if (!target || !target.includes("@")) {
-      message.error("Saisissez une adresse e-mail valide.");
+      message.error(t("invalidEmail"));
       return;
     }
     setInviting(true);
     try {
       await inviteMember(target, roleId);
-      message.success(`Invitation envoyée à ${target}.`);
+      message.success(t("inviteSent", { email: target }));
       setEmail("");
       reload();
     } catch (err) {
-      message.error(err?.message || "Échec de l'invitation.");
+      message.error(err?.message || t("inviteFailed"));
     } finally {
       setInviting(false);
     }
@@ -85,49 +85,49 @@ export default function MembersView() {
   const onChangeRole = async (userId, newRoleId) => {
     try {
       await changeMemberRole(userId, newRoleId);
-      message.success("Rôle mis à jour.");
+      message.success(t("roleUpdated"));
       reload();
     } catch (err) {
-      message.error(err?.message || "Impossible de changer le rôle.");
+      message.error(err?.message || t("roleChangeFailed"));
     }
   };
 
   const onRemove = async (userId) => {
     try {
       await removeMember(userId);
-      message.success("Membre retiré.");
+      message.success(t("memberRemoved"));
       reload();
     } catch (err) {
-      message.error(err?.message || "Impossible de retirer ce membre.");
+      message.error(err?.message || t("removeMemberFailed"));
     }
   };
 
   const onRevoke = async (id) => {
     try {
       await revokeInvitation(id);
-      message.success("Invitation révoquée.");
+      message.success(t("inviteRevoked"));
       reload();
     } catch (err) {
-      message.error(err?.message || "Impossible de révoquer l'invitation.");
+      message.error(err?.message || t("revokeFailed"));
     }
   };
 
   const memberCols = [
     {
-      title: "Membre",
+      title: t("colMember"),
       dataIndex: "email",
       render: (_, m) => (
         <div>
           <div style={{ fontWeight: 600 }}>{m.full_name || m.email}</div>
           <Text type="secondary" style={{ fontSize: 12 }}>
             {m.email}
-            {m.is_self ? " (vous)" : ""}
+            {m.is_self ? ` ${t("you")}` : ""}
           </Text>
         </div>
       ),
     },
     {
-      title: "Rôle",
+      title: t("colRole"),
       dataIndex: "role_name",
       width: 200,
       render: (roleName, m) =>
@@ -150,9 +150,9 @@ export default function MembersView() {
       render: (_, m) =>
         canManage && !m.is_owner && !m.is_self ? (
           <Popconfirm
-            title="Retirer ce membre du workspace ?"
-            okText="Retirer"
-            cancelText="Annuler"
+            title={t("removeMemberConfirm")}
+            okText={t("remove")}
+            cancelText={t("cancel")}
             onConfirm={() => onRemove(m.user_id)}
           >
             <Button size="small" danger type="text" icon={<DeleteOutlined />} />
@@ -162,8 +162,8 @@ export default function MembersView() {
   ];
 
   const inviteCols = [
-    { title: "E-mail invité", dataIndex: "email" },
-    { title: "Rôle", dataIndex: "role_name", width: 160, render: (r) => <Tag>{r}</Tag> },
+    { title: t("colInviteEmail"), dataIndex: "email" },
+    { title: t("colRole"), dataIndex: "role_name", width: 160, render: (r) => <Tag>{r}</Tag> },
     {
       title: "",
       width: 90,
@@ -171,9 +171,9 @@ export default function MembersView() {
       render: (_, inv) =>
         canInvite ? (
           <Popconfirm
-            title="Révoquer cette invitation ?"
-            okText="Révoquer"
-            cancelText="Annuler"
+            title={t("revokeConfirm")}
+            okText={t("revoke")}
+            cancelText={t("cancel")}
             onConfirm={() => onRevoke(inv.id)}
           >
             <Button size="small" danger type="text" icon={<DeleteOutlined />} />
@@ -185,12 +185,9 @@ export default function MembersView() {
   return (
     <div style={{ height: "100%", overflowY: "auto", padding: 24, maxWidth: 880, margin: "0 auto" }}>
       <Title level={3} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <TeamOutlined /> Utilisateurs
+        <TeamOutlined /> {t("membersTitle")}
       </Title>
-      <Text type="secondary">
-        Invitez votre équipe à collaborer dans ce workspace. Chaque membre
-        partage les mêmes comptes connectés, publications et automatisations.
-      </Text>
+      <Text type="secondary">{t("membersSubtitle")}</Text>
 
       {canInvite && (
         <div
@@ -204,7 +201,7 @@ export default function MembersView() {
           <Input
             style={{ flex: 1, minWidth: 220 }}
             prefix={<MailOutlined />}
-            placeholder="collegue@exemple.com"
+            placeholder={t("invitePlaceholder")}
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             onPressEnter={onInvite}
@@ -214,10 +211,10 @@ export default function MembersView() {
             value={roleId}
             options={roleOptions}
             onChange={setRoleId}
-            placeholder="Rôle"
+            placeholder={t("colRole")}
           />
           <Button type="primary" loading={inviting} onClick={onInvite}>
-            Inviter
+            {t("invite")}
           </Button>
         </div>
       )}
@@ -235,7 +232,7 @@ export default function MembersView() {
       {invites.length > 0 && (
         <>
           <Title level={5} style={{ marginTop: 32 }}>
-            Invitations en attente
+            {t("pendingInvites")}
           </Title>
           <Table
             rowKey="id"

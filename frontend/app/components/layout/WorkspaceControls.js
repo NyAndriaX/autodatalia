@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useSelector, useDispatch } from "react-redux";
+import { useTranslations } from "next-intl";
 import { Dropdown, Popover, Badge, Button, Empty, message } from "antd";
 import {
   AppstoreOutlined,
@@ -29,6 +30,7 @@ import {
 export default function WorkspaceControls() {
   const dispatch = useDispatch();
   const isMobile = useIsMobile();
+  const t = useTranslations("team");
   const user = useSelector((s) => s.auth.user);
   const activeWsId = user?.workspace?.id;
 
@@ -67,9 +69,9 @@ export default function WorkspaceControls() {
     try {
       await switchWorkspace(id);
       await refreshWorkspaceData();
-      message.success("Workspace changé.");
+      message.success(t("workspaceSwitched"));
     } catch (e) {
-      message.error(e?.message || "Échec du changement de workspace.");
+      message.error(e?.message || t("switchFailed"));
     } finally {
       setBusy(false);
     }
@@ -81,9 +83,9 @@ export default function WorkspaceControls() {
       await acceptInvitation(id);
       await refreshWorkspaceData();
       await Promise.all([loadInvites(), loadWorkspaces()]);
-      message.success("Invitation acceptée.");
+      message.success(t("inviteAccepted"));
     } catch (e) {
-      message.error(e?.message || "Échec de l'acceptation.");
+      message.error(e?.message || t("acceptFailed"));
     } finally {
       setBusy(false);
     }
@@ -94,9 +96,9 @@ export default function WorkspaceControls() {
     try {
       await refuseInvitation(id);
       await loadInvites();
-      message.info("Invitation refusée.");
+      message.info(t("inviteRefused"));
     } catch (e) {
-      message.error(e?.message || "Échec du refus.");
+      message.error(e?.message || t("refuseFailed"));
     } finally {
       setBusy(false);
     }
@@ -123,7 +125,7 @@ export default function WorkspaceControls() {
       {invites.length === 0 ? (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description="Aucune invitation en attente"
+          description={t("noPendingInvites")}
         />
       ) : (
         invites.map((inv) => (
@@ -136,7 +138,7 @@ export default function WorkspaceControls() {
           >
             <div style={{ fontWeight: 600 }}>{inv.workspace_name}</div>
             <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 8 }}>
-              Rôle proposé : {inv.role_name}
+              {t("proposedRole", { role: inv.role_name })}
             </div>
             <div style={{ display: "flex", gap: 6 }}>
               <Button
@@ -146,14 +148,14 @@ export default function WorkspaceControls() {
                 loading={busy}
                 onClick={() => onAccept(inv.id)}
               >
-                Accepter
+                {t("accept")}
               </Button>
               <Button
                 size="small"
                 icon={<CloseOutlined />}
                 onClick={() => onRefuse(inv.id)}
               >
-                Refuser
+                {t("refuse")}
               </Button>
             </div>
           </div>
@@ -168,7 +170,7 @@ export default function WorkspaceControls() {
         <Button size="small" icon={<AppstoreOutlined />}>
           {!isMobile && (
             <span style={{ display: "inline-block", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "bottom" }}>
-              {activeWs?.name || "Workspace"}
+              {activeWs?.name || t("workspace")}
             </span>
           )}
           <DownOutlined style={{ fontSize: 10 }} />
@@ -179,10 +181,10 @@ export default function WorkspaceControls() {
         content={invitesContent}
         trigger="click"
         placement="bottomRight"
-        title="Invitations"
+        title={t("invitations")}
       >
         <Badge count={invites.length} size="small">
-          <Button size="small" icon={<MailOutlined />} aria-label="Invitations" />
+          <Button size="small" icon={<MailOutlined />} aria-label={t("invitations")} />
         </Badge>
       </Popover>
     </div>

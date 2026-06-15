@@ -35,6 +35,7 @@ export default function Sidebar() {
   const tSidebar = useTranslations("sidebar");
   const tCommon = useTranslations("common");
   const tCreation = useTranslations("creation");
+  const tTeam = useTranslations("team");
 
   // Items may carry a `perm`; the section is shown only with the items the
   // caller's workspace role grants. "Équipe & Accès" labels are literal (the
@@ -64,10 +65,10 @@ export default function Sidebar() {
       ],
     },
     {
-      title: "Équipe & Accès",
+      title: t("sectionTeam"),
       items: [
-        { key: "members", icon: <TeamOutlined />,                label: "Utilisateurs",       perm: "members.read" },
-        { key: "roles",   icon: <SafetyCertificateOutlined />,   label: "Rôles & permissions", perm: "roles.read"   },
+        { key: "members", icon: <TeamOutlined />,              label: tTeam("membersTitle"), perm: "members.read" },
+        { key: "roles",   icon: <SafetyCertificateOutlined />, label: tTeam("rolesTitle"),   perm: "roles.read"   },
       ],
     },
     {

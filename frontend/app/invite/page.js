@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Form, Input, Button, Alert, Typography, Spin } from "antd";
 import { LockOutlined, UserOutlined } from "@ant-design/icons";
 import { authService } from "../lib/authService";
@@ -10,6 +11,7 @@ const { Title, Text } = Typography;
 
 export default function InvitePage() {
   const router = useRouter();
+  const t = useTranslations("team");
   const [token, setToken] = useState("");
   const [preview, setPreview] = useState(null); // {email, workspace_name, role_name, needs_account}
   const [checking, setChecking] = useState(true);
@@ -20,10 +22,10 @@ export default function InvitePage() {
   // `next build` breaker — same pattern as reset-password).
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const t = params.get("token") || "";
-    setToken(t);
+    const tok = params.get("token") || "";
+    setToken(tok);
     (async () => {
-      const p = await authService.lookupInvite(t);
+      const p = await authService.lookupInvite(tok);
       setPreview(p);
       setChecking(false);
     })();
@@ -40,7 +42,7 @@ export default function InvitePage() {
       });
       router.push("/dashboard");
     } catch (err) {
-      setError(err?.message || "Cette invitation est invalide ou a expiré.");
+      setError(err?.message || t("inviteInvalidExpired"));
     } finally {
       setLoading(false);
     }
@@ -74,28 +76,28 @@ export default function InvitePage() {
       <Alert
         type="error"
         showIcon
-        message="Invitation invalide"
-        description="Ce lien d'invitation est invalide ou a expiré. Demandez une nouvelle invitation à votre administrateur."
+        message={t("invalidInviteTitle")}
+        description={t("invalidInviteDesc")}
         action={
           <Button size="small" onClick={() => router.push("/")}>
-            Accueil
+            {t("home")}
           </Button>
         }
       />,
     );
   }
 
-  // Existing account → can't be pulled into a second workspace (MVP). Steer to sign-in.
+  // Existing account → can't be pulled into a second workspace via the link.
   if (!preview.needs_account) {
     return wrap(
       <Alert
         type="info"
         showIcon
-        message="Vous avez déjà un compte"
-        description={`Un compte existe déjà pour ${preview.email}. Connectez-vous pour continuer.`}
+        message={t("alreadyAccountTitle")}
+        description={t("alreadyAccountDesc", { email: preview.email })}
         action={
           <Button type="primary" size="small" onClick={() => router.push("/")}>
-            Se connecter
+            {t("signIn")}
           </Button>
         }
       />,
@@ -106,11 +108,10 @@ export default function InvitePage() {
     <>
       <div style={{ textAlign: "center", marginBottom: 24 }}>
         <Title level={2} style={{ margin: 0, fontWeight: 800, letterSpacing: "-0.02em" }}>
-          Rejoindre {preview.workspace_name || "le workspace"}
+          {t("joinWorkspace", { workspace: preview.workspace_name || t("workspace") })}
         </Title>
         <Text type="secondary" style={{ display: "block", marginTop: 8 }}>
-          Vous avez été invité en tant que <b>{preview.role_name}</b> ({preview.email}).
-          Créez votre mot de passe pour rejoindre l'équipe.
+          {t("invitedAs", { role: preview.role_name, email: preview.email })}
         </Text>
       </div>
 
@@ -121,23 +122,23 @@ export default function InvitePage() {
       <Form layout="vertical" onFinish={onFinish} requiredMark={false}>
         <Form.Item
           name="name"
-          label="Votre nom"
-          rules={[{ required: true, message: "Indiquez votre nom." }]}
+          label={t("yourName")}
+          rules={[{ required: true, message: t("nameRequired") }]}
         >
-          <Input prefix={<UserOutlined />} placeholder="Jean Dupont" size="large" />
+          <Input prefix={<UserOutlined />} placeholder={t("namePlaceholder")} size="large" />
         </Form.Item>
         <Form.Item
           name="password"
-          label="Mot de passe"
+          label={t("password")}
           rules={[
-            { required: true, message: "Choisissez un mot de passe." },
-            { min: 8, message: "8 caractères minimum." },
+            { required: true, message: t("passwordRequired") },
+            { min: 8, message: t("passwordMin") },
           ]}
         >
           <Input.Password prefix={<LockOutlined />} placeholder="••••••••" size="large" />
         </Form.Item>
         <Button type="primary" htmlType="submit" loading={loading} block size="large">
-          Rejoindre le workspace
+          {t("joinButton")}
         </Button>
       </Form>
     </>,

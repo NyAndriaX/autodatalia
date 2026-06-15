@@ -339,7 +339,7 @@ export default function Topbar() {
                   background: "var(--bg-elevated)",
                 }}
               >
-                Navigation
+                {t("navigation")}
               </div>
               <ul className="max-h-72 overflow-y-auto py-1">
                 {navMatches.map((n) => (
@@ -353,7 +353,7 @@ export default function Topbar() {
                       <span className="flex-1 min-w-0">
                         <span className="block text-sm truncate" style={{ color: "var(--text-primary)" }}>{n.label}</span>
                       </span>
-                      <span className={`${badgeDraft} capitalize`}>Page</span>
+                      <span className={`${badgeDraft} capitalize`}>{t("pageResult")}</span>
                     </button>
                   </li>
                 ))}

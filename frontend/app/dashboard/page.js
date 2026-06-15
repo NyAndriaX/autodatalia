@@ -3,8 +3,9 @@ import { fadeIn } from "../lib/uiClasses";
 
 import { useRouter } from "next/navigation";
 import { useSelector, useDispatch } from "react-redux";
-import { setMobileNav } from "../store/uiSlice";
+import { setMobileNav, setActiveView } from "../store/uiSlice";
 import { useEffect } from "react";
+import { hasPermission } from "../lib/permissions";
 import { useIsMobile } from "../lib/useIsMobile";
 import Sidebar from "../components/layout/Sidebar";
 import Topbar from "../components/layout/Topbar";
@@ -34,6 +35,17 @@ export default function Home() {
       router.replace("/");
     }
   }, [user, authStatus, router]);
+
+  // If the active view needs a permission the current workspace's role doesn't
+  // grant (e.g. after switching to a workspace where you're only a member),
+  // fall back to the dashboard instead of showing an empty/forbidden screen.
+  useEffect(() => {
+    const VIEW_PERMISSION = { members: "members.read", roles: "roles.read" };
+    const needed = VIEW_PERMISSION[activeView];
+    if (user && needed && !hasPermission(user, needed)) {
+      dispatch(setActiveView("dashboard"));
+    }
+  }, [user, activeView, dispatch]);
 
   if (!user) {
     return (
