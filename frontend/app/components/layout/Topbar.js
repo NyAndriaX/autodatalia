@@ -475,8 +475,8 @@ export default function Topbar() {
           {resolved === "dark" ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
         </button>
 
-        {/* Workspace switcher + invitations inbox */}
-        {!isMobile && <WorkspaceControls />}
+        {/* Workspace switcher + invitations inbox (compact on mobile) */}
+        <WorkspaceControls />
 
         {/* Notifications / messages */}
         <div className="relative" ref={notifRef}>

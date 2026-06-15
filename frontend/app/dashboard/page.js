@@ -98,7 +98,11 @@ export default function Home() {
           height: "calc(100vh - var(--topbar-height))",
         }}
       >
-        {renderView()}
+        {/* Re-mount the active view when the workspace changes so it refetches
+            that workspace's data (members, roles, posts, settings…). */}
+        <div key={user?.workspace?.id ?? "ws"} style={{ height: "100%" }}>
+          {renderView()}
+        </div>
       </main>
     </div>
   );

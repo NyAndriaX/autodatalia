@@ -183,7 +183,7 @@ export default function MembersView() {
   ];
 
   return (
-    <div style={{ padding: 24, maxWidth: 880, margin: "0 auto" }}>
+    <div style={{ height: "100%", overflowY: "auto", padding: 24, maxWidth: 880, margin: "0 auto" }}>
       <Title level={3} style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <TeamOutlined /> Utilisateurs
       </Title>
@@ -228,6 +228,7 @@ export default function MembersView() {
         columns={memberCols}
         dataSource={members}
         pagination={false}
+        scroll={{ x: "max-content" }}
         style={{ marginTop: 16 }}
       />
 
@@ -241,6 +242,7 @@ export default function MembersView() {
             columns={inviteCols}
             dataSource={invites}
             pagination={false}
+            scroll={{ x: "max-content" }}
           />
         </>
       )}

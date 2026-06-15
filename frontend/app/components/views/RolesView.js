@@ -106,7 +106,7 @@ export default function RolesView() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 980, margin: "0 auto" }}>
+    <div style={{ height: "100%", overflowY: "auto", padding: 24, maxWidth: 980, margin: "0 auto" }}>
       <Title level={3} style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <SafetyCertificateOutlined /> Rôles &amp; permissions
       </Title>

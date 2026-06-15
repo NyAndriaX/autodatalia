@@ -575,7 +575,7 @@ export default function SettingsView() {
     { id:"plateformes", label:t("tabPlatforms"), icon:Plug,     badge: connectéCount > 0 ? `${connectéCount}/${totalProviders}` : null },
     { id:"fuseau",      label:t("tabTimezone"),  icon:Clock                                                                             },
     { id:"ia",          label:t("tabAiKeys"),    icon:KeyRound                                                                          },
-    { id:"telegram",    label:t("tabTelegram"),  icon:Send,     badge: telegramStatus?.configured ? "ok" : null                        },
+    { id:"telegram",    label:t("tabTelegram"),  icon:Send,     badge: null                                                            },
     { id:"marque",      label:t("tabBrandKit"),  icon:Palette                                                                           },
   ];
 
@@ -679,32 +679,8 @@ export default function SettingsView() {
       {/* ═ TELEGRAM ═════════════════════════════════════════════════════ */}
       {onglet === "telegram" && (
         <Section icon={Send} title={t("telegramSectionTitle")}>
-          {/* indicateurs de statut */}
-          <div className="mb-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {[
-              { label: t("telegramStatusBotToken"),      on: telegramStatus?.configured },
-              { label: t("telegramStatusDefaultChat"),   on: telegramStatus?.default_chat_configured },
-              { label: t("telegramStatusWebhookSecret"), on: telegramStatus?.webhook_secret_configured },
-            ].map(({ label, on }) => (
-              <div key={label} className="rounded-xl px-3 py-3 text-center"
-                style={{
-                  background: on ? "rgba(34,197,94,.08)"  : "rgba(239,68,68,.06)",
-                  border: `1px solid ${on ? "rgba(34,197,94,.2)" : "rgba(239,68,68,.15)"}`,
-                }}>
-                <span className="mx-auto mb-1.5 block h-2 w-2 rounded-full"
-                  style={{ background: on ? "var(--status-approved)" : "var(--status-error)" }} />
-                <p className="text-[11px] font-semibold"
-                  style={{ color: on ? "var(--status-approved)" : "var(--status-error)" }}>
-                  {label}
-                </p>
-                <p className="text-[10px] font-black"
-                  style={{ color: on ? "var(--status-approved)" : "var(--status-error)" }}>
-                  {on ? t("telegramStatusOk") : t("telegramStatusMissing")}
-                </p>
-              </div>
-            ))}
-          </div>
-
+          {/* The bot token / webhook secret are server-side deployment config —
+              not surfaced here. Users only manage their own chat id + test. */}
           <Champ label={t("telegramChatIdLabel")} name="telegramChatId" value={s.telegramChatId}
             onChange={update} placeholder={t("telegramChatIdPlaceholder")} />
 

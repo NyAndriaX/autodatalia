@@ -10,7 +10,11 @@ import {
   CloseOutlined,
   DownOutlined,
 } from "@ant-design/icons";
+import { useIsMobile } from "../../lib/useIsMobile";
 import { restoreSessionThunk } from "../../store/authThunks";
+import { loadMessagesThunk } from "../../store/searchThunks";
+import { loadScheduledPostsThunk } from "../../store/calendarThunks";
+import { clearNotifications } from "../../store/uiSlice";
 import {
   fetchMyWorkspaces,
   switchWorkspace,
@@ -24,6 +28,7 @@ import {
 // action so the active workspace + permissions update across the whole app.
 export default function WorkspaceControls() {
   const dispatch = useDispatch();
+  const isMobile = useIsMobile();
   const user = useSelector((s) => s.auth.user);
   const activeWsId = user?.workspace?.id;
 
@@ -46,14 +51,22 @@ export default function WorkspaceControls() {
     loadInvites();
   }, [loadInvites]);
 
-  const refreshUser = () => dispatch(restoreSessionThunk());
+  // After switching/joining a workspace, re-hydrate everything scoped to it:
+  // the user (role + permissions + active workspace), the calendar posts, and
+  // the activity feed. Stale cross-workspace notifications are cleared.
+  const refreshWorkspaceData = async () => {
+    dispatch(clearNotifications());
+    await dispatch(restoreSessionThunk());
+    dispatch(loadScheduledPostsThunk({ refresh: true }));
+    dispatch(loadMessagesThunk());
+  };
 
   const onSwitch = async (id) => {
     if (id === activeWsId || busy) return;
     setBusy(true);
     try {
       await switchWorkspace(id);
-      await refreshUser();
+      await refreshWorkspaceData();
       message.success("Workspace changé.");
     } catch (e) {
       message.error(e?.message || "Échec du changement de workspace.");
@@ -66,7 +79,7 @@ export default function WorkspaceControls() {
     setBusy(true);
     try {
       await acceptInvitation(id);
-      await refreshUser();
+      await refreshWorkspaceData();
       await Promise.all([loadInvites(), loadWorkspaces()]);
       message.success("Invitation acceptée.");
     } catch (e) {
@@ -153,9 +166,11 @@ export default function WorkspaceControls() {
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <Dropdown menu={wsMenu} trigger={["click"]} placement="bottomRight">
         <Button size="small" icon={<AppstoreOutlined />}>
-          <span style={{ maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {activeWs?.name || "Workspace"}
-          </span>
+          {!isMobile && (
+            <span style={{ display: "inline-block", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "bottom" }}>
+              {activeWs?.name || "Workspace"}
+            </span>
+          )}
           <DownOutlined style={{ fontSize: 10 }} />
         </Button>
       </Dropdown>
