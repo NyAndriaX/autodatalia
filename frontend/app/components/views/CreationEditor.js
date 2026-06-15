@@ -300,7 +300,7 @@ export default function CreationEditor() {
       {/* ═══ LEFT PANEL — Input & Controls ═══ */}
       <div
         className={`flex min-w-0 flex-col ${
-          isMobile ? "w-full" : "flex-1 overflow-hidden"
+          isMobile ? "w-full" : "flex-1 overflow-y-auto"
         }`}
         style={{ background: "var(--bg-primary)" }}
       >
@@ -413,11 +413,7 @@ export default function CreationEditor() {
         </div>
 
         {/* Content Editor Area */}
-        <div
-          className={`px-4 sm:px-6 py-5 ${
-            isMobile ? "" : "flex-1 min-h-0 overflow-y-auto"
-          }`}
-        >
+        <div className="px-4 sm:px-6 py-5 flex-1">
 
           {/* Template selector — only in template mode. No fade/slide, so the
               modes switch instantly like tabs. */}
