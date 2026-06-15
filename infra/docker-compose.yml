@@ -129,6 +129,9 @@ services:
         # rewrites that to the backend service internally (same-origin = no CORS
         # and the session cookie just works). Override only for special setups.
         - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-/api/backend}
+        # Rewrite destination — Next.js bakes this at BUILD time, so it must be
+        # a build arg (not just the runtime env below) or every API call 404s.
+        - INTERNAL_API_BASE_URL=${INTERNAL_API_BASE_URL:-http://caption-api:8000}
     container_name: datalia-frontend
     restart: always
     environment:
