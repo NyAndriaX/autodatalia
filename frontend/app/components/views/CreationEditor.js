@@ -6,7 +6,6 @@ import { btnPrimary, btnSecondary, btnGhost, inputField, fadeIn } from "../../li
 import TikTokOptionsPanel from "./TikTokOptionsPanel";
 import {
   setContent,
-  setPrompt,
   togglePlatform,
   setMode,
   setTemplate,
@@ -345,7 +344,7 @@ export default function CreationEditor() {
         </div>
 
         {/* Mode Selector */}
-        <div className="px-4 sm:px-6 py-4 shrink-0" style={{ borderBottom: "1px solid var(--border-default)" }}>
+        <div className="px-4 sm:px-6 py-5 shrink-0" style={{ borderBottom: "1px solid var(--border-default)" }}>
           <div className="flex gap-2 flex-wrap" role="tablist" aria-label={t("creationModeAria")}>
             {MODES.map((mode) => {
               const isActive = currentPost.mode === mode.id;
@@ -379,7 +378,7 @@ export default function CreationEditor() {
         </div>
 
         {/* Platform Toggles */}
-        <div className="px-4 sm:px-6 py-4 shrink-0" style={{ borderBottom: "1px solid var(--border-default)" }}>
+        <div className="px-4 sm:px-6 py-5 shrink-0" style={{ borderBottom: "1px solid var(--border-default)" }}>
           <p
             className="text-xs font-semibold uppercase tracking-wider mb-3"
             style={{ color: "var(--text-tertiary)" }}
@@ -420,11 +419,10 @@ export default function CreationEditor() {
           }`}
         >
 
-          {/* AI brief — drives generation. Template mode is driven by the
-              chosen template (no free-text box); free mode takes a prompt;
-              scratch mode skips AI and writes the post directly. */}
+          {/* Template selector — only in template mode. No fade/slide, so the
+              modes switch instantly like tabs. */}
           {currentPost.mode === "template" && (
-            <div className={`mb-5 ${fadeIn}`}>
+            <div className="mb-6">
               <label
                 htmlFor="template-select"
                 className="text-xs font-semibold uppercase tracking-wider mb-2 block"
@@ -448,33 +446,7 @@ export default function CreationEditor() {
             </div>
           )}
 
-          {currentPost.mode === "free" && (
-            <div className={`mb-5 ${fadeIn}`}>
-              <label
-                htmlFor="ai-brief"
-                className="text-xs font-semibold uppercase tracking-wider mb-2 block"
-                style={{ color: "var(--text-tertiary)" }}
-              >
-                {t("freePrompt")}
-              </label>
-              <textarea
-                id="ai-brief"
-                value={currentPost.prompt}
-                onChange={(e) => dispatch(setPrompt(e.target.value))}
-                placeholder={t("promptPlaceholder")}
-                className="w-full min-h-[120px] resize-none rounded-xl p-4 text-sm leading-relaxed"
-                style={{
-                  background: "var(--bg-tertiary)",
-                  border: "1px solid var(--border-default)",
-                  color: "var(--text-primary)",
-                  outline: "none",
-                  fontFamily: "inherit",
-                }}
-              />
-            </div>
-          )}
-
-          {/* Post content — the editable post / generation result */}
+          {/* Post content — a single editor; the mode sets the guidance text. */}
           <div className="relative">
             <label
               htmlFor="content-editor"
@@ -488,11 +460,13 @@ export default function CreationEditor() {
               value={currentPost.content}
               onChange={(e) => dispatch(setContent(e.target.value))}
               placeholder={
-                currentPost.mode === "scratch"
+                currentPost.mode === "free"
+                  ? t("promptPlaceholder")
+                  : currentPost.mode === "scratch"
                   ? t("placeholderScratch")
                   : t("postContentPlaceholder")
               }
-              className="w-full min-h-[200px] resize-none rounded-xl p-5 text-base leading-relaxed"
+              className="w-full min-h-[220px] resize-none rounded-xl p-5 text-base leading-relaxed"
               style={{
                 background: "var(--bg-tertiary)",
                 border: "1px solid var(--border-default)",
