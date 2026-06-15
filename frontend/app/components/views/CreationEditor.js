@@ -120,6 +120,16 @@ export default function CreationEditor() {
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
   const [generatingMediaKind, setGeneratingMediaKind] = useState(null);
 
+  // Auto-grow the content box instead of letting it scroll internally — the
+  // editor swaps this area per mode and an inner scrollbar there feels broken.
+  const contentRef = useRef(null);
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [currentPost.content]);
+
   // ─── AI media generation (image inline, video → /videos handoff) ──
   // Image gen still runs inline (fast, single call). Video gen hands
   // off to the AI Video page so the user picks model, mode (text /
@@ -453,6 +463,7 @@ export default function CreationEditor() {
             </label>
             <textarea
               id="content-editor"
+              ref={contentRef}
               value={currentPost.content}
               onChange={(e) => dispatch(setContent(e.target.value))}
               placeholder={
@@ -462,7 +473,7 @@ export default function CreationEditor() {
                   ? t("placeholderScratch")
                   : t("postContentPlaceholder")
               }
-              className="w-full min-h-[220px] resize-none rounded-xl p-5 text-base leading-relaxed"
+              className="w-full min-h-[220px] resize-none overflow-hidden rounded-xl p-5 text-base leading-relaxed"
               style={{
                 background: "var(--bg-tertiary)",
                 border: "1px solid var(--border-default)",
