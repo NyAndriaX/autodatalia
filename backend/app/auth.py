@@ -1,9 +1,15 @@
 """Authentication logic using JWT and MariaDB."""
 
+import hashlib
 import hmac
+import logging
 import os
+import secrets
+import smtplib
+import ssl
 import threading
 import time
+from email.message import EmailMessage
 from typing import Any
 
 import jwt
@@ -14,12 +20,18 @@ from .config import settings
 from .db import (
     count_users,
     create_user,
+    delete_collection_document,
+    get_collection_document,
     get_user_by_email,
     get_user_by_id,
+    update_user_password,
+    upsert_collection_document,
     verify_password as _db_verify_password,
     get_password_hash as _db_get_password_hash,
 )
 from .runtime_config import set_active_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -71,6 +83,20 @@ class RegisterRequest(BaseModel):
     email: str
     password: str
     name: str = ""
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
 
 
 class AuthResponse(BaseModel):
@@ -223,124 +249,50 @@ def require_token(request: Request) -> int:
         raise HTTPException(status_code=401, detail="Invalid token.")
 
 
-class _RegistrationClosed(Exception):
-    """Raised inside the registration transaction when a user already exists."""
-
-
-class _EmailTaken(Exception):
-    """Raised inside the registration transaction on a duplicate email."""
-
-
-# Named advisory lock that serialises the first-user/admin bootstrap decision.
-# GET_LOCK is process-/connection-agnostic and deadlock-free (unlike a
-# FOR-UPDATE gap lock on the empty users range, which deadlocks contenders),
-# so concurrent registrations queue cleanly and only the first one inserts.
-_REGISTER_LOCK_NAME = "datalia_register_first_user"
-_REGISTER_LOCK_TIMEOUT_SECONDS = 10
-
-
-def _register_first_user_atomic(
-    email: str, password_hash: str, full_name: str
-) -> int:
-    """Create the first (admin) user under a serialising advisory lock.
-
-    Closes the first-user race: two concurrent POST /auth/register could both
-    read count_users()==0 and both become admin. We take a named advisory lock
-    (``GET_LOCK``), re-check the count while holding it, insert if still zero,
-    and release. The second contender waits on the lock, then sees count > 0
-    and is rejected with a clean 403 (no second admin is ever created).
-
-    Note on Google sign-in: the FIRST user (whoever they are) becomes admin and
-    closes open registration — this is the intended single-admin bootstrap.
-    A Google-created first user has no password_hash, so they sign in via Google
-    only; that is by design, not a lockout (additional members are provisioned
-    via Google sign-in, see CLAUDE.md). Password self-registration is a
-    bootstrap-only path for the very first admin.
-    """
-    from .db import _connect  # local import: only auth needs the raw conn here
-
-    conn = _connect()  # autocommit=True
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT GET_LOCK(%s, %s) AS got",
-            (_REGISTER_LOCK_NAME, _REGISTER_LOCK_TIMEOUT_SECONDS),
-        )
-        got = (cur.fetchone() or {}).get("got")
-        if got != 1:
-            # Couldn't acquire the lock in time — fail closed rather than risk
-            # a second admin. The client can retry.
-            raise HTTPException(
-                status_code=503,
-                detail="Registration is busy. Please retry in a moment.",
-            )
-        try:
-            cur.execute("SELECT COUNT(*) AS n FROM users")
-            existing = int((cur.fetchone() or {}).get("n") or 0)
-            if existing > 0:
-                raise _RegistrationClosed()
-            # Defensive duplicate-email check (UNIQUE index is the real guard).
-            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
-            if cur.fetchone():
-                raise _EmailTaken()
-            cur.execute(
-                "INSERT INTO users (email, password_hash, full_name, role) "
-                "VALUES (%s, %s, %s, %s)",
-                (email, password_hash, full_name, "admin"),
-            )
-            return int(cur.lastrowid)
-        finally:
-            try:
-                cur.execute("SELECT RELEASE_LOCK(%s)", (_REGISTER_LOCK_NAME,))
-                cur.fetchall()
-            except Exception:
-                pass
-    finally:
-        conn.close()
-
-
 @router.post("/register", response_model=AuthResponse)
 async def register(
     req: RegisterRequest, response: Response, request: Request
 ) -> dict[str, Any]:
+    """Open self-registration for the internal team — no admin tier.
+
+    The first account always succeeds so a fresh instance can be bootstrapped;
+    after that, sign-ups are allowed only while ALLOW_OPEN_REGISTRATION is on.
+    Everyone is created as a plain ``member``. The UNIQUE(email) index is the
+    real guard against duplicates, so no advisory lock is needed.
+    """
     rate_key = _auth_rate_limit_check("register", request, req.email)
-    # Reject the obvious closed/duplicate cases early (cheap, no lock) — the
-    # authoritative, race-free decision happens inside the locked transaction.
-    if count_users() > 0:
+
+    if count_users() > 0 and not settings.allow_open_registration:
         _auth_rate_limit_record_failure(rate_key)
-        raise HTTPException(
-            status_code=403,
-            detail="Registration is closed after the first admin user.",
-        )
+        raise HTTPException(status_code=403, detail="Registration is closed.")
+
     if get_user_by_email(req.email):
         _auth_rate_limit_record_failure(rate_key)
         raise HTTPException(status_code=400, detail="Email already registered.")
 
     password_hash = get_password_hash(req.password)
     try:
-        user_id = _register_first_user_atomic(req.email, password_hash, req.name)
-    except _RegistrationClosed:
-        _auth_rate_limit_record_failure(rate_key)
-        raise HTTPException(
-            status_code=403,
-            detail="Registration is closed after the first admin user.",
-        )
-    except _EmailTaken:
-        _auth_rate_limit_record_failure(rate_key)
-        raise HTTPException(status_code=400, detail="Email already registered.")
+        user_id = create_user(req.email, password_hash, req.name, role="member")
+    except Exception:
+        # A duplicate that slipped past the check above under a race trips the
+        # UNIQUE(email) index — surface it as a clean 400 instead of a 500.
+        if get_user_by_email(req.email):
+            _auth_rate_limit_record_failure(rate_key)
+            raise HTTPException(status_code=400, detail="Email already registered.")
+        raise
 
     user = get_user_by_id(user_id)
-
     token = create_jwt_token(user_id)
     _set_session_cookie(response, token)
     _auth_rate_limit_reset(rate_key)
     return {
         "user": _user_payload(
-            user or {
+            user
+            or {
                 "id": user_id,
                 "email": req.email,
                 "full_name": req.name,
-                "role": "admin",
+                "role": "member",
             }
         )
     }
@@ -388,3 +340,151 @@ async def get_me(user_id: int = Depends(require_token)) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="User not found.")
 
     return _user_payload(user)
+
+
+# --- Password management ---------------------------------------------------
+
+_PASSWORD_RESET_COLLECTION = "password_resets"
+_PASSWORD_RESET_SCOPE = 0  # system/global doc scope (not a real user)
+_PASSWORD_RESET_TTL_SECONDS = 3600  # reset links are valid for one hour
+
+
+def _hash_reset_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _send_email(to_email: str, subject: str, body: str) -> bool:
+    """Send a plain-text email via SMTP when configured.
+
+    Returns False when no SMTP_HOST is set — the caller then logs the link as
+    an internal-tool fallback rather than failing the request.
+    """
+    host = os.getenv("SMTP_HOST", "").strip()
+    if not host:
+        return False
+    port = int(os.getenv("SMTP_PORT", "587") or "587")
+    user = os.getenv("SMTP_USER", "").strip()
+    password = os.getenv("SMTP_PASSWORD", "")
+    sender = os.getenv("SMTP_FROM", "").strip() or user or "no-reply@datalia.app"
+    use_tls = os.getenv("SMTP_USE_TLS", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = to_email
+    msg.set_content(body)
+
+    with smtplib.SMTP(host, port, timeout=15) as smtp:
+        if use_tls:
+            smtp.starttls(context=ssl.create_default_context())
+        if user:
+            smtp.login(user, password)
+        smtp.send_message(msg)
+    return True
+
+
+@router.post("/change-password", status_code=200)
+async def change_password(
+    req: ChangePasswordRequest, user_id: int = Depends(require_token)
+) -> dict[str, Any]:
+    """Self-service password change for the signed-in user."""
+    if user_id <= 0:
+        raise HTTPException(status_code=401, detail="Not signed in.")
+    user = get_user_by_id(user_id)
+    if not user or not user.get("password_hash"):
+        raise HTTPException(status_code=401, detail="Not signed in.")
+    if not verify_password(req.current_password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    update_user_password(user_id, get_password_hash(req.new_password))
+    return {"ok": True}
+
+
+@router.post("/forgot-password", status_code=200)
+async def forgot_password(
+    req: ForgotPasswordRequest, request: Request
+) -> dict[str, Any]:
+    """Start a password reset.
+
+    Always returns 200 and never reveals whether an address has an account.
+    Emails a one-hour reset link; if no SMTP is configured the link is logged
+    so an operator can deliver it manually (internal-tool fallback).
+    """
+    rate_key = _auth_rate_limit_check("forgot", request, req.email)
+    email = (req.email or "").strip()
+    user = get_user_by_email(email) if email else None
+    if user and user.get("id"):
+        token = secrets.token_urlsafe(32)
+        upsert_collection_document(
+            _PASSWORD_RESET_COLLECTION,
+            _hash_reset_token(token),
+            {
+                "user_id": int(user["id"]),
+                "email": email,
+                "expires_at": time.time() + _PASSWORD_RESET_TTL_SECONDS,
+            },
+            user_id=_PASSWORD_RESET_SCOPE,
+        )
+        base = os.getenv("PUBLIC_APP_URL", "").strip().rstrip("/")
+        link = f"{base}/reset-password?token={token}"
+        body = (
+            "You requested a password reset for your Datalia account.\n\n"
+            f"Open this link to choose a new password (valid one hour):\n{link}\n\n"
+            "If you didn't request this, you can safely ignore this email."
+        )
+        try:
+            if not _send_email(email, "Reset your Datalia password", body):
+                logger.warning(
+                    "Password reset requested for %s but no SMTP is configured. "
+                    "Deliver this link manually: %s",
+                    email,
+                    link,
+                )
+        except Exception:
+            logger.exception("Failed to send password-reset email to %s", email)
+    _auth_rate_limit_reset(rate_key)
+    return {"ok": True}
+
+
+@router.post("/reset-password", response_model=AuthResponse)
+async def reset_password(
+    req: ResetPasswordRequest, response: Response, request: Request
+) -> dict[str, Any]:
+    """Complete a password reset using the token from the emailed link.
+
+    On success the user is signed in with their new password.
+    """
+    rate_key = _auth_rate_limit_check("reset", request, (req.token or "")[:16])
+    token = (req.token or "").strip()
+    token_hash = _hash_reset_token(token) if token else ""
+    record = (
+        get_collection_document(
+            _PASSWORD_RESET_COLLECTION, token_hash, user_id=_PASSWORD_RESET_SCOPE
+        )
+        if token_hash
+        else None
+    )
+    expired = not record or float(record.get("expires_at") or 0) < time.time()
+    user = (
+        get_user_by_id(int(record["user_id"]))
+        if record and record.get("user_id")
+        else None
+    )
+    if expired or not user:
+        if token_hash:
+            delete_collection_document(
+                _PASSWORD_RESET_COLLECTION, token_hash, user_id=_PASSWORD_RESET_SCOPE
+            )
+        _auth_rate_limit_record_failure(rate_key)
+        raise HTTPException(
+            status_code=400, detail="This reset link is invalid or has expired."
+        )
+
+    update_user_password(int(user["id"]), get_password_hash(req.new_password))
+    delete_collection_document(
+        _PASSWORD_RESET_COLLECTION, token_hash, user_id=_PASSWORD_RESET_SCOPE
+    )
+
+    token_jwt = create_jwt_token(int(user["id"]))
+    _set_session_cookie(response, token_jwt)
+    _auth_rate_limit_reset(rate_key)
+    return {"user": _user_payload(user)}

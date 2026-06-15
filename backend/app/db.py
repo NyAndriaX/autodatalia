@@ -238,7 +238,8 @@ def create_user(
     full_name: str | None = None,
     role: str | None = None,
 ) -> int:
-    assigned_role = role or ("admin" if count_users() == 0 else "member")
+    # Flat internal tool — no admin tier. Everyone is a plain "member".
+    assigned_role = role or "member"
     conn = _connect()
     try:
         cur = conn.cursor()
@@ -247,6 +248,24 @@ def create_user(
             (email, password_hash, full_name, assigned_role),
         )
         return int(cur.lastrowid)
+    finally:
+        conn.close()
+
+
+def update_user_password(user_id: int, password_hash: str) -> bool:
+    """Set a user's password hash. Returns True if a row was updated.
+
+    Used by the self-service "change password" flow and by the
+    forgot/reset-password flow once a reset token has been validated.
+    """
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE users SET password_hash = %s WHERE id = %s",
+            (password_hash, int(user_id)),
+        )
+        return cur.rowcount > 0
     finally:
         conn.close()
 

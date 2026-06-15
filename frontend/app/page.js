@@ -577,6 +577,15 @@ function AuthPanel({ isDark, dispatch, resolved }) {
                 />
               </Form.Item>
 
+              <div style={{ textAlign: "right", marginTop: -12, marginBottom: 16 }}>
+                <a
+                  href="/forgot-password"
+                  style={{ color: "#1d3fbe", fontSize: 13, fontWeight: 500 }}
+                >
+                  Forgot password?
+                </a>
+              </div>
+
               <Button
                 type="primary"
                 htmlType="submit"

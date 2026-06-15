@@ -53,4 +53,39 @@ export const authService = {
       if (err?.status !== 401) throw err;
     }
   },
+
+  async changePassword({ currentPassword, newPassword } = {}) {
+    if (!config.apiBaseUrl) {
+      throw new Error("Backend not configured.");
+    }
+    return apiFetch("/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    });
+  },
+
+  async forgotPassword({ email } = {}) {
+    if (!config.apiBaseUrl) {
+      throw new Error("Backend not configured.");
+    }
+    return apiFetch("/auth/forgot-password", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+  },
+
+  async resetPassword({ token, newPassword } = {}) {
+    if (!config.apiBaseUrl) {
+      throw new Error("Backend not configured.");
+    }
+    return normalizeUser(
+      await apiFetch("/auth/reset-password", {
+        method: "POST",
+        body: JSON.stringify({ token, new_password: newPassword }),
+      }),
+    );
+  },
 };
