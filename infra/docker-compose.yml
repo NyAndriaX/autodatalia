@@ -62,6 +62,7 @@ services:
       DATALIA_DEFAULT_TZ: ${DATALIA_DEFAULT_TZ:-Europe/Paris}
       BACKEND_AUTH_TOKEN: ${BACKEND_AUTH_TOKEN:-}
       ALLOW_OPEN_AUTH: ${ALLOW_OPEN_AUTH:-true}
+      ALLOW_OPEN_REGISTRATION: ${ALLOW_OPEN_REGISTRATION:-true}
       TUNNEL_ENABLED: ${TUNNEL_ENABLED:-false}
       NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-}
       NGROK_DOMAIN: ${NGROK_DOMAIN:-}
@@ -77,8 +78,16 @@ services:
       TIKTOK_SCOPES: ${TIKTOK_SCOPES:-user.info.basic,video.upload}
       LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
       LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # Password-reset email (optional). With no SMTP_HOST set, the reset link
+      # is written to the logs instead of emailed — fine for internal onboarding.
+      # PUBLIC_APP_URL is the frontend origin used to build the reset link.
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_DEFAULT_CHAT_ID: ${TELEGRAM_DEFAULT_CHAT_ID:-}
       TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}

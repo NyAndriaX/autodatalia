@@ -116,19 +116,9 @@ PROVIDERS: dict[str, ProviderSpec] = {
             # Will be added once the LinkedIn review clears.
         ),
     ),
-    "google": ProviderSpec(
-        id="google",
-        label="Google (user sign-in)",
-        client_id_env="GOOGLE_CLIENT_ID",
-        client_secret_env="GOOGLE_CLIENT_SECRET",
-        authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
-        token_url="https://oauth2.googleapis.com/token",
-        scopes=("openid", "email", "profile"),
-        extra_authorize_params=(
-            ("access_type", "offline"),
-            ("prompt", "consent"),
-        ),
-    ),
+    # Google sign-in removed: the app uses open email/password self-registration
+    # (no admin tier), so no Google OAuth login is needed. (This is unrelated to
+    # the Google AI / Gemini image generation, which is configured separately.)
 }
 
 
@@ -231,8 +221,7 @@ async def oauth_status(user_id: int = Depends(require_token)) -> dict[str, Any]:
 # Providers whose tokens are PER-USER posting credentials. These MUST be
 # tied to a real authenticated tenant (user_id > 0) so one tenant's social
 # tokens never land in the shared/global scope where every other tenant
-# could publish with them. `google` is excluded because it is the sign-in
-# flow itself (a logged-out user legitimately starts it to authenticate).
+# could publish with them.
 _PER_USER_TOKEN_PROVIDERS = {"meta", "tiktok", "linkedin"}
 
 
@@ -396,23 +385,6 @@ async def _fetch_tiktok_user_info(access_token: str, granted_scope: str = "") ->
     if resp.status_code >= 400:
         return {}
     return (resp.json().get("data") or {}).get("user") or {}
-
-
-async def _fetch_google_user_info(access_token: str) -> dict[str, Any]:
-    """Fetch user profile from Google using the access token."""
-    if not access_token:
-        return {}
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(
-                "https://www.googleapis.com/oauth2/v2/userinfo",
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-    except Exception:
-        return {}
-    if resp.status_code >= 400:
-        return {}
-    return resp.json()
 
 
 async def _fetch_linkedin_user_info(access_token: str) -> dict[str, Any]:
@@ -782,34 +754,6 @@ async def oauth_callback(
         if long_lived.get("access_token"):
             data = {**data, **long_lived}
             access_token = long_lived["access_token"]
-
-    # For Google auth, we use it strictly for user authentication, not for posting.
-    if provider_id == "google":
-        from .db import get_user_by_email, create_user
-        from .auth import create_jwt_token, _set_session_cookie
-
-        user_info = await _fetch_google_user_info(access_token)
-        email = user_info.get("email")
-        name = user_info.get("name", "")
-
-        if not email:
-            return HTMLResponse(
-                _popup_close_html(provider_id, False, "Google response missing email.")
-            )
-
-        user = get_user_by_email(email)
-        if not user:
-            user_id = create_user(email=email, password_hash=None, full_name=name)
-        else:
-            user_id = user["id"]
-
-        token = create_jwt_token(user_id)
-        response = HTMLResponse(
-            _popup_close_html(provider_id, True, "Google connected.")
-        )
-        _set_session_cookie(response, token)
-
-        return response
 
     # TikTok-specific: the token-exchange response includes `open_id` but
     # not the user's display name or avatar. Fetch those right after the

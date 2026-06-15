@@ -28,6 +28,10 @@ class Settings(BaseModel):
     cors_allow_origins: list[str]
     backend_auth_token: str
     allow_open_auth: bool
+    # Open self-registration: anyone with the URL can create an account.
+    # Defaults ON (internal team tool, no admin tier). Flip to false to close
+    # sign-ups once the team is onboarded.
+    allow_open_registration: bool
     auth_rate_limit_attempts: int
     auth_rate_limit_window_seconds: int
     tunnel_enabled: bool
@@ -101,6 +105,16 @@ def _resolve_allow_open_auth() -> bool:
     if raw:
         return raw in {"1", "true", "yes", "on"}
     return not _is_production_env()
+
+
+def _resolve_allow_open_registration() -> bool:
+    # Internal team tool with no admin tier: sign-ups are open by default so
+    # the team (and a TikTok reviewer) can create their own accounts. Set
+    # ALLOW_OPEN_REGISTRATION=false to close registration after onboarding.
+    raw = os.getenv("ALLOW_OPEN_REGISTRATION", "").strip().lower()
+    if raw:
+        return raw in {"1", "true", "yes", "on"}
+    return True
 
 
 def _validate_security_settings(settings_obj: Settings) -> None:
@@ -266,6 +280,7 @@ def load_settings() -> Settings:
         # Anonymous access is a local-dev convenience only. Production
         # closes it by default unless ALLOW_OPEN_AUTH explicitly re-enables it.
         allow_open_auth=_resolve_allow_open_auth(),
+        allow_open_registration=_resolve_allow_open_registration(),
         auth_rate_limit_attempts=max(
             1, int(os.getenv("AUTH_RATE_LIMIT_ATTEMPTS", "10"))
         ),

@@ -102,6 +102,7 @@ services:
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS}
       BACKEND_AUTH_TOKEN: ${BACKEND_AUTH_TOKEN}
       ALLOW_OPEN_AUTH: ${ALLOW_OPEN_AUTH:-false}
+      ALLOW_OPEN_REGISTRATION: ${ALLOW_OPEN_REGISTRATION:-true}
       AUTH_RATE_LIMIT_ATTEMPTS: ${AUTH_RATE_LIMIT_ATTEMPTS:-10}
       AUTH_RATE_LIMIT_WINDOW_SECONDS: ${AUTH_RATE_LIMIT_WINDOW_SECONDS:-300}
       TUNNEL_ENABLED: "false"
@@ -119,8 +120,16 @@ services:
       LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
       LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
       LINKEDIN_API_VERSION: ${LINKEDIN_API_VERSION:-202603}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      # Password-reset email (optional). With no SMTP_HOST set, the reset link is
+      # logged instead of emailed. PUBLIC_APP_URL is the frontend origin used to
+      # build the reset link (e.g. https://app.yourdomain).
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
       JWT_SECRET: ${JWT_SECRET:-}
       ENV: production
       DATABASE_URL: ${DATABASE_URL:-}
