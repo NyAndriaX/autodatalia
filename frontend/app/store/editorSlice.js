@@ -3,6 +3,9 @@ import { createSlice } from "@reduxjs/toolkit";
 const initialState = {
   currentPost: {
     content: "",
+    // The AI brief that drives generation, kept separate from `content` (the
+    // editable post / generation result) so the two roles don't conflate.
+    prompt: "",
     platforms: {
       facebook: true,
       instagram: true,
@@ -49,6 +52,9 @@ const editorSlice = createSlice({
   reducers: {
     setContent: (state, action) => {
       state.currentPost.content = action.payload;
+    },
+    setPrompt: (state, action) => {
+      state.currentPost.prompt = action.payload;
     },
     togglePlatform: (state, action) => {
       const platform = action.payload;
@@ -129,6 +135,7 @@ const editorSlice = createSlice({
 
 export const {
   setContent,
+  setPrompt,
   togglePlatform,
   setMode,
   setTemplate,

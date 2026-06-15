@@ -68,7 +68,12 @@ export function generateContentThunk(force = false, count = 1) {
     );
 
     const args = {
-      prompt: currentPostRefreshed.content,
+      // Free mode uses the dedicated brief; template mode is driven by the
+      // template (empty brief is fine — the backend supplies a default);
+      // scratch mode falls back to the written content.
+      prompt:
+        currentPostRefreshed.prompt ||
+        (currentPostRefreshed.mode === "scratch" ? currentPostRefreshed.content : ""),
       platforms: currentPostRefreshed.platforms,
       template: currentPostRefreshed.template,
       tone: currentPostRefreshed.tone || null,

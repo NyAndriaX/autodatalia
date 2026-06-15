@@ -6,6 +6,7 @@ import { btnPrimary, btnSecondary, btnGhost, inputField, fadeIn } from "../../li
 import TikTokOptionsPanel from "./TikTokOptionsPanel";
 import {
   setContent,
+  setPrompt,
   togglePlatform,
   setMode,
   setTemplate,
@@ -419,9 +420,11 @@ export default function CreationEditor() {
           }`}
         >
 
-          {/* Template selector — only visible in template mode */}
+          {/* AI brief — drives generation. Template mode is driven by the
+              chosen template (no free-text box); free mode takes a prompt;
+              scratch mode skips AI and writes the post directly. */}
           {currentPost.mode === "template" && (
-            <div className={`mb-4 ${fadeIn}`}>
+            <div className={`mb-5 ${fadeIn}`}>
               <label
                 htmlFor="template-select"
                 className="text-xs font-semibold uppercase tracking-wider mb-2 block"
@@ -431,7 +434,7 @@ export default function CreationEditor() {
               </label>
               <select
                 id="template-select"
-                className={`${inputField} cursor-pointer`}
+                className={`${inputField} cursor-pointer w-full`}
                 value={currentPost.template}
                 onChange={(e) => dispatch(setTemplate(e.target.value))}
               >
@@ -445,21 +448,51 @@ export default function CreationEditor() {
             </div>
           )}
 
-          {/* Text editor */}
+          {currentPost.mode === "free" && (
+            <div className={`mb-5 ${fadeIn}`}>
+              <label
+                htmlFor="ai-brief"
+                className="text-xs font-semibold uppercase tracking-wider mb-2 block"
+                style={{ color: "var(--text-tertiary)" }}
+              >
+                {t("freePrompt")}
+              </label>
+              <textarea
+                id="ai-brief"
+                value={currentPost.prompt}
+                onChange={(e) => dispatch(setPrompt(e.target.value))}
+                placeholder={t("promptPlaceholder")}
+                className="w-full min-h-[120px] resize-none rounded-xl p-4 text-sm leading-relaxed"
+                style={{
+                  background: "var(--bg-tertiary)",
+                  border: "1px solid var(--border-default)",
+                  color: "var(--text-primary)",
+                  outline: "none",
+                  fontFamily: "inherit",
+                }}
+              />
+            </div>
+          )}
+
+          {/* Post content — the editable post / generation result */}
           <div className="relative">
-            <label htmlFor="content-editor" className="sr-only">{t("postContent")}</label>
+            <label
+              htmlFor="content-editor"
+              className="text-xs font-semibold uppercase tracking-wider mb-2 block"
+              style={{ color: "var(--text-tertiary)" }}
+            >
+              {t("postContent")}
+            </label>
             <textarea
               id="content-editor"
               value={currentPost.content}
               onChange={(e) => dispatch(setContent(e.target.value))}
               placeholder={
-                currentPost.mode === "free"
-                  ? t("placeholderFree")
-                  : currentPost.mode === "template"
-                  ? t("placeholderTemplate")
-                  : t("placeholderScratch")
+                currentPost.mode === "scratch"
+                  ? t("placeholderScratch")
+                  : t("postContentPlaceholder")
               }
-              className="w-full min-h-[260px] resize-none rounded-xl p-5 text-base leading-relaxed"
+              className="w-full min-h-[200px] resize-none rounded-xl p-5 text-base leading-relaxed"
               style={{
                 background: "var(--bg-tertiary)",
                 border: "1px solid var(--border-default)",
