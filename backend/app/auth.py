@@ -195,11 +195,29 @@ def create_jwt_token(user_id: int) -> str:
 
 
 def _user_payload(user: dict[str, Any]) -> dict[str, Any]:
+    # Include the caller's active workspace + effective permissions so the
+    # frontend can gate the Team & Access UI by permission string. Resolved
+    # live (cheap) so a role change is reflected on the next /auth/me.
+    uid = int(user["id"])
+    workspace_id = workspaces.get_active_workspace_id(uid)
+    permissions: list[str] = []
+    workspace = None
+    if workspace_id:
+        permissions = sorted(workspaces.permissions_for(uid, workspace_id))
+        ws = workspaces.get_workspace(workspace_id) or {}
+        workspace = {
+            "id": workspace_id,
+            "name": ws.get("name"),
+            "role": workspaces.role_name_for(uid, workspace_id),
+            "is_owner": workspaces.is_owner(workspace_id, uid),
+        }
     return {
         "id": str(user["id"]),
         "email": user["email"],
         "name": user.get("full_name") or "",
         "role": user.get("role") or "member",
+        "permissions": permissions,
+        "workspace": workspace,
     }
 
 

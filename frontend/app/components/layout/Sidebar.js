@@ -19,7 +19,10 @@ import {
   ThunderboltOutlined,
   VideoCameraOutlined,
   PlusOutlined,
+  TeamOutlined,
+  SafetyCertificateOutlined,
 } from "@ant-design/icons";
+import { hasPermission } from "../../lib/permissions";
 
 export default function Sidebar() {
   const dispatch = useDispatch();
@@ -33,7 +36,10 @@ export default function Sidebar() {
   const tCommon = useTranslations("common");
   const tCreation = useTranslations("creation");
 
-  const NAV_SECTIONS = [
+  // Items may carry a `perm`; the section is shown only with the items the
+  // caller's workspace role grants. "Équipe & Accès" labels are literal (the
+  // i18n bundles can adopt them later) so a missing key never breaks the nav.
+  const RAW_NAV_SECTIONS = [
     {
       title: t("sectionContent"),
       items: [
@@ -58,12 +64,27 @@ export default function Sidebar() {
       ],
     },
     {
+      title: "Équipe & Accès",
+      items: [
+        { key: "members", icon: <TeamOutlined />,                label: "Utilisateurs",       perm: "members.read" },
+        { key: "roles",   icon: <SafetyCertificateOutlined />,   label: "Rôles & permissions", perm: "roles.read"   },
+      ],
+    },
+    {
       title: t("sectionAccount"),
       items: [
         { key: "settings", icon: <SettingOutlined />, label: tCommon("settings") },
       ],
     },
   ];
+
+  // Drop items the role doesn't grant, then drop now-empty sections.
+  const NAV_SECTIONS = RAW_NAV_SECTIONS
+    .map((s) => ({
+      ...s,
+      items: s.items.filter((it) => !it.perm || hasPermission(user, it.perm)),
+    }))
+    .filter((s) => s.items.length > 0);
 
   const NAV_ITEMS_FLAT = NAV_SECTIONS.flatMap((s) => s.items);
 

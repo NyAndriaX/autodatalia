@@ -17,6 +17,8 @@ import SettingsView from "../components/views/SettingsView";
 import DashboardView from "../components/views/DashboardView";
 import CreditsView from "../components/views/CreditsView";
 import VideoJobsView from "../components/views/VideoJobsView";
+import MembersView from "../components/views/MembersView";
+import RolesView from "../components/views/RolesView";
 
 export default function Home() {
   const dispatch = useDispatch();
@@ -61,6 +63,10 @@ export default function Home() {
         return <CreditsView />;
       case "settings":
         return <SettingsView />;
+      case "members":
+        return <MembersView />;
+      case "roles":
+        return <RolesView />;
       default:
         return <DashboardView />;
     }

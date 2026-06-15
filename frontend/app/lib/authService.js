@@ -6,7 +6,11 @@ function delay(ms = 150) {
 }
 
 function normalizeUser(data) {
-  return data?.user || data || null;
+  const user = data?.user || data || null;
+  // The backend now rides workspace + permissions on the user; default the
+  // permission list so frontend gating (hasPermission) is always safe.
+  if (user && !Array.isArray(user.permissions)) user.permissions = [];
+  return user;
 }
 
 export const authService = {
@@ -85,6 +89,32 @@ export const authService = {
       await apiFetch("/auth/reset-password", {
         method: "POST",
         body: JSON.stringify({ token, new_password: newPassword }),
+      }),
+    );
+  },
+
+  // ── Workspace invitations ────────────────────────────────────────────
+  /** Preview an invite (public) — returns {email, workspace_name, role_name,
+   *  needs_account} or null if the link is invalid/expired. */
+  async lookupInvite(token) {
+    if (!config.apiBaseUrl || !token) return null;
+    try {
+      return await apiFetch(`/auth/invite/${encodeURIComponent(token)}`);
+    } catch {
+      return null;
+    }
+  },
+
+  /** Accept an invite — creates/links the account, joins the workspace, signs
+   *  in (sets the session cookie). Returns the normalized user. */
+  async acceptInvite({ token, name, password } = {}) {
+    if (!config.apiBaseUrl) {
+      throw new Error("Backend not configured.");
+    }
+    return normalizeUser(
+      await apiFetch("/auth/accept-invite", {
+        method: "POST",
+        body: JSON.stringify({ token, name, password }),
       }),
     );
   },

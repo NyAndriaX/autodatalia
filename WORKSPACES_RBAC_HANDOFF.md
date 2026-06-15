@@ -107,16 +107,26 @@ create); live permission revocation.
    `/content` StaticFiles mount stays publicly served (Meta/TikTok must fetch
    media); signed URLs are Phase 2 — document, don't silently "fix".
 
-2. **Stage 7 — frontend (NOT started).** Build per the plan
-   (`melodic-wandering-pebble.md` → Frontend section): `app/lib/permissions.js`
-   (`hasPermission`/`usePermission`), gate the Sidebar "Équipe & Accès" section,
-   add `app/components/views/MembersView.js` + `RolesView.js` (+ `adminUI.js`
-   copy of SettingsView's `Section`/`Champ`), `app/invite/page.js` (clone
-   `reset-password/page.js`), `membersService.js`/`rolesService.js`/`rolesSlice`,
-   wire into `app/dashboard/page.js` switch + `store/index.js`, and add the
-   `team`/`invite` i18n namespaces to **both** `messages/fr.json` and `en.json`.
-   `/auth/me` already rides the new `workspace`/`permissions` fields through
-   `authService.normalizeUser` (add `permissions: []` default there).
+2. **Stage 7 — frontend — ✅ DONE (needs `next build` verification).** Built:
+   - `backend/app/auth.py::_user_payload` now returns `permissions` + `workspace`
+     `{id,name,role,is_owner}` so `/auth/me`, login, register and accept-invite
+     all carry gating data.
+   - `app/lib/permissions.js` (`PERMISSION_GROUPS`, `hasPermission`,
+     `usePermission`); `app/lib/workspaceService.js` (members/roles/invitations);
+     `authService` gains `lookupInvite`/`acceptInvite` + a `permissions: []`
+     default in `normalizeUser`.
+   - `app/components/views/MembersView.js` (invite + members table + pending
+     invites) and `RolesView.js` (role list + permission matrix; system roles
+     read-only, Owner immutable). Wired into `app/dashboard/page.js` switch
+     (`members`/`roles` cases).
+   - Sidebar gains a permission-gated **"Équipe & Accès"** section (filters items
+     by `hasPermission`, drops empty sections).
+   - `app/invite/page.js` — logged-out accept page (clone of `reset-password`,
+     client-only token read).
+   - NOTE: the new admin views + Sidebar team section use **literal French
+     strings** (not i18n keys) so a missing key can't break the bundle —
+     migrate to `messages/*.json` later if EN parity is needed. Run
+     `cd frontend && npm run build` to verify.
 
 3. **Audit checklist to re-run before trusting it** (security gate):
    - `grep -rnE "post.get\(.user_id.\)|rule.get\(.user_id.\)" backend/app` —
