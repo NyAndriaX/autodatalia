@@ -64,8 +64,10 @@ def test_search_empty_dir_returns_empty_array(workspace_client):
 
 
 def test_search_empty_query_returns_listing(workspace_client):
-    # Drop a fake image into the content dir so the listing has something.
-    fake = settings.content_dir / "hello.png"
+    # Drop a fake image into THIS workspace's media dir so the listing has something.
+    ws_id = workspace_client.get("/workspace").json()["id"]
+    fake = settings.content_dir / "ws" / str(ws_id) / "hello.png"
+    fake.parent.mkdir(parents=True, exist_ok=True)
     fake.write_bytes(b"fake png bytes")
     try:
         r = workspace_client.get("/search?q=")
