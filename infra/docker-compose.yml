@@ -123,9 +123,17 @@ services:
     build:
       context: ../frontend
       args:
-        - NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+        # The browser calls the frontend's OWN origin at /api/backend; Next.js
+        # rewrites that to the backend service internally (same-origin = no CORS
+        # and the session cookie just works). Override only for special setups.
+        - NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL:-/api/backend}
     container_name: datalia-frontend
     restart: always
+    environment:
+      # Proxy target for the /api/backend rewrite above. MUST be the backend's
+      # internal address or every API call 404s. Defaults to the compose
+      # service name, which resolves on the shared network.
+      INTERNAL_API_BASE_URL: ${INTERNAL_API_BASE_URL:-http://caption-api:8000}
     ports:
       - "3005:3000"
     depends_on:
