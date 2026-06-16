@@ -296,7 +296,13 @@ export default function CreationEditor() {
         className={`flex min-w-0 flex-col ${
           isMobile ? "w-full" : "flex-1 overflow-hidden"
         }`}
-        style={{ background: "var(--bg-primary)" }}
+        style={{
+          background: "var(--bg-primary)",
+          // On mobile the column has no flex height to fill, so give the
+          // fixed (non-scrolling) wizard pages real room; the outer container
+          // scrolls between this and the preview below.
+          minHeight: isMobile ? "75vh" : undefined,
+        }}
       >
         {/* Workflow stepper + progress */}
         <div
@@ -338,11 +344,7 @@ export default function CreationEditor() {
         </div>
 
         {/* ── Step body — one fixed, non-scrolling page per phase ── */}
-        <div
-          className={`flex-1 min-h-0 flex flex-col ${
-            isMobile ? "overflow-y-auto" : "overflow-hidden"
-          }`}
-        >
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
           {/* Platforms */}
           {activeStep === "platforms" && (
             <div className={`h-full flex flex-col px-4 sm:px-6 py-5 gap-3 ${fadeIn}`}>
@@ -435,8 +437,8 @@ export default function CreationEditor() {
                 </div>
               </div>
 
-              {/* Post content — fills remaining height; scrolls internally only
-                  when the caption is long so the page itself stays fixed. */}
+              {/* Post content — fills the remaining page height. No internal
+                  scroll: the box grows/shrinks with the step, never scrolls. */}
               <div className="relative flex flex-col flex-1 min-h-0">
                 <label
                   htmlFor="content-editor"
@@ -450,7 +452,7 @@ export default function CreationEditor() {
                   value={currentPost.content}
                   onChange={(e) => dispatch(setContent(e.target.value))}
                   placeholder={t("promptPlaceholder")}
-                  className="w-full flex-1 min-h-[120px] resize-none overflow-y-auto rounded-xl p-5 text-base leading-relaxed"
+                  className="w-full flex-1 min-h-[120px] resize-none overflow-hidden rounded-xl p-5 text-base leading-relaxed"
                   style={{
                     background: "var(--bg-tertiary)",
                     border: "1px solid var(--border-default)",
@@ -692,7 +694,7 @@ export default function CreationEditor() {
 
           {/* Publish — review summary + TikTok pre-publish disclosures */}
           {activeStep === "publish" && (
-            <div className={`h-full flex flex-col px-4 sm:px-6 py-5 gap-4 ${isMobile ? "" : "overflow-y-auto"} ${fadeIn}`}>
+            <div className={`h-full flex flex-col px-4 sm:px-6 py-5 gap-4 overflow-hidden ${fadeIn}`}>
               <div
                 className="rounded-xl p-4 flex flex-col gap-3"
                 style={{ background: "var(--bg-card)", border: "1px solid var(--border-default)" }}
