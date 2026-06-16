@@ -89,10 +89,12 @@ def test_invite_accept_collaboration():
 
     owner.post("/posts", json={"scheduledDate": "2026-06-01", "content": "team-post"})
 
-    # Create the invitation via the helper to obtain the raw token (the email
-    # endpoint only returns {ok}). Then accept as a brand-new account.
-    token = workspaces.create_invitation(ws_id, "member@team.com", editor_role, owner_uid)
+    # Invitations only attach to people who already have an account, so the
+    # invitee registers first. Create the invitation via the helper to obtain
+    # the raw token (the email endpoint only returns {ok}), then accept.
     member = _new_client()
+    _register(member, "member@team.com", "Member")
+    token = workspaces.create_invitation(ws_id, "member@team.com", editor_role, owner_uid)
     acc = member.post(
         "/auth/accept-invite",
         json={"token": token, "name": "Member", "password": "secret123"},
@@ -121,8 +123,9 @@ def test_viewer_role_is_read_only():
     owner_uid = int(owner.get("/auth/me").json()["id"])
     viewer_role = workspaces.get_role_id_by_name(ws_id, "Viewer")
 
-    token = workspaces.create_invitation(ws_id, "viewer@v.com", viewer_role, owner_uid)
     viewer = _new_client()
+    _register(viewer, "viewer@v.com", "Viewer")
+    token = workspaces.create_invitation(ws_id, "viewer@v.com", viewer_role, owner_uid)
     viewer.post(
         "/auth/accept-invite",
         json={"token": token, "name": "Viewer", "password": "secret123"},
@@ -147,8 +150,9 @@ def test_permission_change_is_live():
     editor_role = workspaces.get_role_id_by_name(ws_id, "Editor")
     viewer_role = workspaces.get_role_id_by_name(ws_id, "Viewer")
 
-    token = workspaces.create_invitation(ws_id, "ed@live.com", editor_role, owner_uid)
     member = _new_client()
+    _register(member, "ed@live.com", "Ed")
+    token = workspaces.create_invitation(ws_id, "ed@live.com", editor_role, owner_uid)
     member.post(
         "/auth/accept-invite",
         json={"token": token, "name": "Ed", "password": "secret123"},
@@ -190,3 +194,57 @@ def test_media_is_isolated_between_workspaces():
     assert b.delete(f"/media/{rel}").status_code == 400
     # A can delete its own.
     assert a.delete(f"/media/{rel}").status_code == 200
+
+
+# ── 8. Invitations are restricted to already-registered accounts ──────────
+def test_invite_requires_registered_account():
+    """The invite endpoint refuses an email that has no Datalia account, and
+    succeeds once that account exists."""
+    settings.allow_open_auth = False
+    owner = _new_client()
+    _register(owner, "owner@reg.com", "Owner")
+    ws_id = owner.get("/workspace").json()["id"]
+    editor_role = workspaces.get_role_id_by_name(ws_id, "Editor")
+
+    # Unregistered email → rejected (400), no invitation row created.
+    rej = owner.post(
+        "/workspace/members/invite",
+        json={"email": "ghost@reg.com", "role_id": editor_role},
+    )
+    assert rej.status_code == 400
+    assert workspaces.list_invitations(ws_id) == []
+
+    # Register that email, then the same invite succeeds.
+    invitee = _new_client()
+    _register(invitee, "ghost@reg.com", "Ghost")
+    ok = owner.post(
+        "/workspace/members/invite",
+        json={"email": "ghost@reg.com", "role_id": editor_role},
+    )
+    assert ok.status_code == 200
+    assert any(i["email"] == "ghost@reg.com" for i in workspaces.list_invitations(ws_id))
+
+
+# ── 9. accept-invite never creates an account (stale-invite guard) ────────
+def test_accept_invite_rejects_unknown_account():
+    """Even a stale invitation issued before the registered-only rule cannot
+    bring an account into existence at accept time."""
+    settings.allow_open_auth = False
+    owner = _new_client()
+    _register(owner, "owner@stale.com", "Owner")
+    ws_id = owner.get("/workspace").json()["id"]
+    owner_uid = int(owner.get("/auth/me").json()["id"])
+    editor_role = workspaces.get_role_id_by_name(ws_id, "Editor")
+
+    # Simulate a legacy invitation to an email with no account.
+    token = workspaces.create_invitation(ws_id, "nobody@stale.com", editor_role, owner_uid)
+    stranger = _new_client()
+    acc = stranger.post(
+        "/auth/accept-invite",
+        json={"token": token, "name": "Nobody", "password": "secret123"},
+    )
+    assert acc.status_code == 400
+    # No account was created for that email.
+    from app.db import get_user_by_email
+
+    assert get_user_by_email("nobody@stale.com") is None

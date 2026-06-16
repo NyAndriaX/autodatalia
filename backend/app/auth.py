@@ -565,20 +565,17 @@ async def accept_invite(
     workspace_id = int(inv["workspace_id"])
     role_id = int(inv["role_id"])
 
+    # Invitations only attach to people who already have a Datalia account.
+    # (The invite endpoint enforces this at creation time; this guard also
+    # rejects any stale invitation issued before that rule existed.)
     user = get_user_by_email(email)
     if user is None:
-        if not req.password:
-            _auth_rate_limit_record_failure(rate_key)
-            raise HTTPException(status_code=400, detail="A password is required to create your account.")
-        password_hash = get_password_hash(req.password)
-        user_id = create_user(email, password_hash, req.name or "", role="member")
-        # Every user also owns a personal workspace (admin there); they can
-        # switch to it later.
-        workspaces.create_workspace_with_owner(
-            workspaces.workspace_name_for(req.name, email), user_id
+        _auth_rate_limit_record_failure(rate_key)
+        raise HTTPException(
+            status_code=400,
+            detail="No Datalia account exists for that email. Please register first, then accept the invitation.",
         )
-    else:
-        user_id = int(user["id"])
+    user_id = int(user["id"])
 
     workspaces.add_member(workspace_id, user_id, role_id)
     workspaces.consume_invitation(int(inv["id"]))
