@@ -68,12 +68,10 @@ export function generateContentThunk(force = false, count = 1) {
     );
 
     const args = {
-      // The post content doubles as the brief for AI modes; template mode also
-      // passes the template id below (an empty content is fine — the backend
-      // supplies a default brief).
+      // The post content doubles as the brief for the AI (an empty content is
+      // fine — the backend supplies a default brief).
       prompt: currentPostRefreshed.content,
       platforms: currentPostRefreshed.platforms,
-      template: currentPostRefreshed.template,
       tone: currentPostRefreshed.tone || null,
       variants: count,
       image: firstImage?.filename ?? null,

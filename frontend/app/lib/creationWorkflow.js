@@ -1,11 +1,10 @@
-import { PenLine, Share2, FileText, Image, Send } from "lucide-react";
+import { Share2, FileText, Image, Send } from "lucide-react";
 
 export const CREATION_STEPS = [
-  { id: "setup", label: "Setup", hint: "Mode & tone", icon: PenLine },
   { id: "platforms", label: "Platforms", hint: "Pick targets", icon: Share2 },
-  { id: "content", label: "Content", hint: "Write caption", icon: FileText },
+  { id: "content", label: "Content", hint: "Write & generate", icon: FileText },
   { id: "media", label: "Media", hint: "Add visuals", icon: Image },
-  { id: "publish", label: "Publish", hint: "Go live", icon: Send },
+  { id: "publish", label: "Publish", hint: "Review & go live", icon: Send },
 ];
 
 /**
@@ -19,13 +18,13 @@ export function deriveCreationWorkflow(post) {
   );
   const readyToPublish = hasPlatforms && hasContent;
 
-  const completedIds = ["setup"];
+  const completedIds = [];
   if (hasPlatforms) completedIds.push("platforms");
   if (hasContent) completedIds.push("content");
   if (hasMedia) completedIds.push("media");
   if (readyToPublish) completedIds.push("publish");
 
-  let currentId = "setup";
+  let currentId = "platforms";
   if (!hasPlatforms) currentId = "platforms";
   else if (!hasContent) currentId = "content";
   else if (!hasMedia) currentId = "media";

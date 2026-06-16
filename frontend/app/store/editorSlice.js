@@ -9,8 +9,6 @@ const initialState = {
       tiktok: false,
       linkedin: false,
     },
-    mode: "free", // "free" | "template" | "scratch"
-    template: "promo", // active template id when mode === "template"
     /* Tone is sent to the AI as generation context — null means "let the
        model pick". The dropdown defaults to the value last used. */
     tone: null,
@@ -53,12 +51,6 @@ const editorSlice = createSlice({
     togglePlatform: (state, action) => {
       const platform = action.payload;
       state.currentPost.platforms[platform] = !state.currentPost.platforms[platform];
-    },
-    setMode: (state, action) => {
-      state.currentPost.mode = action.payload;
-    },
-    setTemplate: (state, action) => {
-      state.currentPost.template = action.payload;
     },
     setTone: (state, action) => {
       state.currentPost.tone = action.payload || null;
@@ -130,8 +122,6 @@ const editorSlice = createSlice({
 export const {
   setContent,
   togglePlatform,
-  setMode,
-  setTemplate,
   setTone,
   setPlatformRatio,
   setTiktokOptions,

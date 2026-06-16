@@ -7,8 +7,6 @@ import TikTokOptionsPanel from "./TikTokOptionsPanel";
 import {
   setContent,
   togglePlatform,
-  setMode,
-  setTemplate,
   setTone,
   setPlatformRatio,
   selectVariant,
@@ -32,8 +30,6 @@ import {
   MessageSquare,
   Zap,
   Hash,
-  FileText,
-  PenLine,
   CalendarClock,
   RefreshCw,
   Loader2,
@@ -44,6 +40,8 @@ import {
   Share2,
   Bookmark,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Frame,
   Film,
 } from "lucide-react";
@@ -81,23 +79,11 @@ const SUGGESTED_HASHTAGS = [
   "#automation", "#strategy", "#engagement", "#trending",
 ];
 
-const MODES = [
-  { id: "free", icon: PenLine },
-  { id: "template", icon: FileText },
-  { id: "scratch", icon: Type },
-];
-
 /* Compact transforms — the tone selector handles tone separately, so this
    list is now just the two length actions. */
 const QUICK_ACTIONS = [
   { id: "shorten", icon: ArrowDownToLine },
   { id: "expand", icon: ArrowUpFromLine },
-];
-
-const TEMPLATES = [
-  { id: "promo" },
-  { id: "edu" },
-  { id: "news" },
 ];
 
 /* Resolve "ratio for this platform on this post" using the user's pick
@@ -120,15 +106,25 @@ export default function CreationEditor() {
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
   const [generatingMediaKind, setGeneratingMediaKind] = useState(null);
 
-  // Auto-grow the content box instead of letting it scroll internally — the
-  // editor swaps this area per mode and an inner scrollbar there feels broken.
-  const contentRef = useRef(null);
-  useEffect(() => {
-    const el = contentRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  }, [currentPost.content]);
+  // Wizard navigation — the left panel is a fixed, non-scrolling page per
+  // step. `activeStep` is which page is shown; the stepper + the footer
+  // Previous/Next buttons both drive it. Navigation is free (no gating).
+  const STEP_IDS = CREATION_STEPS.map((s) => s.id);
+  const [activeStep, setActiveStep] = useState(STEP_IDS[0]);
+  const activeIdx = Math.max(0, STEP_IDS.indexOf(activeStep));
+  const isFirstStep = activeIdx === 0;
+  const isLastStep = activeIdx === STEP_IDS.length - 1;
+  const goToStep = useCallback((id) => setActiveStep(id), []);
+  const goNext = useCallback(
+    () => setActiveStep((s) => STEP_IDS[Math.min(STEP_IDS.indexOf(s) + 1, STEP_IDS.length - 1)]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+  const goPrev = useCallback(
+    () => setActiveStep((s) => STEP_IDS[Math.max(STEP_IDS.indexOf(s) - 1, 0)]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
 
   // ─── AI media generation (image inline, video → /videos handoff) ──
   // Image gen still runs inline (fast, single call). Video gen hands
@@ -288,18 +284,6 @@ export default function CreationEditor() {
     [currentPost]
   );
 
-  const scrollToStep = useCallback((stepId) => {
-    const targets = {
-      setup: "mode-free",
-      platforms: "platform-label",
-      content: "content-editor",
-      media: "media-uploader-section",
-      publish: "save-draft-btn",
-    };
-    const el = document.getElementById(targets[stepId]);
-    el?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, []);
-
   return (
     <div
       className={`flex h-full min-h-0 ${fadeIn} ${
@@ -310,7 +294,7 @@ export default function CreationEditor() {
       {/* ═══ LEFT PANEL — Input & Controls ═══ */}
       <div
         className={`flex min-w-0 flex-col ${
-          isMobile ? "w-full" : "flex-1 overflow-y-auto"
+          isMobile ? "w-full" : "flex-1 overflow-hidden"
         }`}
         style={{ background: "var(--bg-primary)" }}
       >
@@ -345,218 +329,50 @@ export default function CreationEditor() {
           </div>
           <WorkflowSteps
             steps={CREATION_STEPS}
-            currentId={workflow.currentId}
+            currentId={activeStep}
             completedIds={workflow.completedIds}
-            onStepClick={scrollToStep}
+            onStepClick={goToStep}
             compact={isMobile}
             ariaLabel={t("creationWorkflow")}
           />
         </div>
 
-        {/* Mode Selector */}
-        <div className="px-4 sm:px-6 py-5 shrink-0" style={{ borderBottom: "1px solid var(--border-default)" }}>
-          <div className="flex gap-2 flex-wrap" role="tablist" aria-label={t("creationModeAria")}>
-            {MODES.map((mode) => {
-              const isActive = currentPost.mode === mode.id;
-              const Icon = mode.icon;
-              const modeLabelKey =
-                mode.id === "free"
-                  ? "freePrompt"
-                  : mode.id === "template"
-                  ? "fromTemplate"
-                  : "fromScratch";
-              return (
-                <button
-                  key={mode.id}
-                  id={`mode-${mode.id}`}
-                  role="tab"
-                  aria-selected={isActive}
-                  onClick={() => dispatch(setMode(mode.id))}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200"
-                  style={{
-                    background: isActive ? "rgba(99, 102, 241, 0.12)" : "var(--bg-tertiary)",
-                    color: isActive ? "var(--accent-primary-hover)" : "var(--text-secondary)",
-                    border: isActive ? "1px solid rgba(99, 102, 241, 0.3)" : "1px solid var(--border-default)",
-                  }}
-                >
-                  <Icon size={16} aria-hidden="true" />
-                  {t(modeLabelKey)}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Platform Toggles */}
-        <div className="px-4 sm:px-6 py-5 shrink-0" style={{ borderBottom: "1px solid var(--border-default)" }}>
-          <p
-            className="text-xs font-semibold uppercase tracking-wider mb-3"
-            style={{ color: "var(--text-tertiary)" }}
-            id="platform-label"
-          >
-            {t("targetPlatforms")}
-          </p>
-          <div className="flex gap-2 flex-wrap" role="group" aria-labelledby="platform-label">
-            {PLATFORMS.map((platform) => {
-              const isActive = currentPost.platforms[platform.id];
-              const Icon = platform.icon;
-              return (
-                <button
-                  key={platform.id}
-                  id={`platform-toggle-${platform.id}`}
-                  aria-pressed={isActive}
-                  onClick={() => dispatch(togglePlatform(platform.id))}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200"
-                  style={{
-                    background: isActive ? `${platform.color}18` : "var(--bg-tertiary)",
-                    color: isActive ? platform.color : "var(--text-muted)",
-                    border: isActive ? `1px solid ${platform.color}40` : "1px solid var(--border-default)",
-                  }}
-                >
-                  <Icon size={16} aria-hidden="true" />
-                  {platform.label}
-                  {isActive && <Check size={14} aria-hidden="true" />}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Content Editor Area */}
-        <div className="px-4 sm:px-6 py-5 flex-1">
-
-          {/* Template selector — only in template mode. No fade/slide, so the
-              modes switch instantly like tabs. */}
-          {currentPost.mode === "template" && (
-            <div className="mb-6">
-              <label
-                htmlFor="template-select"
-                className="text-xs font-semibold uppercase tracking-wider mb-2 block"
-                style={{ color: "var(--text-tertiary)" }}
-              >
-                {t("selectedBrandTemplate")}
-              </label>
-              <select
-                id="template-select"
-                className={`${inputField} cursor-pointer w-full`}
-                value={currentPost.template}
-                onChange={(e) => dispatch(setTemplate(e.target.value))}
-              >
-                {TEMPLATES.map((tpl) => (
-                  <option key={tpl.id} value={tpl.id}>{t(`template_${tpl.id}`)}</option>
-                ))}
-              </select>
-              <p className="text-[11px] mt-2" style={{ color: "var(--accent-primary)" }}>
-                {t("templateAiHint")}
-              </p>
-            </div>
-          )}
-
-          {/* Post content — a single editor; the mode sets the guidance text. */}
-          <div className="relative">
-            <label
-              htmlFor="content-editor"
-              className="text-xs font-semibold uppercase tracking-wider mb-2 block"
-              style={{ color: "var(--text-tertiary)" }}
-            >
-              {t("postContent")}
-            </label>
-            <textarea
-              id="content-editor"
-              ref={contentRef}
-              value={currentPost.content}
-              onChange={(e) => dispatch(setContent(e.target.value))}
-              placeholder={
-                currentPost.mode === "free"
-                  ? t("promptPlaceholder")
-                  : currentPost.mode === "scratch"
-                  ? t("placeholderScratch")
-                  : t("postContentPlaceholder")
-              }
-              className="w-full min-h-[220px] resize-none overflow-hidden rounded-xl p-5 text-base leading-relaxed"
-              style={{
-                background: "var(--bg-tertiary)",
-                border: "1px solid var(--border-default)",
-                color: "var(--text-primary)",
-                outline: "none",
-                fontFamily: "inherit",
-              }}
-            />
-
-            {/* Character & hashtag counters */}
-            <div
-              className="flex items-center gap-x-4 gap-y-1 flex-wrap mt-3"
-              style={{ color: "var(--text-muted)" }}
-              aria-live="polite"
-              aria-atomic="true"
-            >
-              <span className="flex items-center gap-1.5 text-xs">
-                <Type size={12} aria-hidden="true" />
-                {t("charsCount", { n: contentLength })}
-              </span>
-              <span className="flex items-center gap-1.5 text-xs">
-                <Hash size={12} aria-hidden="true" />
-                {t("hashtagsCount", { n: hashtagCount })}
-              </span>
-              {activePlatforms.map((p) => {
-                const over = contentLength > p.maxChars;
-                return (
-                  <span
-                    key={p.id}
-                    className="text-xs"
-                    style={{ color: over ? "var(--status-error)" : undefined }}
-                    aria-label={t("charsOfPlatform", {
-                      platform: p.label,
-                      current: contentLength,
-                      max: p.maxChars,
-                    })}
-                  >
-                    {p.label}: {contentLength}/{p.maxChars}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* AI Variants — pick between the alternatives the LLM Router
-              returned (Redux already holds them; CR-T05 in the plan). */}
-          {aiGeneration.variants.length > 0 && (
-            <div className={`mt-5 ${fadeIn}`}>
+        {/* ── Step body — one fixed, non-scrolling page per phase ── */}
+        <div
+          className={`flex-1 min-h-0 flex flex-col ${
+            isMobile ? "overflow-y-auto" : "overflow-hidden"
+          }`}
+        >
+          {/* Platforms */}
+          {activeStep === "platforms" && (
+            <div className={`h-full flex flex-col px-4 sm:px-6 py-5 gap-3 ${fadeIn}`}>
               <p
-                className="text-xs font-semibold uppercase tracking-wider mb-2"
+                className="text-xs font-semibold uppercase tracking-wider"
                 style={{ color: "var(--text-tertiary)" }}
+                id="platform-label"
               >
-                {t("aiVariants")}
+                {t("targetPlatforms")}
               </p>
-              <div className="flex gap-2 flex-wrap">
-                {aiGeneration.variants.map((v, i) => {
-                  const active = aiGeneration.selectedVariant === i;
+              <div className="flex gap-2 flex-wrap" role="group" aria-labelledby="platform-label">
+                {PLATFORMS.map((platform) => {
+                  const isActive = currentPost.platforms[platform.id];
+                  const Icon = platform.icon;
                   return (
                     <button
-                      key={i}
-                      onClick={() => dispatch(selectVariant(i))}
-                      className="text-left rounded-lg p-3 transition-all"
+                      key={platform.id}
+                      id={`platform-toggle-${platform.id}`}
+                      aria-pressed={isActive}
+                      onClick={() => dispatch(togglePlatform(platform.id))}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200"
                       style={{
-                        width: "min(168px, 100%)",
-                        flex: "1 1 140px",
-                        maxWidth: 168,
-                        background: active ? "rgba(99,102,241,0.10)" : "var(--bg-tertiary)",
-                        border: `1px solid ${active ? "var(--border-active)" : "var(--border-default)"}`,
+                        background: isActive ? `${platform.color}18` : "var(--bg-tertiary)",
+                        color: isActive ? platform.color : "var(--text-muted)",
+                        border: isActive ? `1px solid ${platform.color}40` : "1px solid var(--border-default)",
                       }}
                     >
-                      <span
-                        className="text-[11px] font-semibold block mb-1"
-                        style={{ color: active ? "var(--accent-primary)" : "var(--text-tertiary)" }}
-                      >
-                        {t("variantNum", { n: i + 1 })}
-                        {active ? t("variantSelectedSuffix") : ""}
-                      </span>
-                      <span
-                        className="text-xs block line-clamp-3"
-                        style={{ color: "var(--text-secondary)" }}
-                      >
-                        {v.text}
-                      </span>
+                      <Icon size={16} aria-hidden="true" />
+                      {platform.label}
+                      {isActive && <Check size={14} aria-hidden="true" />}
                     </button>
                   );
                 })}
@@ -564,239 +380,412 @@ export default function CreationEditor() {
             </div>
           )}
 
-          {/* Tone + Transforms — a single row instead of 4 ad-hoc buttons.
-              Tone is sent to the AI as generation context (so it shows up
-              in the *next* Generate); the two transforms below stay as
-              cheap local edits for the current text. */}
-          <div className="mt-5 flex flex-wrap items-end gap-3">
-            <div className="flex-1 min-w-[200px]">
-              <p
-                className="text-xs font-semibold uppercase tracking-wider mb-2"
-                style={{ color: "var(--text-tertiary)" }}
-                id="tone-label"
-              >
-                {t("tone")}
-              </p>
-              <select
-                id="tone-select"
-                aria-labelledby="tone-label"
-                value={currentPost.tone || ""}
-                onChange={(e) => dispatch(setTone(e.target.value || null))}
-                className={`${inputField} cursor-pointer`}
-                title={t("toneSentHint")}
-              >
-                <option value="">{t("toneAuto")}</option>
-                {TONES.map((tone) => (
-                  <option key={tone.id} value={tone.id}>
-                    {tone.label} — {tone.hint}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex gap-2">
-              {QUICK_ACTIONS.map((action) => {
-                const Icon = action.icon;
-                const actionLabel = t(action.id);
-                return (
-                  <button
-                    key={action.id}
-                    id={`quick-action-${action.id}`}
-                    className={`${btnSecondary} flex items-center gap-2 text-xs h-9`}
-                    disabled={isBusy || !currentPost.content.trim()}
-                    onClick={() => dispatch(applyQuickActionThunk(action.id))}
-                    aria-label={t("quickActionAria", { action: actionLabel })}
-                    title={t("quickActionTitle", { action: actionLabel })}
+          {/* Content — tone + caption (fills height) + generate + variants + hashtags */}
+          {activeStep === "content" && (
+            <div className={`h-full flex flex-col min-h-0 px-4 sm:px-6 py-5 gap-4 ${fadeIn}`}>
+              {/* Tone + Transforms */}
+              <div className="flex flex-wrap items-end gap-3 shrink-0">
+                <div className="flex-1 min-w-[200px]">
+                  <p
+                    className="text-xs font-semibold uppercase tracking-wider mb-2"
+                    style={{ color: "var(--text-tertiary)" }}
+                    id="tone-label"
                   >
-                    {aiGeneration.isApplyingAction ? (
-                      <Loader2 size={14} className="animate-spin" aria-hidden="true" />
-                    ) : (
-                      <Icon size={14} aria-hidden="true" />
-                    )}
-                    {actionLabel}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Hashtag suggester — collapsed by default to cut visual noise */}
-          <div className="mt-4">
-            <button
-              onClick={() => setShowHashtags((v) => !v)}
-              className={`${btnSecondary} inline-flex items-center gap-2 text-xs`}
-              aria-expanded={showHashtags}
-            >
-              <Hash size={14} aria-hidden="true" />
-              {showHashtags ? t("hideHashtags") : t("suggestHashtags")}
-              <ChevronDown
-                size={12}
-                aria-hidden="true"
-                style={{
-                  transform: showHashtags ? "rotate(180deg)" : "none",
-                  transition: "transform 0.2s",
-                }}
-              />
-            </button>
-            {showHashtags && (
-              <div className={`flex gap-2 flex-wrap mt-3 ${fadeIn}`}>
-                {SUGGESTED_HASHTAGS.map((tag) => (
-                  <button
-                    key={tag}
-                    onClick={() => {
-                      const c = currentPost.content;
-                      const sep = c === "" || c.endsWith(" ") || c.endsWith("\n") ? "" : " ";
-                      dispatch(setContent(c + sep + tag));
-                    }}
-                    className="text-xs px-2.5 py-1 rounded-full transition-all"
-                    style={{
-                      background: "var(--bg-tertiary)",
-                      border: "1px solid var(--border-default)",
-                      color: "var(--accent-primary)",
-                    }}
+                    {t("tone")}
+                  </p>
+                  <select
+                    id="tone-select"
+                    aria-labelledby="tone-label"
+                    value={currentPost.tone || ""}
+                    onChange={(e) => dispatch(setTone(e.target.value || null))}
+                    className={`${inputField} cursor-pointer`}
+                    title={t("toneSentHint")}
                   >
-                    {tag}
-                  </button>
-                ))}
+                    <option value="">{t("toneAuto")}</option>
+                    {TONES.map((tone) => (
+                      <option key={tone.id} value={tone.id}>
+                        {tone.label} — {tone.hint}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex gap-2">
+                  {QUICK_ACTIONS.map((action) => {
+                    const Icon = action.icon;
+                    const actionLabel = t(action.id);
+                    return (
+                      <button
+                        key={action.id}
+                        id={`quick-action-${action.id}`}
+                        className={`${btnSecondary} flex items-center gap-2 text-xs h-9`}
+                        disabled={isBusy || !currentPost.content.trim()}
+                        onClick={() => dispatch(applyQuickActionThunk(action.id))}
+                        aria-label={t("quickActionAria", { action: actionLabel })}
+                        title={t("quickActionTitle", { action: actionLabel })}
+                      >
+                        {aiGeneration.isApplyingAction ? (
+                          <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+                        ) : (
+                          <Icon size={14} aria-hidden="true" />
+                        )}
+                        {actionLabel}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            )}
-          </div>
 
-          {/* Media upload + AI generation */}
-          <div className="mt-5" id="media-uploader-section">
-            <MediaUploader />
-            {/* AI image / video generation — same backend the popup uses */}
-            <div className="flex gap-2 mt-3">
-              <button
-                id="generate-ai-image-btn"
-                onClick={() => handleGenerateMedia("image")}
-                disabled={!!generatingMediaKind}
-                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
-                title={t("aiImageTitle")}
-              >
-                {generatingMediaKind === "image" ? (
-                  <Loader2 size={13} className="animate-spin" />
-                ) : (
-                  <Sparkles size={13} />
-                )}{" "}
-                {t("aiImageBtn")}
-              </button>
-              <button
-                id="generate-ai-video-btn"
-                onClick={() => handleGenerateMedia("video")}
-                disabled={!!generatingMediaKind}
-                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
-                title={t("aiVideoTitle")}
-              >
-                {generatingMediaKind === "video" ? (
-                  <Loader2 size={13} className="animate-spin" />
-                ) : (
-                  <Film size={13} />
-                )}{" "}
-                {t("aiVideoBtn")}
-              </button>
-            </div>
-          </div>
-          
-          {currentPost.platforms.tiktok && (
-            <div className="mt-4">
-              <TikTokOptionsPanel />
+              {/* Post content — fills remaining height; scrolls internally only
+                  when the caption is long so the page itself stays fixed. */}
+              <div className="relative flex flex-col flex-1 min-h-0">
+                <label
+                  htmlFor="content-editor"
+                  className="text-xs font-semibold uppercase tracking-wider mb-2 block"
+                  style={{ color: "var(--text-tertiary)" }}
+                >
+                  {t("postContent")}
+                </label>
+                <textarea
+                  id="content-editor"
+                  value={currentPost.content}
+                  onChange={(e) => dispatch(setContent(e.target.value))}
+                  placeholder={t("promptPlaceholder")}
+                  className="w-full flex-1 min-h-[120px] resize-none overflow-y-auto rounded-xl p-5 text-base leading-relaxed"
+                  style={{
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-default)",
+                    color: "var(--text-primary)",
+                    outline: "none",
+                    fontFamily: "inherit",
+                  }}
+                />
+                {/* Character & hashtag counters */}
+                <div
+                  className="flex items-center gap-x-4 gap-y-1 flex-wrap mt-3 shrink-0"
+                  style={{ color: "var(--text-muted)" }}
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
+                  <span className="flex items-center gap-1.5 text-xs">
+                    <Type size={12} aria-hidden="true" />
+                    {t("charsCount", { n: contentLength })}
+                  </span>
+                  <span className="flex items-center gap-1.5 text-xs">
+                    <Hash size={12} aria-hidden="true" />
+                    {t("hashtagsCount", { n: hashtagCount })}
+                  </span>
+                  {activePlatforms.map((p) => {
+                    const over = contentLength > p.maxChars;
+                    return (
+                      <span
+                        key={p.id}
+                        className="text-xs"
+                        style={{ color: over ? "var(--status-error)" : undefined }}
+                        aria-label={t("charsOfPlatform", {
+                          platform: p.label,
+                          current: contentLength,
+                          max: p.maxChars,
+                        })}
+                      >
+                        {p.label}: {contentLength}/{p.maxChars}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* AI Variants */}
+              {aiGeneration.variants.length > 0 && (
+                <div className="shrink-0">
+                  <p
+                    className="text-xs font-semibold uppercase tracking-wider mb-2"
+                    style={{ color: "var(--text-tertiary)" }}
+                  >
+                    {t("aiVariants")}
+                  </p>
+                  <div className="flex gap-2 flex-wrap">
+                    {aiGeneration.variants.map((v, i) => {
+                      const active = aiGeneration.selectedVariant === i;
+                      return (
+                        <button
+                          key={i}
+                          onClick={() => dispatch(selectVariant(i))}
+                          className="text-left rounded-lg p-3 transition-all"
+                          style={{
+                            width: "min(168px, 100%)",
+                            flex: "1 1 140px",
+                            maxWidth: 168,
+                            background: active ? "rgba(99,102,241,0.10)" : "var(--bg-tertiary)",
+                            border: `1px solid ${active ? "var(--border-active)" : "var(--border-default)"}`,
+                          }}
+                        >
+                          <span
+                            className="text-[11px] font-semibold block mb-1"
+                            style={{ color: active ? "var(--accent-primary)" : "var(--text-tertiary)" }}
+                          >
+                            {t("variantNum", { n: i + 1 })}
+                            {active ? t("variantSelectedSuffix") : ""}
+                          </span>
+                          <span
+                            className="text-xs block line-clamp-3"
+                            style={{ color: "var(--text-secondary)" }}
+                          >
+                            {v.text}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Hashtag suggester — collapsed by default to cut visual noise */}
+              <div className="shrink-0">
+                <button
+                  onClick={() => setShowHashtags((v) => !v)}
+                  className={`${btnSecondary} inline-flex items-center gap-2 text-xs`}
+                  aria-expanded={showHashtags}
+                >
+                  <Hash size={14} aria-hidden="true" />
+                  {showHashtags ? t("hideHashtags") : t("suggestHashtags")}
+                  <ChevronDown
+                    size={12}
+                    aria-hidden="true"
+                    style={{
+                      transform: showHashtags ? "rotate(180deg)" : "none",
+                      transition: "transform 0.2s",
+                    }}
+                  />
+                </button>
+                {showHashtags && (
+                  <div className={`flex gap-2 flex-wrap mt-3 ${fadeIn}`}>
+                    {SUGGESTED_HASHTAGS.map((tag) => (
+                      <button
+                        key={tag}
+                        onClick={() => {
+                          const c = currentPost.content;
+                          const sep = c === "" || c.endsWith(" ") || c.endsWith("\n") ? "" : " ";
+                          dispatch(setContent(c + sep + tag));
+                        }}
+                        className="text-xs px-2.5 py-1 rounded-full transition-all"
+                        style={{
+                          background: "var(--bg-tertiary)",
+                          border: "1px solid var(--border-default)",
+                          color: "var(--accent-primary)",
+                        }}
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Generate — single primary CTA; secondary controls only appear
+                  once variants exist, and Regenerate keeps the confirm step so
+                  accidental clicks don't burn tokens. */}
+              <div className="shrink-0">
+                <button
+                  id="generate-ai-btn"
+                  onClick={() => dispatch(generateContentThunk())}
+                  disabled={aiGeneration.isGenerating}
+                  aria-busy={aiGeneration.isGenerating}
+                  className={`${btnPrimary} flex items-center justify-center gap-2 w-full py-3 text-base`}
+                  style={{
+                    opacity: aiGeneration.isGenerating ? 0.7 : 1,
+                    cursor: aiGeneration.isGenerating ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {aiGeneration.isGenerating ? (
+                    <>
+                      <Loader2 size={20} className="animate-spin" aria-hidden="true" />
+                      {t("generating")}
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={20} aria-hidden="true" />
+                      {t("generate")}{currentPost.tone ? ` (${TONES.find((tone) => tone.id === currentPost.tone)?.label || t("tone")})` : ""}
+                    </>
+                  )}
+                </button>
+                <p className="text-[11px] text-center mt-2" style={{ color: "var(--text-muted)" }}>
+                  {t("unchangedReuses")}
+                </p>
+                {aiGeneration.variants.length > 0 && (
+                  <div className="flex items-center justify-center gap-4 mt-2">
+                    <button
+                      onClick={() => {
+                        if (!confirmRegen) {
+                          setConfirmRegen(true);
+                          setTimeout(() => setConfirmRegen(false), 4000);
+                          return;
+                        }
+                        setConfirmRegen(false);
+                        dispatch(generateContentThunk(true, 1));
+                      }}
+                      disabled={aiGeneration.isGenerating}
+                      className="text-xs font-medium inline-flex items-center gap-1"
+                      style={{ color: confirmRegen ? "var(--status-pending)" : "var(--accent-primary)" }}
+                      title={t("regenerateTitle")}
+                    >
+                      <RefreshCw size={12} aria-hidden="true" />
+                      {confirmRegen ? t("confirmTokens", { tokens: estTokens(1) }) : t("regenerate")}
+                    </button>
+                    <button
+                      onClick={() => dispatch(generateContentThunk(true, 3))}
+                      disabled={aiGeneration.isGenerating}
+                      className="text-xs font-medium inline-flex items-center gap-1"
+                      style={{ color: "var(--accent-primary)" }}
+                      title={t("alternativesTitle", { tokens: estTokens(3) })}
+                    >
+                      <Sparkles size={12} aria-hidden="true" />
+                      {t("plusAlternatives")}
+                    </button>
+                  </div>
+                )}
+                {aiGeneration.error && (
+                  <p className="text-xs text-center mt-1" style={{ color: "var(--status-error)" }} role="alert">
+                    {aiGeneration.error}
+                  </p>
+                )}
+              </div>
             </div>
           )}
 
-          {/* Generate — single primary CTA; secondary controls only appear
-              once variants exist, and Regenerate keeps the confirm step so
-              accidental clicks don't burn tokens. */}
-          <div className="mt-6">
-            <button
-              id="generate-ai-btn"
-              onClick={() => dispatch(generateContentThunk())}
-              disabled={aiGeneration.isGenerating}
-              aria-busy={aiGeneration.isGenerating}
-              className={`${btnPrimary} flex items-center justify-center gap-2 w-full py-3 text-base`}
-              style={{
-                opacity: aiGeneration.isGenerating ? 0.7 : 1,
-                cursor: aiGeneration.isGenerating ? "not-allowed" : "pointer",
-              }}
-            >
-              {aiGeneration.isGenerating ? (
-                <>
-                  <Loader2 size={20} className="animate-spin" aria-hidden="true" />
-                  {t("generating")}
-                </>
-              ) : (
-                <>
-                  <Sparkles size={20} aria-hidden="true" />
-                  {t("generate")}{currentPost.tone ? ` (${TONES.find((tone) => tone.id === currentPost.tone)?.label || t("tone")})` : ""}
-                </>
-              )}
-            </button>
-            <p className="text-[11px] text-center mt-2" style={{ color: "var(--text-muted)" }}>
-              {t("unchangedReuses")}
-            </p>
-            {aiGeneration.variants.length > 0 && (
-              <div className="flex items-center justify-center gap-4 mt-2">
+          {/* Media — upload + AI image/video */}
+          {activeStep === "media" && (
+            <div className={`h-full flex flex-col px-4 sm:px-6 py-5 gap-4 ${fadeIn}`} id="media-uploader-section">
+              <MediaUploader />
+              {/* AI image / video generation — same backend the popup uses */}
+              <div className="flex gap-2">
                 <button
-                  onClick={() => {
-                    if (!confirmRegen) {
-                      setConfirmRegen(true);
-                      setTimeout(() => setConfirmRegen(false), 4000);
-                      return;
-                    }
-                    setConfirmRegen(false);
-                    dispatch(generateContentThunk(true, 1));
-                  }}
-                  disabled={aiGeneration.isGenerating}
-                  className="text-xs font-medium inline-flex items-center gap-1"
-                  style={{ color: confirmRegen ? "var(--status-pending)" : "var(--accent-primary)" }}
-                  title={t("regenerateTitle")}
+                  id="generate-ai-image-btn"
+                  onClick={() => handleGenerateMedia("image")}
+                  disabled={!!generatingMediaKind}
+                  className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
+                  title={t("aiImageTitle")}
                 >
-                  <RefreshCw size={12} aria-hidden="true" />
-                  {confirmRegen ? t("confirmTokens", { tokens: estTokens(1) }) : t("regenerate")}
+                  {generatingMediaKind === "image" ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <Sparkles size={13} />
+                  )}{" "}
+                  {t("aiImageBtn")}
                 </button>
                 <button
-                  onClick={() => dispatch(generateContentThunk(true, 3))}
-                  disabled={aiGeneration.isGenerating}
-                  className="text-xs font-medium inline-flex items-center gap-1"
-                  style={{ color: "var(--accent-primary)" }}
-                  title={t("alternativesTitle", { tokens: estTokens(3) })}
+                  id="generate-ai-video-btn"
+                  onClick={() => handleGenerateMedia("video")}
+                  disabled={!!generatingMediaKind}
+                  className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
+                  title={t("aiVideoTitle")}
                 >
-                  <Sparkles size={12} aria-hidden="true" />
-                  {t("plusAlternatives")}
+                  {generatingMediaKind === "video" ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <Film size={13} />
+                  )}{" "}
+                  {t("aiVideoBtn")}
                 </button>
               </div>
-            )}
-            {aiGeneration.error && (
-              <p className="text-xs text-center mt-1" style={{ color: "var(--status-error)" }} role="alert">
-                {aiGeneration.error}
-              </p>
-            )}
-          </div>
+            </div>
+          )}
+
+          {/* Publish — review summary + TikTok pre-publish disclosures */}
+          {activeStep === "publish" && (
+            <div className={`h-full flex flex-col px-4 sm:px-6 py-5 gap-4 ${isMobile ? "" : "overflow-y-auto"} ${fadeIn}`}>
+              <div
+                className="rounded-xl p-4 flex flex-col gap-3"
+                style={{ background: "var(--bg-card)", border: "1px solid var(--border-default)" }}
+              >
+                <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-tertiary)" }}>
+                  {t("reviewHeading")}
+                </p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {activePlatforms.length === 0 ? (
+                    <span className="text-xs" style={{ color: "var(--status-error)" }}>{t("reviewNoPlatforms")}</span>
+                  ) : (
+                    activePlatforms.map((p) => {
+                      const Icon = p.icon;
+                      return (
+                        <span
+                          key={p.id}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
+                          style={{ background: `${p.color}18`, color: p.color, border: `1px solid ${p.color}40` }}
+                        >
+                          <Icon size={12} aria-hidden="true" />
+                          {p.label}
+                        </span>
+                      );
+                    })
+                  )}
+                </div>
+                <div className="flex items-center gap-x-4 gap-y-1 flex-wrap text-xs" style={{ color: "var(--text-muted)" }}>
+                  <span className="inline-flex items-center gap-1.5"><Type size={12} aria-hidden="true" />{t("charsCount", { n: contentLength })}</span>
+                  <span className="inline-flex items-center gap-1.5"><Hash size={12} aria-hidden="true" />{t("hashtagsCount", { n: hashtagCount })}</span>
+                  <span className="inline-flex items-center gap-1.5"><Frame size={12} aria-hidden="true" />{t("reviewMedia", { n: (currentPost.media || []).length })}</span>
+                </div>
+                <span
+                  className="self-start text-xs font-semibold px-2.5 py-1 rounded-full"
+                  style={{
+                    background: workflow.readyToPublish ? "rgba(34, 197, 94, 0.15)" : "rgba(234, 179, 8, 0.15)",
+                    color: workflow.readyToPublish ? "var(--status-approved)" : "var(--status-pending)",
+                  }}
+                >
+                  {workflow.readyToPublish ? t("reviewReady") : t("reviewIncomplete")}
+                </span>
+              </div>
+
+              {currentPost.platforms.tiktok && <TikTokOptionsPanel />}
+            </div>
+          )}
         </div>
 
-        {/* Action Footer — collapsed from 4 buttons to a split-publish
-            (primary CTA + popover of alternative submit paths) so the
-            visual hierarchy points the user at the action they came for. */}
+        {/* ── Fixed footer — Previous / Next; publish actions on the last step ── */}
         <div
-          className="px-4 sm:px-6 py-4 shrink-0 flex flex-wrap items-center gap-3"
+          className="px-4 sm:px-6 py-4 shrink-0 flex items-center gap-3"
           style={{ borderTop: "1px solid var(--border-default)", background: "var(--bg-secondary)" }}
         >
           <button
-            id="save-draft-btn"
-            className={`${btnGhost} inline-flex items-center gap-2 text-sm`}
-            onClick={() => dispatch(saveDraftThunk())}
-            aria-label={t("saveDraftAria")}
-            style={{ color: "var(--text-secondary)" }}
+            type="button"
+            className={`${btnSecondary} inline-flex items-center gap-2 text-sm`}
+            onClick={goPrev}
+            disabled={isFirstStep}
+            style={{ opacity: isFirstStep ? 0.4 : 1, cursor: isFirstStep ? "not-allowed" : "pointer" }}
+            aria-label={t("previous")}
           >
-            <Save size={14} aria-hidden="true" />
-            {t("saveDraft")}
+            <ChevronLeft size={16} aria-hidden="true" />
+            {t("previous")}
           </button>
           <div className="flex-1" />
-          <SplitPublishButton
-            onSchedule={() => setShowSchedule(true)}
-            onValidate={() => dispatch(submitForValidationThunk())}
-            onPublish={() => setShowPublishConfirm(true)}
-          />
+          {isLastStep ? (
+            <>
+              <button
+                id="save-draft-btn"
+                className={`${btnGhost} inline-flex items-center gap-2 text-sm`}
+                onClick={() => dispatch(saveDraftThunk())}
+                aria-label={t("saveDraftAria")}
+                style={{ color: "var(--text-secondary)" }}
+              >
+                <Save size={14} aria-hidden="true" />
+                {t("saveDraft")}
+              </button>
+              <SplitPublishButton
+                onSchedule={() => setShowSchedule(true)}
+                onValidate={() => dispatch(submitForValidationThunk())}
+                onPublish={() => setShowPublishConfirm(true)}
+              />
+            </>
+          ) : (
+            <button
+              type="button"
+              className={`${btnPrimary} inline-flex items-center gap-2 text-sm`}
+              onClick={goNext}
+              aria-label={t("next")}
+            >
+              {t("next")}
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
+          )}
         </div>
       </div>
 
