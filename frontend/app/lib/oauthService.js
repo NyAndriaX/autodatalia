@@ -25,13 +25,61 @@ const POPUP_FEATURES = "width=560,height=720,left=200,top=120";
 // Default TTL is 10 minutes — OAuth state doesn't change often, and any
 // real change (Connect / Disconnect, the Refresh button) blows the cache
 // explicitly via invalidateConnectionsCache().
-const CONNECTIONS_CACHE_KEY = "datalia.connections.cache";
+// The connections cache is scoped PER WORKSPACE. /oauth/connections returns the
+// connected accounts of the caller's ACTIVE workspace, so a single global cache
+// key bleeds one workspace's accounts into another after a workspace switch —
+// you'd see (and try to publish to) the previous workspace's accounts until the
+// 10-min TTL expired. We namespace the cache by active workspace id (recorded by
+// the auth layer via rememberActiveWorkspace) and reset it on switch.
+const CONNECTIONS_CACHE_PREFIX = "datalia.connections.cache";
+const ACTIVE_WS_STORAGE_KEY = "datalia.active-workspace";
 const CONNECTIONS_TTL_MS = 10 * 60 * 1000;
+
+function activeWorkspaceScope() {
+  if (typeof window === "undefined") return "anon";
+  try {
+    return window.localStorage.getItem(ACTIVE_WS_STORAGE_KEY) || "anon";
+  } catch {
+    return "anon";
+  }
+}
+
+function connectionsCacheKey() {
+  return `${CONNECTIONS_CACHE_PREFIX}.${activeWorkspaceScope()}`;
+}
+
+/** Record the caller's active workspace id so the connections cache key tracks
+ *  it. Called by the auth layer whenever the signed-in user (and thus the
+ *  active workspace) is established or cleared. null/undefined → anonymous
+ *  scope. */
+export function rememberActiveWorkspace(workspaceId) {
+  if (typeof window === "undefined") return;
+  try {
+    if (workspaceId === null || workspaceId === undefined || workspaceId === "") {
+      window.localStorage.removeItem(ACTIVE_WS_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(ACTIVE_WS_STORAGE_KEY, String(workspaceId));
+    }
+  } catch {
+    /* non-fatal */
+  }
+}
+
+function dropLegacyConnectionsCache() {
+  // Pre-workspace-scoping builds wrote a single un-namespaced key. Remove it so
+  // a stale cross-workspace snapshot from before this fix can never be read.
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(CONNECTIONS_CACHE_PREFIX);
+  } catch {
+    /* non-fatal */
+  }
+}
 
 function readConnectionsCache() {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(CONNECTIONS_CACHE_KEY);
+    const raw = window.localStorage.getItem(connectionsCacheKey());
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || !parsed.providers) return null;
@@ -45,21 +93,23 @@ function writeConnectionsCache(data) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(
-      CONNECTIONS_CACHE_KEY,
+      connectionsCacheKey(),
       JSON.stringify({ providers: data.providers, savedAt: Date.now() })
     );
+    dropLegacyConnectionsCache();
   } catch {
     /* quota / private mode — non-fatal, in-memory state still works */
   }
 }
 
-/** Wipe the cache. Call after Connect / Disconnect so the next read is
- *  guaranteed fresh, not a stale snapshot from before the user changed
- *  anything. */
+/** Wipe the cache for the active workspace. Call after Connect / Disconnect or a
+ *  workspace switch so the next read is guaranteed fresh, not a stale snapshot
+ *  from before the user changed anything. */
 export function invalidateConnectionsCache() {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.removeItem(CONNECTIONS_CACHE_KEY);
+    window.localStorage.removeItem(connectionsCacheKey());
+    dropLegacyConnectionsCache();
   } catch {
     /* non-fatal */
   }

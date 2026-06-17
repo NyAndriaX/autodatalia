@@ -1,5 +1,6 @@
 import { apiFetch } from "./apiClient";
 import { config } from "./config";
+import { rememberActiveWorkspace } from "./oauthService";
 
 function delay(ms = 150) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -10,6 +11,9 @@ function normalizeUser(data) {
   // The backend now rides workspace + permissions on the user; default the
   // permission list so frontend gating (hasPermission) is always safe.
   if (user && !Array.isArray(user.permissions)) user.permissions = [];
+  // Keep the connections-cache scope in lockstep with the active workspace so a
+  // workspace switch can't surface the previous workspace's connected accounts.
+  rememberActiveWorkspace(user?.workspace?.id ?? null);
   return user;
 }
 
@@ -50,6 +54,7 @@ export const authService = {
   },
 
   async logout() {
+    rememberActiveWorkspace(null);
     if (!config.apiBaseUrl) return;
     try {
       await apiFetch("/auth/logout", { method: "POST" });

@@ -23,6 +23,7 @@ import {
   acceptInvitation,
   refuseInvitation,
 } from "../../lib/workspaceService";
+import { invalidateConnectionsCache } from "../../lib/oauthService";
 
 // Topbar controls: switch the active workspace, and accept/refuse invitations
 // addressed to you. Both refresh the signed-in user (via /auth/me) after an
@@ -58,7 +59,11 @@ export default function WorkspaceControls() {
   // the activity feed. Stale cross-workspace notifications are cleared.
   const refreshWorkspaceData = async () => {
     dispatch(clearNotifications());
+    // restoreSessionThunk re-points the active-workspace scope (via the auth
+    // layer); clear the new workspace's connections cache afterwards so views
+    // re-fetch its real connected accounts instead of the previous one's.
     await dispatch(restoreSessionThunk());
+    invalidateConnectionsCache();
     dispatch(loadScheduledPostsThunk({ refresh: true }));
     dispatch(loadMessagesThunk());
   };
