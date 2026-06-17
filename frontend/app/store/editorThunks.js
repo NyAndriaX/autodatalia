@@ -253,15 +253,24 @@ export function publishNowThunk() {
 
     const targets = [];
     const skipped = [];
+    // Zernio targets come back from /oauth/connections tagged with the
+    // datalia-facing `platform` + provider:"zernio"; the backend routes them
+    // through the unified API. A platform is only "skipped" when NEITHER a
+    // direct account nor a Zernio account is connected for it.
+    const zernioTargets = providers?.zernio?.targets || [];
     for (const platform of enabled) {
       const picker = TARGETS_FOR_PLATFORM[platform];
-      const found = picker ? picker(providers) : [];
-      if (found.length === 0) {
+      const direct = picker ? picker(providers) : [];
+      const zern = zernioTargets.filter((t) => t.platform === platform);
+      if (direct.length === 0 && zern.length === 0) {
         skipped.push(platform);
         continue;
       }
-      for (const t of found) {
+      for (const t of direct) {
         targets.push({ platform, id: t.id, label: t.label });
+      }
+      for (const t of zern) {
+        targets.push({ platform, id: t.id, label: t.label, provider: "zernio" });
       }
     }
 
