@@ -53,8 +53,8 @@ export default function Sidebar() {
     {
       title: t("sectionAutomation"),
       items: [
-        { key: "automation", icon: <RobotOutlined />,       label: tSidebar("automation"), badge: "NEW" },
-        { key: "videos",     icon: <VideoCameraOutlined />, label: tSidebar("videos"),     badge: "NEW" },
+        { key: "automation", icon: <RobotOutlined />,       label: tSidebar("automation") },
+        { key: "videos",     icon: <VideoCameraOutlined />, label: tSidebar("videos")     },
       ],
     },
     {

@@ -15,7 +15,6 @@ import {
   ImagePlus,
   ExternalLink,
 } from "lucide-react";
-import ScheduleModal from "./ScheduleModal";
 import PostEditorPopup from "./PostEditorPopup";
 import { useIsMobile } from "../../lib/useIsMobile";
 import {
@@ -32,6 +31,7 @@ import {
   cancelScheduleThunk,
   updatePostThunk,
 } from "../../store/calendarThunks";
+import { setActiveView } from "../../store/uiSlice";
 import {
   PLATFORMS,
   PLATFORM_MAP,
@@ -305,7 +305,6 @@ export default function CalendarView() {
   const { scheduledPosts, view, cursor, filters, seeded } = useSelector(
     (s) => s.calendar
   );
-  const [quickCreateDate, setQuickCreateDate] = useState(null);
   const [editingPost, setEditingPost] = useState(null);
   // Every "Today" click bumps this counter. Day cells with `isToday`
   // remount when it changes, replaying the fade-in animation so the
@@ -627,22 +626,11 @@ export default function CalendarView() {
             onDropPost={onDropPost}
             onEdit={onEdit}
             onCancel={onCancel}
-            onQuickCreate={setQuickCreateDate}
+            onQuickCreate={() => dispatch(setActiveView("creation"))}
             flashToday={flashToday}
           />
         ))}
       </div>
-
-      {quickCreateDate && (
-        <ScheduleModal
-          initialDate={quickCreateDate}
-          onClose={() => setQuickCreateDate(null)}
-          onSchedule={(post) => {
-            dispatch(schedulePostThunk({ post, date: post.scheduledDate }));
-            setQuickCreateDate(null);
-          }}
-        />
-      )}
 
       {editingPost && (
         <PostEditorPopup

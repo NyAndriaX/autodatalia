@@ -35,7 +35,6 @@ import { addNotification, setActiveView } from "../../store/uiSlice";
 const TABS = [
   { id: "uploads", labelKey: "tabFiles", icon: ImageIcon, descKey: "tabFilesDesc" },
   { id: "ai", labelKey: "tabAi", icon: Sparkles, descKey: "tabAiDesc" },
-  { id: "brand", labelKey: "tabBrand", icon: Palette, descKey: "tabBrandDesc" },
 ];
 
 const TYPE_FILTERS = [
@@ -865,24 +864,6 @@ export default function MediaLibraryView() {
               className={`${btnSecondary} inline-flex items-center gap-2 text-sm`}
             >
               <Sparkles size={15} /> {t("generateAiVideo")}
-            </button>
-          }
-        />
-      )}
-
-      {/* ── Onglet Brand Kit ─────────────────────────────────────── */}
-      {tab === "brand" && (
-        <EmptyPanel
-          icon={Palette}
-          title={t("brandKitTitle")}
-          subtitle={t("brandKitSubtitle")}
-          action={
-            <button
-              type="button"
-              onClick={() => dispatch(setActiveView("settings"))}
-              className={`${btnSecondary} inline-flex items-center gap-2 text-sm`}
-            >
-              <Palette size={15} /> {t("openSettings")}
             </button>
           }
         />
