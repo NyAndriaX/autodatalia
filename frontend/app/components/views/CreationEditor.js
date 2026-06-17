@@ -927,7 +927,6 @@ export default function CreationEditor() {
           initialMedia={currentPost.media}
           initialRatios={currentPost.ratios}
           initialTikTok={currentPost.tiktok}
-          calendarOnly
           onClose={() => setShowSchedule(false)}
           onSchedule={(post) => {
             dispatch(schedulePostThunk({ post, date: post.scheduledDate }));
