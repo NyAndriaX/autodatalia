@@ -74,7 +74,7 @@ export function schedulePostThunk({ post, date }) {
       const updated = await patchPost(scheduled.id, scheduled);
       dispatch(
         addNotification({
-          message: updated ? "Post scheduled." : "Scheduled locally (backend offline).",
+          messageKey: updated ? "postScheduled" : "scheduledLocally",
           type: updated ? "success" : "info",
         })
       );
@@ -92,7 +92,7 @@ export function schedulePostThunk({ post, date }) {
     }
     dispatch(
       addNotification({
-        message: persisted ? "Post scheduled." : "Scheduled locally (backend offline).",
+        messageKey: persisted ? "postScheduled" : "scheduledLocally",
         type: persisted ? "success" : "info",
       })
     );
@@ -106,7 +106,7 @@ export function reschedulePostThunk({ id, date }) {
     const updated = await patchPost(id, { scheduledDate: date });
     dispatch(
       addNotification({
-        message: updated ? "Post rescheduled." : "Rescheduled locally (backend offline).",
+        messageKey: updated ? "postRescheduled" : "rescheduledLocally",
         type: updated ? "success" : "info",
       })
     );
@@ -123,7 +123,7 @@ export function updatePostThunk({ id, patch }) {
     const updated = await patchPost(id, patch);
     dispatch(
       addNotification({
-        message: updated ? "Post updated." : "Updated locally (backend offline).",
+        messageKey: updated ? "postUpdated" : "updatedLocally",
         type: updated ? "success" : "info",
       })
     );
@@ -137,7 +137,7 @@ export function cancelScheduleThunk(id) {
     const ok = await deletePost(id);
     dispatch(
       addNotification({
-        message: ok ? "Schedule cancelled." : "Cancelled locally (backend offline).",
+        messageKey: ok ? "scheduleCancelled" : "cancelledLocally",
         type: "info",
       })
     );

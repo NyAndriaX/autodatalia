@@ -86,7 +86,7 @@ export function generateContentThunk(force = false, count = 1) {
       dispatch(recordCacheHit());
       dispatch(
         addNotification({
-          message: "Reusing last generation — no tokens spent.",
+          messageKey: "reusingCache",
           type: "info",
         })
       );
@@ -171,9 +171,7 @@ export function saveDraftThunk() {
     }
     dispatch(
       addNotification({
-        message: saved
-          ? "Draft saved to your Library."
-          : "Draft saved locally (backend unavailable).",
+        messageKey: saved ? "draftSaved" : "draftSavedLocally",
         type: saved ? "success" : "info",
       })
     );
@@ -198,7 +196,8 @@ export function submitForValidationThunk() {
       dispatch(setStatus(resp?.status || "pending"));
       dispatch(
         addNotification({
-          message: `Submitted for Telegram validation${resp?.chat_id ? ` (${resp.chat_id})` : ""}.`,
+          messageKey: "validationSubmitted",
+          messageParams: { chat: resp?.chat_id ? ` (${resp.chat_id})` : "" },
           type: "success",
         })
       );
@@ -206,7 +205,8 @@ export function submitForValidationThunk() {
       dispatch(setStatus("error"));
       dispatch(
         addNotification({
-          message: `Validation submit failed: ${err.message || "unknown error"}`,
+          messageKey: "validationFailed",
+          messageParams: { error: err.message || "unknown error" },
           type: "error",
         })
       );
@@ -223,7 +223,7 @@ export function publishNowThunk() {
     // guard, but this gives the user a clear message without a round-trip.
     if (now < cooldownUntil) {
       const wait = Math.ceil((cooldownUntil - now) / 1000);
-      dispatch(addNotification({ message: `Wait ${wait}s before publishing again.`, type: "error" }));
+      dispatch(addNotification({ messageKey: "waitBeforePublish", messageParams: { seconds: wait }, type: "error" }));
       return;
     }
 
@@ -239,7 +239,7 @@ export function publishNowThunk() {
     if (!isUploadDone()) {
       dispatch(
         addNotification({
-          message: "Waiting for upload + transcode to finish before publishing…",
+          messageKey: "uploadWaiting",
           type: "info",
         })
       );
@@ -254,7 +254,7 @@ export function publishNowThunk() {
         dispatch(setStatus("error"));
         dispatch(
           addNotification({
-            message: "Upload + transcode didn't finish in 5min. Check the file and retry.",
+            messageKey: "uploadTimeout",
             type: "error",
           })
         );
@@ -274,7 +274,7 @@ export function publishNowThunk() {
       .filter(([, on]) => on)
       .map(([id]) => id);
     if (enabled.length === 0) {
-      dispatch(addNotification({ message: "No platform selected.", type: "error" }));
+      dispatch(addNotification({ messageKey: "noPlatformSelected", type: "error" }));
       return;
     }
 
@@ -284,7 +284,7 @@ export function publishNowThunk() {
       providers = data?.providers || {};
     } catch (err) {
       dispatch(setStatus("error"));
-      dispatch(addNotification({ message: `Connections fetch failed: ${err.message}`, type: "error" }));
+      dispatch(addNotification({ messageKey: "connectionsFetchFailed", messageParams: { error: err.message }, type: "error" }));
       return;
     }
 
@@ -315,7 +315,8 @@ export function publishNowThunk() {
       dispatch(setStatus("error"));
       dispatch(
         addNotification({
-          message: `No connected accounts for: ${skipped.join(", ")}. Connect them in Settings.`,
+          messageKey: "noConnectedAccounts",
+          messageParams: { platforms: skipped.join(", ") },
           type: "error",
         })
       );
@@ -358,7 +359,8 @@ export function publishNowThunk() {
       dispatch(setStatus("error"));
       dispatch(
         addNotification({
-          message: `Can't publish: ${why}. Remove the failed file and re-add it.`,
+          messageKey: "cantPublish",
+          messageParams: { why },
           type: "error",
         })
       );
@@ -368,8 +370,7 @@ export function publishNowThunk() {
       dispatch(setStatus("error"));
       dispatch(
         addNotification({
-          message:
-            "Instagram and TikTok need a media file. Add an image or video before publishing.",
+          messageKey: "mediaRequired",
           type: "error",
         })
       );
@@ -406,7 +407,7 @@ export function publishNowThunk() {
       results = resp.results || [];
     } catch (err) {
       dispatch(setStatus("error"));
-      dispatch(addNotification({ message: `Publish failed: ${err.message}`, type: "error" }));
+      dispatch(addNotification({ messageKey: "publishError", messageParams: { error: err.message }, type: "error" }));
       return;
     }
 
@@ -423,7 +424,8 @@ export function publishNowThunk() {
     for (const r of ok) {
       dispatch(
         addNotification({
-          message: `Published to ${r.target_label} (${r.platform}).`,
+          messageKey: "publishedTo",
+          messageParams: { target: r.target_label, platform: r.platform },
           type: "success",
           url: r.permalink_url || null,
         })
@@ -432,7 +434,8 @@ export function publishNowThunk() {
     for (const r of failed) {
       dispatch(
         addNotification({
-          message: `${r.target_label} (${r.platform}) failed: ${r.error || "unknown"}`,
+          messageKey: "publishFailed",
+          messageParams: { target: r.target_label, platform: r.platform, error: r.error || "unknown" },
           type: "error",
         })
       );

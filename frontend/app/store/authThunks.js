@@ -38,14 +38,14 @@ export function loginThunk(credentials) {
       const user = await authService.login(credentials);
       if (!user) {
         dispatch(authError("Sign-in failed"));
-        dispatch(addNotification({ message: "Sign-in failed.", type: "error" }));
+        dispatch(addNotification({ messageKey: "signInFailed", type: "error" }));
         return;
       }
       dispatch(authSuccess(user));
-      dispatch(addNotification({ message: `Signed in as ${user?.name}.`, type: "success" }));
+      dispatch(addNotification({ messageKey: "signedInAs", messageParams: { name: user?.name }, type: "success" }));
     } catch (err) {
       dispatch(authError(err.message ?? "Sign-in failed"));
-      dispatch(addNotification({ message: "Sign-in failed.", type: "error" }));
+      dispatch(addNotification({ messageKey: "signInFailed", type: "error" }));
     }
   };
 }
@@ -59,7 +59,7 @@ export function logoutThunk() {
       // a stale "publish succeeded" banner from someone else's flow.
       dispatch(clearNotifications());
       dispatch(authLogout());
-      dispatch(addNotification({ message: "Signed out.", type: "info" }));
+      dispatch(addNotification({ messageKey: "signedOut", type: "info" }));
     }
   };
 }
@@ -71,14 +71,14 @@ export function registerThunk(credentials) {
       const user = await authService.register(credentials);
       if (!user) {
         dispatch(authError("Registration failed"));
-        dispatch(addNotification({ message: "Registration failed.", type: "error" }));
+        dispatch(addNotification({ messageKey: "registrationFailed", type: "error" }));
         return;
       }
       dispatch(authSuccess(user));
-      dispatch(addNotification({ message: `Account created, welcome ${user?.name}!`, type: "success" }));
+      dispatch(addNotification({ messageKey: "accountCreated", messageParams: { name: user?.name }, type: "success" }));
     } catch (err) {
       dispatch(authError(err.message ?? "Registration failed"));
-      dispatch(addNotification({ message: "Registration failed.", type: "error" }));
+      dispatch(addNotification({ messageKey: "registrationFailed", type: "error" }));
     }
   };
 }

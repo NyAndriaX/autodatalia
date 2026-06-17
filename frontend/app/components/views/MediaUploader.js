@@ -39,7 +39,7 @@ export default function MediaUploader() {
       for (const file of files) {
         const err = validateFile(file);
         if (err) {
-          dispatch(addNotification({ message: `${file.name}: ${err}`, type: "error" }));
+          dispatch(addNotification({ messageKey: "uploadRejected", messageParams: { name: file.name, error: err }, type: "error" }));
           continue;
         }
         accepted.push({ file, item: toMediaItem(file) });

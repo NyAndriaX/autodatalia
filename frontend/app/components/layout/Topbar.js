@@ -116,6 +116,7 @@ export default function Topbar() {
   const tLang = useTranslations("languages");
   const tSidebar = useTranslations("sidebar");
   const tCreation = useTranslations("creation");
+  const tNotif = useTranslations("notifications");
   const VIEW_META = useMemo(() => buildViewMeta(t), [t]);
   const { activeView, notifications, searchQuery, sidebarCollapsed, theme, search, messages, aiUsage, locale } =
     useSelector((state) => state.ui);
@@ -628,7 +629,15 @@ export default function Topbar() {
                       />
                       <div className="min-w-0 flex-1">
                         <p className="text-xs flex items-center gap-1" style={{ color: "var(--text-primary)" }}>
-                          <span className="flex-1">{item.message}</span>
+                          {/* Thunk-dispatched notifications carry a messageKey
+                              (+ params) translated here so they're localized like
+                              the rest of the app; the service message feed and
+                              already-translated component toasts use raw message. */}
+                          <span className="flex-1">
+                            {item.messageKey
+                              ? tNotif(item.messageKey, item.messageParams || {})
+                              : item.message}
+                          </span>
                           {item.url && (
                             <a
                               href={item.url}
