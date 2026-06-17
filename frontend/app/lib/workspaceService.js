@@ -48,6 +48,13 @@ export async function removeMember(userId) {
   });
 }
 
+// Destructive: fully delete a member's ACCOUNT (not just their membership).
+export async function deleteMemberAccount(userId) {
+  return apiFetch(`/workspace/members/${encodeURIComponent(userId)}/account`, {
+    method: "DELETE",
+  });
+}
+
 // ── Roles ───────────────────────────────────────────────────────────────
 export async function fetchRoles() {
   if (offline()) return [];
@@ -112,6 +119,15 @@ export async function switchWorkspace(workspaceId) {
     method: "POST",
     body: JSON.stringify({ workspace_id: workspaceId }),
   });
+}
+
+// ── Destructive: delete the active workspace / leave it ─────────────────────
+export async function deleteWorkspace() {
+  return apiFetch("/workspace", { method: "DELETE" });
+}
+
+export async function leaveWorkspace() {
+  return apiFetch("/workspace/leave", { method: "POST" });
 }
 
 // ── Invitations inbox (the signed-in user's own invites) ────────────────────

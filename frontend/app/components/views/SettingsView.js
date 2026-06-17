@@ -2,7 +2,7 @@
 
 import { btnPrimary, btnSecondary, btnGhost, inputField } from "../../lib/uiClasses";
 import { useCallback, useEffect, useState } from "react";
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { useTranslations } from "next-intl";
 import { PLATFORMS } from "../../lib/platforms";
 import { loadSettings, saveSettings } from "../../lib/settingsStorage";
@@ -17,9 +17,13 @@ import {
 } from "../../lib/oauthService";
 import { fetchTelegramStatus, sendTelegramTest } from "../../lib/validationService";
 import { fetchBackendKeys, patchBackendKeys } from "../../lib/backendKeysService";
+import { deleteWorkspace, leaveWorkspace } from "../../lib/workspaceService";
+import { authService } from "../../lib/authService";
+import { authLogout } from "../../store/authSlice";
+import { restoreSessionThunk } from "../../store/authThunks";
 import {
   Send, KeyRound, Palette, Plug, Check, BadgeCheck, Loader2,
-  Trash2, RefreshCw, Clock, Users, Settings, HelpCircle, Zap,
+  Trash2, RefreshCw, Clock, Users, Settings, HelpCircle, Zap, AlertTriangle, LogOut,
 } from "lucide-react";
 import { COMMON_TIMEZONES, getBrowserTimezone } from "../../lib/timezone";
 
@@ -99,6 +103,35 @@ function Section({ icon: Icon, title, badge, children }) {
         {badge}
       </div>
       <div className="px-5 py-5">{children}</div>
+    </div>
+  );
+}
+
+/* ─── Danger-zone action row (destructive, irreversible) ─────────────────*/
+function DangerRow({ title, desc, icon: Icon, onAction }) {
+  return (
+    <div
+      className="flex items-center gap-3 rounded-xl p-3.5"
+      style={{ border: "1px solid rgba(239,68,68,.3)", background: "rgba(239,68,68,.04)" }}
+    >
+      <span
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+        style={{ background: "rgba(239,68,68,.1)", color: "var(--status-error)" }}
+      >
+        <Icon size={15} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{title}</p>
+        <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>{desc}</p>
+      </div>
+      <button
+        type="button"
+        onClick={onAction}
+        className="shrink-0 rounded-lg px-3 py-1.5 text-xs font-bold text-white"
+        style={{ background: "var(--status-error)", border: "none", cursor: "pointer" }}
+      >
+        {title}
+      </button>
     </div>
   );
 }
@@ -574,6 +607,7 @@ function BackendKeysSection() {
 export default function SettingsView() {
   const t        = useTranslations("settings");
   const dispatch = useDispatch();
+  const user                                  = useSelector((st) => st.auth.user);
   const [s,               setS]               = useState(null);
   const [connections,     setConnections]     = useState(null);
   const [pendingProvider, setPendingProvider] = useState(null);
@@ -702,6 +736,40 @@ export default function SettingsView() {
     dispatch(addNotification({ message: t("saved"), type:"success" }));
   };
 
+  // ── Danger zone (destructive, irreversible) ──────────────────────────────
+  const handleLeaveWorkspace = async () => {
+    if (!confirm(t("leaveConfirm"))) return;
+    try {
+      await leaveWorkspace();
+      dispatch(addNotification({ message: t("leftWorkspace"), type: "info" }));
+      dispatch(restoreSessionThunk());
+    } catch (err) {
+      dispatch(addNotification({ message: err.message || t("unknownError"), type: "error" }));
+    }
+  };
+
+  const handleDeleteWorkspace = async () => {
+    if (!confirm(t("deleteWorkspaceConfirm"))) return;
+    try {
+      await deleteWorkspace();
+      dispatch(addNotification({ message: t("workspaceDeleted"), type: "info" }));
+      dispatch(restoreSessionThunk());
+    } catch (err) {
+      dispatch(addNotification({ message: err.message || t("unknownError"), type: "error" }));
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!confirm(t("deleteAccountConfirm"))) return;
+    try {
+      await authService.deleteAccount();
+      dispatch(addNotification({ message: t("accountDeleted"), type: "info" }));
+      dispatch(authLogout());
+    } catch (err) {
+      dispatch(addNotification({ message: err.message || t("unknownError"), type: "error" }));
+    }
+  };
+
   const handlePairTelegram = async () => {
     if (!s.telegramChatId) {
       dispatch(addNotification({ message: t("telegramChatIdRequired"), type:"error" }));
@@ -758,6 +826,7 @@ export default function SettingsView() {
     { id:"ia",          label:t("tabAiKeys"),    icon:KeyRound                                                                          },
     { id:"telegram",    label:t("tabTelegram"),  icon:Send,     badge: null                                                            },
     { id:"marque",      label:t("tabBrandKit"),  icon:Palette                                                                           },
+    { id:"danger",      label:t("tabDanger"),    icon:AlertTriangle                                                                     },
   ];
 
   return (
@@ -923,6 +992,40 @@ export default function SettingsView() {
                 onChange={update} placeholder={t("brandTonePlaceholder")}
                 hint={t("brandToneHint")} />
             </div>
+          </div>
+        </Section>
+      )}
+
+      {/* ═ ZONE SENSIBLE ════════════════════════════════════════════════ */}
+      {onglet === "danger" && (
+        <Section icon={AlertTriangle} title={t("dangerTitle")}>
+          <p className="mb-5 text-xs leading-relaxed" style={{ color: "var(--text-muted)" }}>
+            {t("dangerHelp")}
+          </p>
+          <div className="flex flex-col gap-3">
+            {user?.workspace && !user?.workspace?.is_owner && (
+              <DangerRow
+                title={t("leaveWorkspaceBtn")}
+                desc={t("leaveWorkspaceDesc")}
+                icon={LogOut}
+                onAction={handleLeaveWorkspace}
+              />
+            )}
+            {(user?.workspace?.is_owner ||
+              (user?.permissions || []).includes("workspace.manage")) && (
+              <DangerRow
+                title={t("deleteWorkspaceBtn")}
+                desc={t("deleteWorkspaceDesc")}
+                icon={Trash2}
+                onAction={handleDeleteWorkspace}
+              />
+            )}
+            <DangerRow
+              title={t("deleteAccountBtn")}
+              desc={t("deleteAccountDesc")}
+              icon={Trash2}
+              onAction={handleDeleteAccount}
+            />
           </div>
         </Section>
       )}

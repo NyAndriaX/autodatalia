@@ -63,6 +63,13 @@ export const authService = {
     }
   },
 
+  // Destructive + irreversible: delete the caller's own account.
+  async deleteAccount() {
+    if (!config.apiBaseUrl) throw new Error("Backend not configured.");
+    rememberActiveWorkspace(null);
+    return apiFetch("/auth/delete-account", { method: "POST" });
+  },
+
   async changePassword({ currentPassword, newPassword } = {}) {
     if (!config.apiBaseUrl) {
       throw new Error("Backend not configured.");
