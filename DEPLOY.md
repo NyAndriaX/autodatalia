@@ -330,12 +330,39 @@ TikTok requires a screen recording of your app to approve `video.publish`. Your 
 
 ---
 
+## Running 24/7 in production (Dokploy)
+
+The stack is built to run unattended. Three things matter for that:
+
+1. **Always-on, single backend instance.** The scheduler, automation worker and
+   video-job workers run **in-process** inside `caption-api` (started in the app
+   lifespan), so scheduled posts only fire while that container is up.
+   `restart: always` (in `docker-compose.prod.yml`) covers crashes/reboots.
+   **Keep `caption-api` at exactly one replica** — scaling it horizontally would
+   run the loops N times and double-publish. (Don't enable Dokploy "replicas" or
+   rolling/overlapping deploys for this service.)
+2. **Persistent media volume.** Uploads AND AI-generated media live on the
+   `caption-content` volume at `CONTENT_DIR=/home/app/content` (per workspace
+   under `content/ws/{id}/` and `content/ws/{id}/generated/`). It survives
+   redeploys — don't deploy with an ephemeral/empty content dir or generated
+   media vanishes on restart.
+3. **Upload size at the proxy.** The app upload limit is **500 MB** (frontend +
+   backend). The bundled Caddy is set to `request_body max_size 512MB` to match.
+   **If Dokploy fronts the stack with its own Traefik**, make sure that proxy
+   also allows ≥500 MB bodies (Traefik defaults to unlimited, so usually fine —
+   but if you added a `buffering` middleware, raise its `maxRequestBodyBytes`).
+
+Public URLs (`PUBLIC_BASE_URL` / `OAUTH_REDIRECT_BASE`) are already set to
+`https://${API_DOMAIN}` so generated-media URLs and OAuth callbacks resolve on
+the prod domain, not localhost.
+
 ## What gets persisted
 
 State is split across **two** named volumes — back both up:
 
 ### `caption-content` (media only)
-- Uploaded + AI-generated media (`content/`, `content/generated/`)
+- Uploaded + AI-generated media (`content/`, per-workspace under
+  `content/ws/{id}/` incl. `content/ws/{id}/generated/`)
 
 > Posts, automation rules, OAuth tokens, runtime API keys, bell-feed messages,
 > cost logs and video jobs **no longer live here as JSON** — they're migrated

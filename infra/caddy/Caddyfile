@@ -9,10 +9,13 @@
 # bare hostname (e.g. `api.datalia.app`, NOT `https://api.datalia.app`).
 
 {$API_DOMAIN} {
-	# Larger body cap than the default 10MB — videos can be up to ~50MB
-	# (frontend cap is 50MB; backend transcoder pulls from disk).
+	# Body cap MUST match the app's upload limit (frontend MAX_SIZE_BYTES +
+	# backend MAX_UPLOAD_BYTES = 500MB). A lower cap here makes Caddy 413 large
+	# uploads before they reach the backend. 512MB leaves headroom for multipart
+	# overhead. (If a Dokploy-managed Traefik also fronts this stack, raise its
+	# request-body limit too — Traefik defaults to unlimited, so usually fine.)
 	request_body {
-		max_size 100MB
+		max_size 512MB
 	}
 
 	# Standard reverse proxy to the caption-api container on the docker
@@ -25,12 +28,12 @@
 		header_up X-Forwarded-Host {host}
 		header_up X-Real-IP {remote_host}
 
-		# TikTok / Meta CDN fetches of /content/<file>.mp4 can take a
-		# while on slow links. Bump the upstream read timeout so a 50MB
-		# video can be served without the proxy cutting it off.
+		# Large media in both directions: serving /content/<file>.mp4 to
+		# TikTok/Meta CDNs, and streaming a 500MB upload to the backend.
+		# 10m of headroom so the proxy doesn't cut off either on slow links.
 		transport http {
-			read_timeout 5m
-			write_timeout 5m
+			read_timeout 10m
+			write_timeout 10m
 		}
 	}
 
