@@ -122,9 +122,18 @@ covered by existing tests (unchanged); the Zernio fallback has no automated test
 **#1 reels icon — DONE** (`61d0bd6`): the ratio picker shows a Reels (film) icon
 on the 9:16 vertical option (the Reels/Stories/Shorts format) across all
 platforms.
-**Only remaining CEO item: #13** ("avoid useless icons, cleaner/lighter
-design") — a subjective visual-polish pass left for the teammate; no functional
-work outstanding.
+**#13 (clean design) — IN PROGRESS.** Clean-design pass on the scheduled-post
+editors:
+- `0045e8c` — ScheduleModal slimmed to a calendar + time dialog (580→105 lines;
+  the old re-editor branch was dead code). Test: Create → "Schedule…" shows just
+  a calendar + time.
+- `d5fbfa6` — PostEditorPopup (click a calendar post) dropped its redundant
+  "AI Image / AI Video" generation block (-100 lines; generation lives in the
+  dedicated Image IA / Vidéo IA views). Test: the edit popup is lean — content,
+  media upload/swap, platforms, ratios, schedule, status, preview; no AI-gen
+  buttons. Core editing unchanged.
+Broad cosmetic icon cleanup across the other views remains the teammate's visual
+pass. No functional work outstanding.
 
 ## 4. What Claude verified on the VM (and what it did NOT)
 Verified: backend `compileall`, `test_zernio.py` smoke logic, every edited
