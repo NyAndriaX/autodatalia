@@ -8,6 +8,40 @@ on the PC. This guide is the test plan.
 > **CEO-list status** — what's done vs what's left/subjective, with the CEO's
 > requests quoted verbatim: see [`CEO-CHECKLIST.md`](CEO-CHECKLIST.md).
 
+## Round 2 — fixes batch (test these)
+
+A second batch of CEO/user fixes landed (commits `5afbb22`..`26cd97e`). Build the
+frontend + run the backend suite, then click-test:
+
+1. **Zernio connect list** (`5afbb22`) — Settings → Platforms → Zernio "Connect a
+   network" now shows only Facebook / Instagram / TikTok / LinkedIn (not 15).
+2. **Zernio /start 500** (`a6a46a3`) — contract matches the docs, so this was
+   environmental. Now: the server logs the exact upstream failure (`[zernio] GET
+   /connect/... -> 500: <body>`), the UI notification shows Zernio's real
+   message (not "API 500"), and `start_connect` self-heals a stale cached
+   profile (usual cause — the key was rotated, so the old profile_id no longer
+   belongs to the account) by recreating it once. **Reconnect Zernio and watch
+   the logs** — they now name the real reason if it still fails.
+3. **All notifications i18n** (`26cd97e`) — thunk notifications (sign-in,
+   scheduled, published, draft saved, etc.) are translated per language now. Flip
+   FR/EN and confirm the bell feed switches. (Components already used t().)
+4. **Auth header** (`5afbb22`) — Create Account tab no longer clips its header
+   (`safe center`); both tabs show the title.
+5. **AI-media picker** (`6e42f3d`) — Create → Media → "Image IA"/"Vidéo IA" open
+   a picker of what you generated in those studios (client-side, per-workspace).
+   Generate in Image IA / Vidéo IA first, then pick in Create.
+6. **Scheduled post edit** (`b51e577`) — a calendar post's pencil loads it into
+   Create (no popup); a day "+" opens Create pre-set to that date so scheduling
+   needs no re-pick; editing then scheduling updates in place (no duplicate).
+7. **Image IA options** (`f425cb2`) — optional Style / Colors / Lighting / accent
+   chips that augment the prompt.
+8. **Singular media delete** (`5afbb22`) — per-tile trash in the Library now
+   removes the item (mirrors bulk delete).
+9. **500 MB media limit** (`5afbb22`) — frontend + backend. **A prod proxy
+   (Caddy) may need a matching request-body limit for 500 MB uploads.**
+10. **Draft edit in place** (`6e76783`) — editing a draft updates it instead of
+    creating a new one; "New post" resets the editor.
+
 ## 0. Pull + bring up
 
 ```bash
