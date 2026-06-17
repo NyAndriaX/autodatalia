@@ -293,6 +293,50 @@ git -C ~/datalia pull
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 ```
 
+### Updating without resetting users/data
+
+All login users + app state live in MariaDB's `mariadb-data` volume. The backend
+**never silently starts a fresh DB** — `init_db` connects to MariaDB or refuses
+to boot — so **if users "reset", that volume was replaced.** `up -d --build`
+keeps named volumes, so the cause is one of two deploy traps:
+
+1. **The volume got a new name.** Compose names volumes `<project>_mariadb-data`.
+   If the Compose **project name** changes between deploys, a *new, empty* volume
+   is created and the old one (with your users) is orphaned — still on disk,
+   just not attached. The compose pins `name: datalia`, but a manager like
+   **Dokploy can override the project name** with its own app id; if the app is
+   deleted + recreated to deploy, the name changes. Check with
+   `docker volume ls | grep mariadb` — more than one `*_mariadb-data` means this
+   happened (your users are in the older one).
+2. **Secrets were regenerated.** `MARIADB_PASSWORD` is only applied on *first*
+   volume init. If a deploy regenerates it (e.g. `gen-secrets.sh` ran again
+   because `.env.production` wasn't persisted), it no longer matches the existing
+   DB → the backend can't connect and crashes; wiping the volume to "fix" the
+   crash is what actually loses the users.
+
+**Rules for safe updates:**
+- A code update only needs the app images rebuilt — never tear down the DB:
+  `... up -d --build caption-api frontend`. **Never** `down -v` or
+  `docker volume prune` as part of a deploy.
+- Set secrets **once** in Dokploy's persistent env panel (especially
+  `MARIADB_PASSWORD` / `MARIADB_ROOT_PASSWORD` / `JWT_SECRET`); don't re-run
+  `gen-secrets.sh` against an initialised DB.
+- Keep the Dokploy app/stack **stable** — deploy by rebuilding it, not by
+  deleting + recreating it, so the project (and volume) name stays put.
+- **Best fix — make the data volumes immune to project-name churn.** Pin them to
+  an explicit, project-independent name (or mark `external`) so every deploy
+  attaches the *same* volume. Set the name to your CURRENT volume so no data
+  moves (verify the name first with `docker volume ls`):
+  ```yaml
+  volumes:
+    mariadb-data:
+      name: datalia_mariadb-data      # your existing volume
+    caption-content:
+      name: datalia_caption-content
+  ```
+- Already lost them? The old volume is usually still on disk — copy it back:
+  `docker run --rm -v <OLD_vol>:/from -v <NEW_vol>:/to alpine sh -c 'cp -a /from/. /to/'`
+
 > ⚠️ **`up -d` is NOT enough for domain changes.** The frontend bakes
 > `NEXT_PUBLIC_API_BASE_URL` (derived from `API_DOMAIN`) into the static bundle at
 > **build** time — it is a build arg, not a runtime env var. So changing
