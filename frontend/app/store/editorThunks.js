@@ -1,6 +1,7 @@
 import {
   setContent,
   setStatus,
+  setDraftId,
   startGeneration,
   setVariants,
   setGenerationError,
@@ -17,7 +18,7 @@ import {
 } from "./uiSlice";
 import { generateContent, applyQuickAction, isGenerationCached } from "../lib/aiService";
 import { fetchConnections, publishToTargets } from "../lib/oauthService";
-import { createPost } from "../lib/postsService";
+import { createPost, patchPost } from "../lib/postsService";
 import { publishHashKey } from "../lib/publishHash";
 import { submitValidation } from "../lib/validationService";
 import { loadSettings } from "../lib/settingsStorage";
@@ -147,7 +148,7 @@ export function saveDraftThunk() {
     // blobs are meaningless server-side. scheduledDate is required by the API,
     // so a date-less draft defaults to today.
     const uploaded = (currentPost.media || []).filter((m) => m.status === "uploaded");
-    const created = await createPost({
+    const payload = {
       content: currentPost.content || "",
       platforms: currentPost.platforms || {},
       status: "draft",
@@ -158,13 +159,22 @@ export function saveDraftThunk() {
         currentPost.ratios && Object.keys(currentPost.ratios).length
           ? currentPost.ratios
           : undefined,
-    });
+    };
+    // Editing an existing draft → update it in place; otherwise create one and
+    // remember its id so the NEXT save updates the same draft (not a new one).
+    let saved;
+    if (currentPost.draftId) {
+      saved = await patchPost(currentPost.draftId, payload);
+    } else {
+      saved = await createPost(payload);
+      if (saved?.id) dispatch(setDraftId(saved.id));
+    }
     dispatch(
       addNotification({
-        message: created
+        message: saved
           ? "Draft saved to your Library."
           : "Draft saved locally (backend unavailable).",
-        type: created ? "success" : "info",
+        type: saved ? "success" : "info",
       })
     );
   };

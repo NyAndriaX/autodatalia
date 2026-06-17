@@ -24,6 +24,7 @@ import {
   SafetyCertificateOutlined,
 } from "@ant-design/icons";
 import { hasPermission } from "../../lib/permissions";
+import { resetEditor } from "../../store/editorSlice";
 
 export default function Sidebar() {
   const dispatch = useDispatch();
@@ -168,6 +169,7 @@ export default function Sidebar() {
         <button
           type="button"
           onClick={() => {
+            dispatch(resetEditor()); // a fresh post — never inherit a draft id/content
             dispatch(setActiveView("creation"));
             if (isMobile) dispatch(setMobileNav(false));
           }}
