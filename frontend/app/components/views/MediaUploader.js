@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useTranslations } from "next-intl";
 import { addMedia, updateMedia, removeMedia } from "../../store/editorSlice";
@@ -12,7 +12,8 @@ import {
   uploadToBackend,
   ACCEPTED_TYPES,
 } from "../../lib/uploadService";
-import { UploadCloud, X, Film, ImageIcon, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { listMedia } from "../../lib/searchService";
+import { UploadCloud, X, Film, ImageIcon, Loader2, CheckCircle2, AlertCircle, FolderOpen, Search } from "lucide-react";
 
 export default function MediaUploader() {
   const dispatch = useDispatch();
@@ -20,6 +21,7 @@ export default function MediaUploader() {
   const tCommon = useTranslations("common");
   const media = useSelector((s) => s.editor.currentPost.media);
   const [dragOver, setDragOver] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
   const inputRef = useRef(null);
 
   // Note: previewUrls outlive the component mount because `media` lives in
@@ -128,6 +130,23 @@ export default function MediaUploader() {
         />
       </div>
 
+      {/* Or pick something already in the library (CEO #7) */}
+      <button
+        type="button"
+        onClick={() => setShowLibrary(true)}
+        className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold"
+        style={{ color: "var(--accent-primary)", background: "none", border: "none", cursor: "pointer" }}
+      >
+        <FolderOpen size={13} aria-hidden="true" /> {t("useFromLibrary")}
+      </button>
+
+      {showLibrary && (
+        <LibraryPicker
+          existing={new Set(media.map((m) => m.id))}
+          onClose={() => setShowLibrary(false)}
+        />
+      )}
+
       {/* Thumbnails */}
       {media.length > 0 && (
         <ul className="grid grid-cols-4 gap-2 mt-3" aria-label={t("uploadedMediaListAria")}>
@@ -222,6 +241,161 @@ export default function MediaUploader() {
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/* ─── Library picker (CEO #7: upload OR pick from the library) ────────────
+   Lists the workspace's already-uploaded media (via /search → listMedia) and
+   adds the selected items to the editor as already-"uploaded" descriptors
+   (remoteUrl + filename already point at the server copy). */
+function LibraryPicker({ existing, onClose }) {
+  const t = useTranslations("creation");
+  const tCommon = useTranslations("common");
+  const dispatch = useDispatch();
+  const [query, setQuery] = useState("");
+  const [items, setItems] = useState(null); // null = loading
+  const [selected, setSelected] = useState(() => new Set());
+
+  useEffect(() => {
+    let alive = true;
+    setItems(null);
+    const handle = setTimeout(
+      () => {
+        listMedia(query)
+          .then((rows) => alive && setItems(Array.isArray(rows) ? rows : []))
+          .catch(() => alive && setItems([]));
+      },
+      query ? 250 : 0
+    );
+    return () => {
+      alive = false;
+      clearTimeout(handle);
+    };
+  }, [query]);
+
+  const toggle = (id) =>
+    setSelected((s) => {
+      const next = new Set(s);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const add = () => {
+    const chosen = (items || []).filter((h) => selected.has(h.id));
+    const descriptors = chosen
+      .map((h) => ({
+        id: `lib-${h.id}`,
+        name: h.title || h.id,
+        kind: h.kind === "video" ? "video" : "image",
+        previewUrl: h.url,
+        remoteUrl: h.url,
+        status: "uploaded",
+        filename: h.id,
+      }))
+      .filter((d) => !existing.has(d.id));
+    if (descriptors.length) dispatch(addMedia(descriptors));
+    onClose();
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[110] flex items-center justify-center p-4"
+      style={{ background: "rgba(15,23,42,0.5)" }}
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        className="flex w-full max-w-lg flex-col rounded-2xl"
+        style={{ background: "var(--bg-card)", border: "1px solid var(--border-default)", maxHeight: "85vh" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-center justify-between px-4 py-3" style={{ borderBottom: "1px solid var(--border-default)" }}>
+          <h3 className="text-sm font-bold" style={{ color: "var(--text-primary)" }}>{t("libraryPickerTitle")}</h3>
+          <button onClick={onClose} aria-label={tCommon("close")} style={{ color: "var(--text-secondary)", background: "none", border: "none", cursor: "pointer" }}>
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="shrink-0 px-4 py-3">
+          <div className="flex items-center gap-2 rounded-lg px-2.5 py-1.5" style={{ background: "var(--bg-tertiary)", border: "1px solid var(--border-default)" }}>
+            <Search size={14} style={{ color: "var(--text-muted)" }} aria-hidden="true" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t("librarySearchPlaceholder")}
+              className="flex-1 bg-transparent text-xs outline-none"
+              style={{ color: "var(--text-primary)" }}
+            />
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-3">
+          {items === null ? (
+            <p className="py-6 text-center text-xs" style={{ color: "var(--text-muted)" }}>{t("libraryPickerLoading")}</p>
+          ) : items.length === 0 ? (
+            <p className="py-6 text-center text-xs" style={{ color: "var(--text-muted)" }}>{t("libraryPickerEmpty")}</p>
+          ) : (
+            <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+              {items.map((h) => {
+                const on = selected.has(h.id);
+                return (
+                  <li key={h.id}>
+                    <button
+                      type="button"
+                      onClick={() => toggle(h.id)}
+                      className="relative w-full overflow-hidden rounded-lg"
+                      style={{
+                        aspectRatio: "1 / 1",
+                        border: on ? "2px solid var(--accent-primary)" : "1px solid var(--border-default)",
+                        background: "var(--bg-elevated)",
+                        cursor: "pointer",
+                        padding: 0,
+                      }}
+                    >
+                      {h.kind === "video" ? (
+                        <video src={h.url} className="h-full w-full object-cover" muted />
+                      ) : (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={h.url} alt={h.title || ""} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                      )}
+                      {on && (
+                        <span className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full" style={{ background: "var(--accent-primary)" }}>
+                          <CheckCircle2 size={12} className="text-white" />
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        <div className="flex shrink-0 justify-end gap-2 px-4 py-3" style={{ borderTop: "1px solid var(--border-default)" }}>
+          <button
+            onClick={onClose}
+            className="rounded-md px-3 py-1.5 text-xs font-medium"
+            style={{ background: "var(--bg-secondary)", color: "var(--text-secondary)", border: "1px solid var(--border-default)", cursor: "pointer" }}
+          >
+            {tCommon("cancel")}
+          </button>
+          <button
+            onClick={add}
+            disabled={selected.size === 0}
+            className="rounded-md px-3 py-1.5 text-xs font-medium text-white"
+            style={{
+              background: selected.size ? "var(--accent-primary)" : "var(--bg-secondary)",
+              opacity: selected.size ? 1 : 0.5,
+              cursor: selected.size ? "pointer" : "not-allowed",
+              border: "none",
+            }}
+          >
+            {t("libraryPickerAdd", { n: selected.size })}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

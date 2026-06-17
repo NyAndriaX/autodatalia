@@ -56,6 +56,10 @@ export default function ScheduleModal({
   // editor would be lost the moment the user clicked Schedule.
   initialRatios = null,
   initialTikTok = null,
+  // When true (the Create wizard already has content / media / platforms set),
+  // render ONLY the calendar + time instead of the full re-editor. CEO ask:
+  // the planning step should be just a calendar.
+  calendarOnly = false,
   title,
   submitLabel,
   onClose,
@@ -313,6 +317,8 @@ export default function ScheduleModal({
           {dayLabel}
         </p>
 
+        {!calendarOnly && (
+        <>
         <div className="flex items-center justify-between mb-1.5">
           <span
             className="text-xs font-semibold uppercase tracking-wider"
@@ -527,6 +533,8 @@ export default function ScheduleModal({
           <div className="mb-4">
             <TikTokOptionsPanel />
           </div>
+        )}
+        </>
         )}
 
         {/* Date + time — custom calendar popover for the date so the modal
