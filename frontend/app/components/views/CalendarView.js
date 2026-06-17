@@ -16,7 +16,6 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { Select } from "antd";
-import PostEditorPopup from "./PostEditorPopup";
 import { useIsMobile } from "../../lib/useIsMobile";
 import {
   setCalendarView,
@@ -30,9 +29,9 @@ import {
   schedulePostThunk,
   reschedulePostThunk,
   cancelScheduleThunk,
-  updatePostThunk,
 } from "../../store/calendarThunks";
 import { setActiveView } from "../../store/uiSlice";
+import { loadDraft, resetEditor } from "../../store/editorSlice";
 import {
   PLATFORMS,
   PLATFORM_MAP,
@@ -282,7 +281,6 @@ export default function CalendarView() {
   const { scheduledPosts, view, cursor, filters, seeded } = useSelector(
     (s) => s.calendar
   );
-  const [editingPost, setEditingPost] = useState(null);
   // Every "Today" click bumps this counter. Day cells with `isToday`
   // remount when it changes, replaying the fade-in animation so the
   // user gets visual confirmation even when they were already on today.
@@ -349,7 +347,26 @@ export default function CalendarView() {
     (id) => dispatch(cancelScheduleThunk(id)),
     [dispatch]
   );
-  const onEdit = useCallback((post) => setEditingPost(post), []);
+  // Editing a scheduled post loads it into the Create editor (clicking a post's
+  // pencil) — no separate heavy modal. saveDraft/schedule then update it in
+  // place via its draftId (see editorSlice.loadDraft + schedulePostThunk).
+  const onEdit = useCallback(
+    (post) => {
+      dispatch(loadDraft(post));
+      dispatch(setActiveView("creation"));
+    },
+    [dispatch]
+  );
+  // Adding a post from a day cell opens the Create editor pre-set to that day,
+  // so when the user schedules, the date is already filled in.
+  const onQuickCreate = useCallback(
+    (dayKey) => {
+      dispatch(resetEditor());
+      dispatch(loadDraft({ scheduledDate: dayKey }));
+      dispatch(setActiveView("creation"));
+    },
+    [dispatch]
+  );
 
   const headers = weekdayHeaders();
 
@@ -566,26 +583,11 @@ export default function CalendarView() {
             onDropPost={onDropPost}
             onEdit={onEdit}
             onCancel={onCancel}
-            onQuickCreate={() => dispatch(setActiveView("creation"))}
+            onQuickCreate={onQuickCreate}
             flashToday={flashToday}
           />
         ))}
       </div>
-
-      {editingPost && (
-        <PostEditorPopup
-          post={editingPost}
-          onClose={() => setEditingPost(null)}
-          onSave={(patch) => {
-            dispatch(updatePostThunk({ id: editingPost.id, patch }));
-            setEditingPost(null);
-          }}
-          onDelete={(id) => {
-            dispatch(cancelScheduleThunk(id));
-            setEditingPost(null);
-          }}
-        />
-      )}
     </div>
   );
 }

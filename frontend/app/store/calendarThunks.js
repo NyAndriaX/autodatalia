@@ -54,16 +54,33 @@ export function schedulePostThunk({ post, date }) {
     // Dynamic import: timezone.js calls getSetting() (from settingsStorage)
     // which touches window.localStorage; a top-level import would break SSR / Jest.
     const { getScheduleTimezone } = await import("../lib/timezone");
+    // A real (server) id means we're editing an existing post — a scheduled post
+    // or a draft being scheduled — so we UPDATE it in place instead of creating
+    // a duplicate. `cal-` ids are our own optimistic placeholders, not real.
+    const hasRealId = !!post.id && !String(post.id).startsWith("cal-");
     const scheduled = {
       ...post,
-      // Stamp an optimistic id up front so we can find and reconcile this
-      // exact entry once the server returns a persisted id below (without
-      // it, the slice would assign its own id we couldn't reference back).
       id: post.id ?? `cal-${Date.now()}`,
       scheduledDate: date,
       status: post.status === "draft" ? "scheduled" : post.status ?? "scheduled",
       timezone: post.timezone || getScheduleTimezone(),
     };
+
+    if (hasRealId) {
+      // Replace-or-insert the calendar entry (a draft being scheduled isn't in
+      // the calendar yet), then PATCH the existing row.
+      dispatch(removeScheduledPost(scheduled.id));
+      dispatch(addScheduledPost(scheduled));
+      const updated = await patchPost(scheduled.id, scheduled);
+      dispatch(
+        addNotification({
+          message: updated ? "Post scheduled." : "Scheduled locally (backend offline).",
+          type: updated ? "success" : "info",
+        })
+      );
+      return;
+    }
+
     dispatch(addScheduledPost(scheduled));
     const persisted = await createPost(scheduled);
     if (persisted) {

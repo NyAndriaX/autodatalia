@@ -921,6 +921,9 @@ export default function CreationEditor() {
         <ScheduleModal
           initialContent={currentPost.content}
           initialPlatforms={currentPost.platforms}
+          // Pre-fill the calendar with the post's date (e.g. set from a calendar
+          // day's "+") so the user doesn't have to re-pick it before scheduling.
+          initialDate={currentPost.scheduledDate || undefined}
           // Forward the editor's already-uploaded media (remoteUrl + status)
           // and ratio picks so the backend scheduler can fire the post with
           // the exact same media URL + crops the manual Publish path uses.
@@ -929,7 +932,14 @@ export default function CreationEditor() {
           initialTikTok={currentPost.tiktok}
           onClose={() => setShowSchedule(false)}
           onSchedule={(post) => {
-            dispatch(schedulePostThunk({ post, date: post.scheduledDate }));
+            // Carry the draft/post id so editing an existing post schedules it
+            // in place instead of creating a duplicate (see schedulePostThunk).
+            dispatch(
+              schedulePostThunk({
+                post: { ...post, id: currentPost.draftId || undefined },
+                date: post.scheduledDate,
+              })
+            );
             setShowSchedule(false);
           }}
         />
