@@ -26,6 +26,7 @@ import {
   listVideoModels,
 } from "../../lib/videoJobsService";
 import { uploadToBackend } from "../../lib/uploadService";
+import { recordAiMedia } from "../../lib/aiMediaStore";
 import { btnPrimary, card, fadeIn } from "../../lib/uiClasses";
 
 /**
@@ -63,6 +64,21 @@ export default function VideoJobsView() {
   const t = useTranslations("videos");
   const tCommon = useTranslations("common");
   const [jobs, setJobs] = useState([]);
+
+  // Remember finished videos so the Create composer's "Vidéo IA" picker can
+  // offer them (scoped per workspace, client-side — see aiMediaStore).
+  useEffect(() => {
+    jobs.forEach((j) => {
+      if (j.status === "succeeded" && j.output_url) {
+        recordAiMedia({
+          id: `aijob-${j.id}`,
+          kind: "video",
+          url: j.output_url,
+          name: j.output_filename || j.prompt || "AI video",
+        });
+      }
+    });
+  }, [jobs]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [prompt, setPrompt] = useState("");

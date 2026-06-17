@@ -49,6 +49,7 @@ import { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import MediaUploader from "./MediaUploader";
 import ScheduleModal from "./ScheduleModal";
 import PublishConfirmModal from "./PublishConfirmModal";
+import AiMediaPicker from "./AiMediaPicker";
 import { publishHashKey } from "../../lib/publishHash";
 import {
   fetchConnections,
@@ -104,6 +105,7 @@ export default function CreationEditor() {
   const [showHashtags, setShowHashtags] = useState(false);
   const [confirmRegen, setConfirmRegen] = useState(false);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
+  const [aiPicker, setAiPicker] = useState(null); // null | "image" | "video"
   const [generatingMediaKind, setGeneratingMediaKind] = useState(null);
 
   // Wizard navigation — the left panel is a fixed, non-scrolling page per
@@ -664,35 +666,25 @@ export default function CreationEditor() {
           {activeStep === "media" && (
             <div className={`h-full flex flex-col px-4 sm:px-6 py-5 gap-4 ${fadeIn}`} id="media-uploader-section">
               <MediaUploader />
-              {/* AI image / video generation — same backend the popup uses */}
+              {/* Pick from the AI media you generated in the Image IA / Vidéo IA
+                  tabs (CEO #5) — opens a small picker; generation lives in those
+                  dedicated studios. */}
               <div className="flex gap-2">
                 <button
-                  id="generate-ai-image-btn"
-                  onClick={() => handleGenerateMedia("image")}
-                  disabled={!!generatingMediaKind}
+                  id="ai-image-picker-btn"
+                  onClick={() => setAiPicker("image")}
                   className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
                   title={t("aiImageTitle")}
                 >
-                  {generatingMediaKind === "image" ? (
-                    <Loader2 size={13} className="animate-spin" />
-                  ) : (
-                    <Sparkles size={13} />
-                  )}{" "}
-                  {t("aiImageBtn")}
+                  <Sparkles size={13} /> {t("aiImageBtn")}
                 </button>
                 <button
-                  id="generate-ai-video-btn"
-                  onClick={() => handleGenerateMedia("video")}
-                  disabled={!!generatingMediaKind}
+                  id="ai-video-picker-btn"
+                  onClick={() => setAiPicker("video")}
                   className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
                   title={t("aiVideoTitle")}
                 >
-                  {generatingMediaKind === "video" ? (
-                    <Loader2 size={13} className="animate-spin" />
-                  ) : (
-                    <Film size={13} />
-                  )}{" "}
-                  {t("aiVideoBtn")}
+                  <Film size={13} /> {t("aiVideoBtn")}
                 </button>
               </div>
             </div>
@@ -916,6 +908,10 @@ export default function CreationEditor() {
           )}
         </div>
       </div>
+
+      {aiPicker && (
+        <AiMediaPicker kind={aiPicker} onClose={() => setAiPicker(null)} />
+      )}
 
       {showSchedule && (
         <ScheduleModal
