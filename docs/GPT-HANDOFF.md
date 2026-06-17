@@ -5,6 +5,9 @@ do **light checks** on the VM (Python compile, JSON validity, brace/ref
 balance) — it **cannot run a Next.js build or the live app**. That's your job
 on the PC. This guide is the test plan.
 
+> **CEO-list status** — what's done vs what's left/subjective, with the CEO's
+> requests quoted verbatim: see [`CEO-CHECKLIST.md`](CEO-CHECKLIST.md).
+
 ## 0. Pull + bring up
 
 ```bash
