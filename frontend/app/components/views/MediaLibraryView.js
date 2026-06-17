@@ -24,6 +24,7 @@ import {
   Pencil,
 } from "lucide-react";
 import { listMedia } from "../../lib/searchService";
+import { config } from "../../lib/config";
 import { fetchPosts, deletePost } from "../../lib/postsService";
 import {
   ACCEPTED_TYPES,
@@ -48,6 +49,14 @@ const TYPE_FILTERS = [
 ];
 
 const MAX_MB = Math.round(MAX_SIZE_BYTES / 1024 / 1024);
+
+// Search hits carry a content-dir-relative id (e.g. "ws/3/generated/x.png"),
+// not a URL — build the absolute URL to the backend /content mount.
+const contentUrl = (id) =>
+  config.apiBaseUrl ? `${config.apiBaseUrl}/content/${id}` : `/content/${id}`;
+
+// AI-generated media lives under content/ws/{id}/generated/ — identify by path.
+const isGenerated = (it) => (it?.id || "").includes("generated/");
 
 /* ─── Tuile média ────────────────────────────────────────────────────── */
 function MediaTile({
@@ -388,14 +397,28 @@ export default function MediaLibraryView() {
           kind: h.kind || (h.subtitle?.toLowerCase().includes("video") ? "video" : "image"),
           name: h.title,
           status: "uploaded",
-          remoteUrl: h.url || null,
+          remoteUrl: h.url || (h.id ? contentUrl(h.id) : null),
           previewUrl: null,
         })),
     ];
   }, [uploads, remoteHits]);
 
   const filteredItems = useMemo(() => {
-    let list = normalizedItems;
+    // "Fichiers" shows uploads + non-generated remote media; generated media
+    // gets its own "Générés par IA" tab below.
+    let list = normalizedItems.filter((it) => !isGenerated(it));
+    if (typeFilter !== "all") list = list.filter((it) => it.kind === typeFilter);
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      list = list.filter((it) => it.name?.toLowerCase().includes(q));
+    }
+    return list;
+  }, [normalizedItems, typeFilter, query]);
+
+  // Generated (AI) media for the "Générés par IA" tab — same content dir, just
+  // the generated/ subtree, surfaced per-workspace by the backend search.
+  const aiFilteredItems = useMemo(() => {
+    let list = normalizedItems.filter(isGenerated);
     if (typeFilter !== "all") list = list.filter((it) => it.kind === typeFilter);
     if (query.trim()) {
       const q = query.trim().toLowerCase();
@@ -874,22 +897,41 @@ export default function MediaLibraryView() {
       )}
 
       {/* ── Onglet IA ────────────────────────────────────────────── */}
-      {tab === "ai" && (
-        <EmptyPanel
-          icon={Sparkles}
-          title={t("noAi")}
-          subtitle={t("noAiSubtitle")}
-          action={
-            <button
-              type="button"
-              onClick={() => dispatch(setActiveView("videos"))}
-              className={`${btnSecondary} inline-flex items-center gap-2 text-sm`}
-            >
-              <Sparkles size={15} /> {t("generateAiVideo")}
-            </button>
-          }
-        />
-      )}
+      {tab === "ai" &&
+        (aiFilteredItems.length > 0 ? (
+          <div
+            className="grid gap-3"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(140px, 100%), 1fr))" }}
+          >
+            {aiFilteredItems.map((it) => (
+              <MediaTile
+                key={it.id}
+                item={it}
+                onDelete={handleDelete}
+                onUse={onUseInPost}
+                usageCount={usageCountFor(it)}
+                selected={selectedIds.has(it.id)}
+                onToggleSelect={handleToggleSelect}
+                selectionMode={selectedIds.size > 0}
+              />
+            ))}
+          </div>
+        ) : (
+          <EmptyPanel
+            icon={Sparkles}
+            title={t("noAi")}
+            subtitle={t("noAiSubtitle")}
+            action={
+              <button
+                type="button"
+                onClick={() => dispatch(setActiveView("videos"))}
+                className={`${btnSecondary} inline-flex items-center gap-2 text-sm`}
+              >
+                <Sparkles size={15} /> {t("generateAiVideo")}
+              </button>
+            }
+          />
+        ))}
 
       {/* ── Onglet Brouillons (drafts) ───────────────────────────── */}
       {tab === "drafts" &&

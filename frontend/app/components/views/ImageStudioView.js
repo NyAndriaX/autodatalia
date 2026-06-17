@@ -8,7 +8,6 @@ import { btnPrimary, btnSecondary, inputField } from "../../lib/uiClasses";
 import { generateImageAsset } from "../../lib/mediaGenerationService";
 import { addMedia } from "../../store/editorSlice";
 import { addNotification, setActiveView } from "../../store/uiSlice";
-import { recordAiMedia } from "../../lib/aiMediaStore";
 
 const RATIOS = ["1:1", "4:5", "9:16", "16:9", "1.91:1"];
 
@@ -85,8 +84,6 @@ export default function ImageStudioView() {
     try {
       const r = await generateImageAsset({ prompt: buildPrompt(), ratio });
       setResult(r);
-      // Remember it for the Create composer's "Image IA" picker.
-      recordAiMedia({ kind: "image", url: r?.mediaItem?.remoteUrl, name: r?.mediaItem?.name });
       dispatch(addNotification({ message: t("savedToLibrary"), type: "success" }));
     } catch (err) {
       dispatch(

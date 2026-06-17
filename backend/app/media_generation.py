@@ -32,6 +32,7 @@ from .models import (
     VideoModelsResponse,
 )
 from .runtime_config import resolved_settings
+from .services import _media_root
 from .workspaces import get_active_workspace_id
 
 try:
@@ -51,8 +52,11 @@ _RATIO_TO_IMAGE_SIZE = {
 }
 
 
-def _generated_dir() -> Path:
-    path = settings.content_dir / "generated"
+def _generated_dir(workspace_id: int | str | None = None) -> Path:
+    # Per-workspace: generated media lands in the workspace's content dir
+    # (content/ws/{id}/generated) so it shows up in THAT workspace's Library and
+    # stays isolated from other tenants — exactly like uploads. None = global.
+    path = _media_root(workspace_id) / "generated"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -388,11 +392,13 @@ def _log_image_cost(prompt: str, user_id: str | int | None) -> None:
         log.warning("[cost] record_media_job failed: %s", exc)
 
 
-def _write_bytes(prompt: str, suffix: str, payload: bytes) -> Path:
+def _write_bytes(
+    prompt: str, suffix: str, payload: bytes, *, workspace_id: int | str | None = None
+) -> Path:
     stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
     digest = hashlib.sha256(payload).hexdigest()[:10]
     name = f"{stamp}-{_safe_stub(prompt)}-{digest}{suffix}"
-    path = _generated_dir() / name
+    path = _generated_dir(workspace_id) / name
     path.write_bytes(payload)
     return path
 
@@ -484,7 +490,7 @@ async def _generate_image_file(
         )
         payload = _render_fallback_poster(prompt, width, height)
         provider = "fallback-poster"
-    out = _write_bytes(prompt, ".png", payload)
+    out = _write_bytes(prompt, ".png", payload, workspace_id=user_id)
     return out, provider
 
 

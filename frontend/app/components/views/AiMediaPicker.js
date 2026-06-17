@@ -1,50 +1,60 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useDispatch } from "react-redux";
 import { useTranslations } from "next-intl";
-import { X, Sparkles } from "lucide-react";
-import { listAiMedia } from "../../lib/aiMediaStore";
+import { X, Sparkles, Loader2 } from "lucide-react";
+import { listMedia } from "../../lib/searchService";
+import { config } from "../../lib/config";
 import { addMedia } from "../../store/editorSlice";
 import { setActiveView } from "../../store/uiSlice";
 
-// Map a generated-media URL back to its content-dir-relative filename.
-function urlToFilename(url) {
-  let path = url;
-  try {
-    path = new URL(url, "http://x").pathname;
-  } catch {
-    /* relative URL — use as-is */
-  }
-  const marker = "/content/";
-  const i = path.indexOf(marker);
-  return i === -1 ? path.split("/").pop() : path.slice(i + marker.length);
-}
+// Generated media lives under the workspace's content dir at
+// content/ws/{id}/generated/ — so search hits whose id contains "generated/"
+// are this workspace's AI media (isolated per tenant by the backend).
+const contentUrl = (id) =>
+  config.apiBaseUrl ? `${config.apiBaseUrl}/content/${id}` : `/content/${id}`;
 
 /**
  * Picker of AI-generated media the user made in the Image IA / Vidéo IA tabs
  * (CEO #5), opened from the Create composer's media step. Sourced from the
- * per-workspace client-side recall (aiMediaStore). Picking adds the item to the
- * post as already-"uploaded" media; the footer link jumps to the matching
- * studio to generate more.
+ * backend media search filtered to this workspace's generated/ media — so it's
+ * device-independent and workspace-scoped, like uploads. Picking adds the item
+ * to the post; the footer link jumps to the matching studio to generate more.
  */
 export default function AiMediaPicker({ kind, onClose }) {
   const t = useTranslations("creation");
   const tCommon = useTranslations("common");
   const dispatch = useDispatch();
-  const items = listAiMedia(kind);
   const targetView = kind === "video" ? "videos" : "image";
+  const [items, setItems] = useState(null); // null = loading
 
-  const pick = (m) => {
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const hits = await listMedia("");
+      const gen = (hits || []).filter(
+        (h) => h.kind === kind && (h.id || "").includes("generated/")
+      );
+      if (alive) setItems(gen);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [kind]);
+
+  const pick = (h) => {
+    const url = contentUrl(h.id);
     dispatch(
       addMedia([
         {
-          id: `lib-${m.url}`,
-          name: m.name || (kind === "video" ? "AI video" : "AI image"),
+          id: `lib-${h.id}`,
+          name: h.title || h.id.split("/").pop(),
           kind,
-          previewUrl: m.url,
-          remoteUrl: m.url,
+          previewUrl: url,
+          remoteUrl: url,
           status: "uploaded",
-          filename: urlToFilename(m.url),
+          filename: h.id,
         },
       ])
     );
@@ -79,7 +89,11 @@ export default function AiMediaPicker({ kind, onClose }) {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-          {items.length === 0 ? (
+          {items === null ? (
+            <div className="flex justify-center py-10">
+              <Loader2 size={22} className="animate-spin" style={{ color: "var(--text-muted)" }} />
+            </div>
+          ) : items.length === 0 ? (
             <div className="flex flex-col items-center gap-3 py-8 text-center" style={{ color: "var(--text-muted)" }}>
               <Sparkles size={28} className="opacity-40" />
               <p className="text-sm">{t("aiPickerEmpty")}</p>
@@ -94,24 +108,27 @@ export default function AiMediaPicker({ kind, onClose }) {
             </div>
           ) : (
             <ul className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-              {items.map((m) => (
-                <li key={m.id}>
-                  <button
-                    type="button"
-                    onClick={() => pick(m)}
-                    className="relative w-full overflow-hidden rounded-lg"
-                    style={{ aspectRatio: "1 / 1", border: "1px solid var(--border-default)", background: "var(--bg-elevated)", cursor: "pointer", padding: 0 }}
-                    title={m.name}
-                  >
-                    {kind === "video" ? (
-                      <video src={m.url} className="h-full w-full object-cover" muted />
-                    ) : (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={m.url} alt={m.name || ""} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
-                    )}
-                  </button>
-                </li>
-              ))}
+              {items.map((h) => {
+                const url = contentUrl(h.id);
+                return (
+                  <li key={h.id}>
+                    <button
+                      type="button"
+                      onClick={() => pick(h)}
+                      className="relative w-full overflow-hidden rounded-lg"
+                      style={{ aspectRatio: "1 / 1", border: "1px solid var(--border-default)", background: "var(--bg-elevated)", cursor: "pointer", padding: 0 }}
+                      title={h.title}
+                    >
+                      {kind === "video" ? (
+                        <video src={url} className="h-full w-full object-cover" muted />
+                      ) : (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={url} alt={h.title || ""} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
