@@ -99,18 +99,28 @@ Settings → Telegram leads with a 3-step connect explanation.
 `upstream_error` now flows to the UI on AI failures (e.g. OpenRouter 402).
 
 ## 3. CEO list status
-Done: #2, #3, #5, #7, #8, #9, #10a, #10b, #11, #12, #14.
+Done: #2, #3, #5, **#6**, #7, #8, #9, #10a, #10b, #11, #12, #14.
 **#4** (API keys "by tabs/themes") — **largely already in place**: Settings has
 tabs (Platforms / Timezone / AI keys / Telegram / Brand kit / Danger) and the AI
 keys are grouped by theme (LLM / Image / Video / Telegram). Optional polish only.
-**Not built yet:**
-- **#6 AI Image/Vidéo views** — decided approach: reframe the existing Videos
-  (job-queue) view into "Vidéo IA" and add an "Image IA" view, both under
-  Creation, saving outputs to the Library. Backend endpoints already exist
-  (`/media/generate/image|video`); this is a frontend build.
-- **#1 reels icon / #13 icon cleanup** — cosmetic, not done.
-- **Phase 3: Zernio in the scheduler/automation** — manual `/publish` routes
-  through Zernio; scheduled/automation posts do NOT yet (still the direct path).
+
+**#6 AI Image/Vidéo views — DONE** (`ee58e31`): new **Image IA** studio view +
+the **AI Video** view moved up so both sit under Creation in the sidebar (Video
+component unchanged). Test: sidebar → Image IA → prompt + ratio → Generate →
+image appears, "saved to Library", "Use in a post" drops it into the editor.
+
+**Phase 3 — Zernio in the scheduler/automation — IMPLEMENTED as a FALLBACK:**
+`build_targets_from_post` now adds a Zernio target for any
+enabled platform that has NO direct connection (so no double-posting), and
+`publish_to_targets` routes `provider:"zernio"` targets through `zernio.publish`.
+The direct path is untouched; the branch is additive + guarded (a Zernio error
+can't break direct resolution). **NEEDS A LIVE TEST not runnable on the VM:**
+in a workspace whose platform is connected ONLY via Zernio, schedule a post →
+confirm the scheduler fires it through Zernio. The direct scheduler path is
+covered by existing tests (unchanged); the Zernio fallback has no automated test.
+
+**Still not built (cosmetic — for the teammate's visual pass):** #1 reels icon,
+#13 icon cleanup.
 
 ## 4. What Claude verified on the VM (and what it did NOT)
 Verified: backend `compileall`, `test_zernio.py` smoke logic, every edited
