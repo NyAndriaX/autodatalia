@@ -15,6 +15,7 @@ import {
   ImagePlus,
   ExternalLink,
 } from "lucide-react";
+import { Select } from "antd";
 import PostEditorPopup from "./PostEditorPopup";
 import { useIsMobile } from "../../lib/useIsMobile";
 import {
@@ -274,30 +275,6 @@ function DayCell({ day, posts, isWeek, onDropPost, onEdit, onCancel, onQuickCrea
   );
 }
 
-/* ——— Filter chips (platforms + statuses) ——— */
-function FilterChip({ active, color, label, onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      className="text-xs font-medium px-2.5 py-1 rounded-full transition-all"
-      style={{
-        background: active ? "rgba(99, 102, 241, 0.12)" : "transparent",
-        border: `1px solid ${active ? "var(--border-active)" : "var(--border-default)"}`,
-        color: active ? "var(--text-primary)" : "var(--text-muted)",
-      }}
-      title={`Toggle ${label}`}
-    >
-      <span className="inline-flex items-center gap-1.5">
-        <span
-          className="w-2 h-2 rounded-full"
-          style={{ background: color, opacity: active ? 1 : 0.4 }}
-        />
-        {label}
-      </span>
-    </button>
-  );
-}
-
 export default function CalendarView() {
   const dispatch = useDispatch();
   const t = useTranslations("calendar");
@@ -508,84 +485,47 @@ export default function CalendarView() {
         </div>
       )}
 
-      {/* Filters — on phones the section labels eat too much space, so
-          the chips run edge-to-edge in a single horizontal scroll row
-          (familiar pattern from Apple/Google calendars). */}
-      {isMobile ? (
-        <div
-          className="shrink-0 mb-3"
-          style={{
-            overflowX: "auto",
-            margin: "0 -12px",
-            padding: "0 12px",
-            // Hide the scrollbar on the chip strip — the chips themselves
-            // signal scrollability via the right edge fading off.
-            scrollbarWidth: "none",
+      {/* Filters — dropdown multi-selects for Platforms + Status (CEO #10a).
+          Each Select's value mirrors the per-id filter flags; onChange diffs
+          against the current state and toggles only what changed (reuses the
+          existing toggle reducers, no slice change needed). */}
+      <div className="flex flex-wrap items-center gap-2 shrink-0 mb-4">
+        <Select
+          mode="multiple"
+          allowClear
+          size="small"
+          style={{ minWidth: 220 }}
+          placeholder={t("platforms")}
+          maxTagCount="responsive"
+          value={PLATFORMS.filter((p) => filters.platforms[p.id]).map((p) => p.id)}
+          onChange={(selected) => {
+            PLATFORMS.forEach((p) => {
+              const want = selected.includes(p.id);
+              if (!!filters.platforms[p.id] !== want) dispatch(togglePlatformFilter(p.id));
+            });
           }}
-        >
-          <div
-            className="flex items-center gap-2"
-            style={{ width: "max-content" }}
-          >
-            {PLATFORMS.map((p) => (
-              <FilterChip
-                key={p.id}
-                active={filters.platforms[p.id]}
-                color={p.color}
-                label={p.label}
-                onClick={() => dispatch(togglePlatformFilter(p.id))}
-              />
-            ))}
-            <span
-              className="w-px h-4 mx-1"
-              style={{ background: "var(--border-default)" }}
-              aria-hidden="true"
-            />
-            {STATUSES.map((s) => (
-              <FilterChip
-                key={s}
-                active={filters.statuses[s]}
-                color={STATUS_META[s].colorVar}
-                label={tDashboard(STATUS_LABEL_KEYS[s] ?? "statusDraft")}
-                onClick={() => dispatch(toggleStatusFilter(s))}
-              />
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-wrap items-center gap-2 shrink-0 mb-4">
-          <span
-            className="text-xs font-semibold uppercase tracking-wider mr-1"
-            style={{ color: "var(--text-tertiary)" }}
-          >
-            {t("platforms")}
-          </span>
-          {PLATFORMS.map((p) => (
-            <FilterChip
-              key={p.id}
-              active={filters.platforms[p.id]}
-              color={p.color}
-              label={p.label}
-              onClick={() => dispatch(togglePlatformFilter(p.id))}
-            />
-          ))}
-          <span
-            className="text-xs font-semibold uppercase tracking-wider mx-1"
-            style={{ color: "var(--text-tertiary)" }}
-          >
-            {t("status")}
-          </span>
-          {STATUSES.map((s) => (
-            <FilterChip
-              key={s}
-              active={filters.statuses[s]}
-              color={STATUS_META[s].colorVar}
-              label={tDashboard(STATUS_LABEL_KEYS[s] ?? "statusDraft")}
-              onClick={() => dispatch(toggleStatusFilter(s))}
-            />
-          ))}
-        </div>
-      )}
+          options={PLATFORMS.map((p) => ({ value: p.id, label: p.label }))}
+        />
+        <Select
+          mode="multiple"
+          allowClear
+          size="small"
+          style={{ minWidth: 220 }}
+          placeholder={t("status")}
+          maxTagCount="responsive"
+          value={STATUSES.filter((s) => filters.statuses[s])}
+          onChange={(selected) => {
+            STATUSES.forEach((s) => {
+              const want = selected.includes(s);
+              if (!!filters.statuses[s] !== want) dispatch(toggleStatusFilter(s));
+            });
+          }}
+          options={STATUSES.map((s) => ({
+            value: s,
+            label: tDashboard(STATUS_LABEL_KEYS[s] ?? "statusDraft"),
+          }))}
+        />
+      </div>
 
       {/* Weekday header */}
       <div
