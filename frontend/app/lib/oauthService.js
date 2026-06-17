@@ -228,6 +228,60 @@ export function startConnect(providerId, { timeoutMs = 5 * 60 * 1000 } = {}) {
   });
 }
 
+/** Connect a social account through Zernio (the unified provider).
+ *
+ * Unlike the direct providers, the popup lands on Zernio's OWN domain, so there
+ * is no `oauth:result` postMessage back to us. We open Zernio's authorize URL,
+ * wait for the popup to close, then invalidate the cache so the caller's
+ * follow-up /oauth/connections refetch picks up the newly-linked account.
+ * Resolves on popup close (success is confirmed by the account appearing in the
+ * refreshed connections), rejects on a blocked popup / timeout / config error.
+ */
+export function connectZernio(platform, { timeoutMs = 5 * 60 * 1000 } = {}) {
+  return new Promise(async (resolve, reject) => {
+    let popup = null;
+    let timer = null;
+    let pollHandle = null;
+
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      if (pollHandle) clearInterval(pollHandle);
+    };
+
+    try {
+      const { authorize_url: url } = await apiFetch(
+        `/oauth/zernio/${encodeURIComponent(platform)}/start`
+      );
+      popup = window.open(url, `zernio_${platform}`, POPUP_FEATURES);
+      if (!popup) {
+        reject(new Error("Popup blocked. Allow popups for this site."));
+        return;
+      }
+      timer = setTimeout(() => {
+        cleanup();
+        if (popup && !popup.closed) popup.close();
+        reject(new Error("Zernio connect timed out"));
+      }, timeoutMs);
+      pollHandle = setInterval(() => {
+        if (popup.closed) {
+          cleanup();
+          // Zernio's domain can't postMessage us; the caller refetches
+          // connections to confirm the link landed.
+          invalidateConnectionsCache();
+          resolve({ ok: true });
+        }
+      }, 600);
+    } catch (e) {
+      cleanup();
+      if (e.status === 503) {
+        reject(new Error("Zernio is not configured — add a Zernio API key first."));
+      } else {
+        reject(e);
+      }
+    }
+  });
+}
+
 /** DELETE /oauth/{provider} — forget the stored token. */
 export async function disconnect(providerId) {
   if (!config.apiBaseUrl) return { ok: false };

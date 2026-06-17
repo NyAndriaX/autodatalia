@@ -12,18 +12,39 @@ import {
   invalidateConnectionsCache,
   readCachedConnections,
   startConnect,
+  connectZernio,
   disconnect as oauthDisconnect,
 } from "../../lib/oauthService";
 import { fetchTelegramStatus, sendTelegramTest } from "../../lib/validationService";
 import { fetchBackendKeys, patchBackendKeys } from "../../lib/backendKeysService";
 import {
   Send, KeyRound, Palette, Plug, Check, BadgeCheck, Loader2,
-  Trash2, RefreshCw, Clock, Users, Settings,
+  Trash2, RefreshCw, Clock, Users, Settings, HelpCircle, Zap,
 } from "lucide-react";
 import { COMMON_TIMEZONES, getBrowserTimezone } from "../../lib/timezone";
 
 const PLATFORM_TO_PROVIDER    = { facebook:"meta", instagram:"meta", tiktok:"tiktok", linkedin:"linkedin" };
 const TARGET_KIND_FOR_PLATFORM = { facebook:"facebook_page", instagram:"instagram_business" };
+
+// Networks Zernio can connect (mirrors backend zernio.ZERNIO_PLATFORMS). Each
+// id is the slug sent to /oauth/zernio/{id}/start.
+const ZERNIO_PLATFORMS = [
+  { id:"instagram",      label:"Instagram" },
+  { id:"tiktok",         label:"TikTok" },
+  { id:"twitter",        label:"X / Twitter" },
+  { id:"facebook",       label:"Facebook" },
+  { id:"linkedin",       label:"LinkedIn" },
+  { id:"youtube",        label:"YouTube" },
+  { id:"threads",        label:"Threads" },
+  { id:"pinterest",      label:"Pinterest" },
+  { id:"reddit",         label:"Reddit" },
+  { id:"bluesky",        label:"Bluesky" },
+  { id:"telegram",       label:"Telegram" },
+  { id:"googlebusiness", label:"Google Business" },
+  { id:"snapchat",       label:"Snapchat" },
+  { id:"whatsapp",       label:"WhatsApp" },
+  { id:"discord",        label:"Discord" },
+];
 
 function formatCompact(n) {
   if (n < 1000)          return String(n);
@@ -229,6 +250,140 @@ function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconn
   );
 }
 
+/* ─── Carte Zernio (provider unifié) ─────────────────────────────────────
+   Distinct from the direct provider cards: one key + one connect flow for 15
+   networks. Inline key field (saved via patchBackendKeys → ZERNIO_API_KEY),
+   per-network connect buttons, and a "?" help popover. */
+function CarteZernio({ connections, pendingZernio, onConnect, onSaveKey }) {
+  const t          = useTranslations("settings");
+  const z          = connections?.zernio;
+  const configured = !!z?.configured;
+  const targets    = z?.targets || [];
+  const [keyEdit, setKeyEdit]   = useState("");
+  const [savingKey, setSaving]  = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+
+  const save = async () => {
+    if (!keyEdit.trim()) return;
+    setSaving(true);
+    try { await onSaveKey(keyEdit.trim()); setKeyEdit(""); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="overflow-hidden rounded-2xl"
+      style={{
+        border: `1.5px solid ${configured ? "rgba(29,63,190,.4)" : "var(--border-default)"}`,
+        background: configured ? "rgba(29,63,190,.05)" : "var(--bg-tertiary)",
+      }}>
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3.5">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white"
+          style={{ background:"var(--accent-primary)", boxShadow:"0 4px 12px rgba(29,63,190,.4)" }}>
+          <Zap size={16} />
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className="flex items-center gap-2 text-sm font-bold leading-tight" style={{ color:"var(--text-primary)" }}>
+            {t("zernioHeading")}
+            <button type="button" onClick={() => setShowHelp((v) => !v)}
+              className="inline-flex h-5 w-5 items-center justify-center rounded-full"
+              style={{ background:"rgba(29,63,190,.1)", color:"var(--accent-primary)", border:"none", cursor:"pointer" }}
+              title={t("zernioHelpTitle")} aria-label={t("zernioHelpTitle")}>
+              <HelpCircle size={12} />
+            </button>
+          </p>
+          <p className="mt-0.5 text-[11px]" style={{ color:"var(--text-muted)" }}>{t("zernioTagline")}</p>
+        </div>
+        {configured && (
+          <span className="flex shrink-0 items-center gap-1.5 text-xs font-semibold" style={{ color:"var(--status-approved)" }}>
+            <Check size={13} /> {t("zernioConfigured")}
+          </span>
+        )}
+      </div>
+
+      {showHelp && (
+        <div className="mx-4 mb-3 rounded-xl p-3 text-[11px] leading-relaxed"
+          style={{ background:"rgba(29,63,190,.07)", border:"1px solid rgba(29,63,190,.2)", color:"var(--text-secondary)" }}>
+          <p className="mb-1 font-bold">{t("zernioHelpTitle")}</p>
+          {t("zernioHelpBody")}
+          <a href="https://zernio.com" target="_blank" rel="noopener noreferrer"
+            className="mt-1 inline-block text-[10px] font-bold text-sky-500 hover:text-sky-600">
+            {t("zernioGetKey")}
+          </a>
+        </div>
+      )}
+
+      <div className="px-4 pb-3" style={{ borderTop:"1px solid rgba(29,63,190,.15)" }}>
+        <p className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wider" style={{ color:"var(--text-tertiary)" }}>
+          {t("zernioKeyLabel")}
+        </p>
+        <div className="flex gap-2">
+          <input className={inputField} type="text" value={keyEdit}
+            onChange={(e) => setKeyEdit(e.target.value)}
+            placeholder={configured ? t("zernioKeyPlaceholderSet") : t("zernioKeyPlaceholderUnset")}
+            autoComplete="off" spellCheck="false"
+            data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other"
+            style={{ WebkitTextSecurity:"disc" }} />
+          <button type="button" onClick={save} disabled={savingKey || !keyEdit.trim()}
+            className={`${btnPrimary} inline-flex shrink-0 items-center gap-1.5 text-xs`}>
+            {savingKey ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+            {t("zernioKeySave")}
+          </button>
+        </div>
+        {!configured && (
+          <p className="mt-1.5 text-[11px]" style={{ color:"var(--text-muted)" }}>{t("zernioNotConfigured")}</p>
+        )}
+      </div>
+
+      {configured && (
+        <div className="px-4 py-3" style={{ borderTop:"1px solid rgba(29,63,190,.15)" }}>
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
+            {t("zernioConnectedAccounts")}
+          </p>
+          {targets.length === 0 ? (
+            <p className="text-xs" style={{ color:"var(--text-muted)" }}>{t("zernioNoAccounts")}</p>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {targets.map((tg) => (
+                <div key={tg.id} className="flex items-center gap-2 text-xs" style={{ color:"var(--text-secondary)" }}>
+                  {tg.profile_picture_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={tg.profile_picture_url} alt="" className="h-5 w-5 shrink-0 rounded-full object-cover" referrerPolicy="no-referrer" />
+                  ) : (
+                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ background:"var(--accent-primary)" }} />
+                  )}
+                  <span className="truncate font-medium">{tg.label}</span>
+                  <span className="text-[10px] uppercase" style={{ color:"var(--text-muted)" }}>· {tg.platform}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {configured && (
+        <div className="px-4 py-3" style={{ borderTop:"1px solid rgba(29,63,190,.15)" }}>
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
+            {t("zernioAvailableNetworks")}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {ZERNIO_PLATFORMS.map((p) => {
+              const pending = pendingZernio === p.id;
+              return (
+                <button key={p.id} type="button" onClick={() => onConnect(p.id)} disabled={!!pendingZernio}
+                  className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition-all hover:-translate-y-px disabled:opacity-60"
+                  style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)", color:"var(--text-secondary)", cursor: pendingZernio ? "default" : "pointer" }}>
+                  {pending ? <Loader2 size={11} className="animate-spin" /> : <Plug size={11} />}
+                  {pending ? t("zernioConnecting") : p.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ─── Backend API keys editor ────────────────────────────────────────────
    Lives in backend/content/runtime_settings*.json. JWT users get a
    personal override file; shared/open mode uses the global file.
@@ -422,6 +577,7 @@ export default function SettingsView() {
   const [s,               setS]               = useState(null);
   const [connections,     setConnections]     = useState(null);
   const [pendingProvider, setPendingProvider] = useState(null);
+  const [pendingZernio,   setPendingZernio]   = useState(null);
   const [refreshing,      setRefreshing]      = useState(false);
   const [telegramStatus,  setTelegramStatus]  = useState(null);
   const [telegramBackend, setTelegramBackend] = useState({ chatId:"" });
@@ -513,6 +669,31 @@ export default function SettingsView() {
       await actualiserConnexions({ force: true });
     } catch (err) {
       dispatch(addNotification({ message: t("platformDisconnectFailed", { error: err.message || t("unknownError") }), type:"error" }));
+    }
+  };
+
+  const handleZernioConnect = async (platform) => {
+    setPendingZernio(platform);
+    try {
+      await connectZernio(platform);
+      dispatch(addNotification({ message: t("zernioConnectDone"), type:"info" }));
+      await actualiserConnexions({ force: true });
+    } catch (err) {
+      dispatch(addNotification({ message: t("zernioConnectFailed", { error: err.message || t("unknownError") }), type:"error" }));
+    } finally {
+      setPendingZernio(null);
+    }
+  };
+
+  const handleSaveZernioKey = async (value) => {
+    try {
+      await patchBackendKeys({ ZERNIO_API_KEY: value });
+      dispatch(addNotification({ message: t("zernioKeySaved"), type:"success" }));
+      invalidateConnectionsCache();
+      await actualiserConnexions({ force: true });
+    } catch (err) {
+      dispatch(addNotification({ message: t("backendKeysSaveFailed", { error: err.message || String(err) }), type:"error" }));
+      throw err;
     }
   };
 
@@ -646,6 +827,9 @@ export default function SettingsView() {
           }
         >
           <div className="flex flex-col gap-3">
+            <p className="text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
+              {t("directConnectionsHeading")}
+            </p>
             {PLATFORMS.map((p) => (
               <CartePlateforme
                 key={p.id} p={p}
@@ -655,6 +839,16 @@ export default function SettingsView() {
                 onDisconnect={handleDisconnect}
               />
             ))}
+
+            <p className="mt-3 text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--accent-primary)" }}>
+              {t("zernioHeading")}
+            </p>
+            <CarteZernio
+              connections={connections}
+              pendingZernio={pendingZernio}
+              onConnect={handleZernioConnect}
+              onSaveKey={handleSaveZernioKey}
+            />
           </div>
         </Section>
       )}
