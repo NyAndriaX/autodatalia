@@ -30,7 +30,7 @@ import {
   activePlatformIds,
 } from "../../lib/platforms";
 import { isoDateKey, parseDateKey, startOfToday } from "../../lib/dateUtils";
-import { addNotification, addTokenUsage, recordCacheHit, setActiveView } from "../../store/uiSlice";
+import { addNotification, addTokenUsage, recordCacheHit } from "../../store/uiSlice";
 import TikTokOptionsPanel from "./TikTokOptionsPanel";
 import {
   ACCEPTED_TYPES,
@@ -40,7 +40,6 @@ import {
   revokeMediaItem,
 } from "../../lib/uploadService";
 import { generateContent } from "../../lib/aiService";
-import { generateImageAsset } from "../../lib/mediaGenerationService";
 import { getScheduleTimezone } from "../../lib/timezone";
 import DatePicker from "./DatePicker";
 import TimePicker from "./TimePicker";
@@ -162,7 +161,6 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
   // local content state so opening this popup never clobbers an in-flight
   // editor draft.
   const [isGenerating, setIsGenerating] = useState(false);
-  const [generatingMediaKind, setGeneratingMediaKind] = useState(null);
   const onGenerate = async () => {
     if (isGenerating) return;
     setIsGenerating(true);
@@ -215,76 +213,6 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
     const todayKey = isoDateKey(startOfToday());
     const hasFutureSchedule = date && date >= todayKey;
     return hasFutureSchedule ? "scheduled" : "draft";
-  };
-
-  const handleGenerateMedia = async (kind) => {
-    const prompt = content.trim();
-    if (!prompt) {
-      dispatch(
-        addNotification({
-          message: tCreation("enterPromptBeforeGenerating", { kind }),
-          type: "error",
-        })
-      );
-      return;
-    }
-    const ratio =
-      Object.values(ratios || {})[0] || (kind === "video" ? "9:16" : "1:1");
-
-    // Video generation routinely exceeds 60s and the public HTTPS proxies
-    // (ngrok/Cloudflare) time out the request before the job finishes.
-    // Hand off to VideoJobsView — it owns the queue UI, polling, and
-    // "attach to post" flow, so the popup doesn't try to inline-poll a
-    // VideoJob that has no output_url/filename yet.
-    if (kind === "video") {
-      const uploadedImage = (media || []).find(
-        (m) => m.kind === "image" && m.status === "uploaded" && m.remoteUrl
-      );
-      const prefill = {
-        prompt,
-        ratio,
-        mode: uploadedImage ? "image" : "text",
-        referenceImage: uploadedImage
-          ? { filename: uploadedImage.filename, url: uploadedImage.remoteUrl }
-          : null,
-      };
-      try {
-        sessionStorage.setItem(
-          "datalia.videoJobs.prefill",
-          JSON.stringify(prefill)
-        );
-      } catch {
-        /* private mode — proceed without prefill */
-      }
-      onClose?.();
-      dispatch(setActiveView("videos"));
-      return;
-    }
-
-    setGeneratingMediaKind(kind);
-    try {
-      const result = await generateImageAsset({ prompt, ratio });
-      setMedia((list) => [...list, result.mediaItem]);
-      dispatch(
-        addNotification({
-          message: tCreation("imageGeneratedVia", {
-            provider: result.data?.provider || "backend",
-          }),
-          type: "success",
-        })
-      );
-    } catch (err) {
-      dispatch(
-        addNotification({
-          message: tCreation("imageGenerationFailed", {
-            error: err.message || tCommon("unknownError"),
-          }),
-          type: "error",
-        })
-      );
-    } finally {
-      setGeneratingMediaKind(null);
-    }
   };
 
   const handleSave = () => {
@@ -453,34 +381,6 @@ export default function PostEditorPopup({ post, onClose, onSave, onDelete }) {
                 className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
               >
                 <Film size={13} /> {t("video")}
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-2 mb-3">
-              <button
-                onClick={() => handleGenerateMedia("image")}
-                disabled={!!generatingMediaKind}
-                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
-                title={tCreation("aiImageTitle")}
-              >
-                {generatingMediaKind === "image" ? (
-                  <Loader2 size={13} className="animate-spin" />
-                ) : (
-                  <Sparkles size={13} />
-                )}{" "}
-                {tCreation("aiImageBtn")}
-              </button>
-              <button
-                onClick={() => handleGenerateMedia("video")}
-                disabled={!!generatingMediaKind}
-                className={`${btnSecondary} text-xs inline-flex items-center gap-1.5`}
-                title={tCreation("aiVideoTitle")}
-              >
-                {generatingMediaKind === "video" ? (
-                  <Loader2 size={13} className="animate-spin" />
-                ) : (
-                  <Film size={13} />
-                )}{" "}
-                {tCreation("aiVideoBtn")}
               </button>
             </div>
             <input
