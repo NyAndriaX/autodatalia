@@ -72,6 +72,24 @@ const editorSlice = createSlice({
     setStatus: (state, action) => {
       state.currentPost.status = action.payload;
     },
+    // Hydrate the editor from a saved post (e.g. opening a draft from the
+    // Library). Keeps the editor's tiktok defaults for any keys the post omits.
+    loadDraft: (state, action) => {
+      const p = action.payload || {};
+      state.currentPost = {
+        ...state.currentPost,
+        content: p.content || "",
+        platforms:
+          p.platforms && Object.keys(p.platforms).length
+            ? p.platforms
+            : state.currentPost.platforms,
+        ratios: p.ratios || {},
+        status: p.status || "draft",
+        scheduledDate: p.scheduledDate || null,
+        media: Array.isArray(p.media) ? p.media : [],
+        tiktok: { ...state.currentPost.tiktok, ...(p.tiktok || {}) },
+      };
+    },
     addMedia: (state, action) => {
       // payload: array of media descriptors (see lib/uploadService)
       state.currentPost.media.push(...action.payload);
@@ -126,6 +144,7 @@ export const {
   setPlatformRatio,
   setTiktokOptions,
   setStatus,
+  loadDraft,
   addMedia,
   updateMedia,
   removeMedia,

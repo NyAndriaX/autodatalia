@@ -20,8 +20,11 @@ import {
   Grid3X3,
   HardDrive,
   Loader2,
+  FileText,
+  Pencil,
 } from "lucide-react";
 import { listMedia } from "../../lib/searchService";
+import { fetchPosts, deletePost } from "../../lib/postsService";
 import {
   ACCEPTED_TYPES,
   MAX_SIZE_BYTES,
@@ -29,12 +32,13 @@ import {
   uploadToBackend,
   validateFile,
 } from "../../lib/uploadService";
-import { addMedia } from "../../store/editorSlice";
+import { addMedia, loadDraft } from "../../store/editorSlice";
 import { addNotification, setActiveView } from "../../store/uiSlice";
 
 const TABS = [
   { id: "uploads", labelKey: "tabFiles", icon: ImageIcon, descKey: "tabFilesDesc" },
   { id: "ai", labelKey: "tabAi", icon: Sparkles, descKey: "tabAiDesc" },
+  { id: "drafts", labelKey: "tabDrafts", icon: FileText, descKey: "tabDraftsDesc" },
 ];
 
 const TYPE_FILTERS = [
@@ -346,6 +350,29 @@ export default function MediaLibraryView() {
   const [searching, setSearching] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [dragging, setDragging] = useState(false);
+  const [drafts, setDrafts] = useState(null); // null = loading
+
+  const loadDrafts = useCallback(async () => {
+    const posts = await fetchPosts();
+    setDrafts(Array.isArray(posts) ? posts.filter((p) => p.status === "draft") : []);
+  }, []);
+
+  useEffect(() => {
+    if (tab === "drafts") loadDrafts();
+  }, [tab, loadDrafts]);
+
+  const onEditDraft = (d) => {
+    dispatch(loadDraft(d));
+    dispatch(setActiveView("creation"));
+  };
+
+  const onDeleteDraft = async (id) => {
+    const ok = await deletePost(id);
+    if (ok) {
+      setDrafts((list) => (list || []).filter((p) => p.id !== id));
+      dispatch(addNotification({ message: t("draftDeleted"), type: "info" }));
+    }
+  };
   const fileInputRef = useRef(null);
   const seq = useRef(0);
   const useSeq = useRef(0);
@@ -868,6 +895,54 @@ export default function MediaLibraryView() {
           }
         />
       )}
+
+      {/* ── Onglet Brouillons (drafts) ───────────────────────────── */}
+      {tab === "drafts" &&
+        (drafts === null ? (
+          <div className="flex justify-center py-8">
+            <Loader2 size={20} className="animate-spin" style={{ color: "var(--text-muted)" }} />
+          </div>
+        ) : drafts.length === 0 ? (
+          <EmptyPanel icon={FileText} title={t("noDrafts")} subtitle={t("noDraftsSubtitle")} />
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {drafts.map((d) => (
+              <li
+                key={d.id}
+                className="flex items-center gap-3 rounded-xl p-3"
+                style={{ background: "var(--bg-card)", border: "1px solid var(--border-default)" }}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm" style={{ color: "var(--text-primary)" }}>
+                    {d.content?.trim() ? d.content : <em style={{ color: "var(--text-muted)" }}>—</em>}
+                  </p>
+                  <p className="mt-0.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                    {Object.keys(d.platforms || {}).filter((k) => d.platforms[k]).join(", ")}
+                    {d.scheduledDate ? ` · ${d.scheduledDate}` : ""}
+                    {d.media?.length ? ` · ${d.media.length} media` : ""}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onEditDraft(d)}
+                  className={`${btnSecondary} inline-flex shrink-0 items-center gap-1.5 text-xs`}
+                >
+                  <Pencil size={13} /> {t("draftEdit")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDeleteDraft(d.id)}
+                  className="shrink-0 rounded-lg p-2"
+                  title={t("draftDelete")}
+                  aria-label={t("draftDelete")}
+                  style={{ background: "rgba(239,68,68,.1)", color: "var(--status-error)", border: "none", cursor: "pointer" }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ))}
     </div>
   );
 }

@@ -17,10 +17,12 @@ import {
 } from "./uiSlice";
 import { generateContent, applyQuickAction, isGenerationCached } from "../lib/aiService";
 import { fetchConnections, publishToTargets } from "../lib/oauthService";
+import { createPost } from "../lib/postsService";
 import { publishHashKey } from "../lib/publishHash";
 import { submitValidation } from "../lib/validationService";
 import { loadSettings } from "../lib/settingsStorage";
 import { getScheduleTimezone } from "../lib/timezone";
+import { isoDateKey, startOfToday } from "../lib/dateUtils";
 
 // Frontend-side cooldown after a publish — locks the button so a fast
 // second click can't double-post (the backend has the same guard).
@@ -137,9 +139,34 @@ export function applyQuickActionThunk(action) {
 }
 
 export function saveDraftThunk() {
-  return async (dispatch) => {
+  return async (dispatch, getState) => {
+    const { currentPost } = getState().editor;
     dispatch(setStatus("draft"));
-    dispatch(addNotification({ message: "Draft saved.", type: "success" }));
+    // Persist the draft so it shows up in the Library's Drafts tab (not just a
+    // local status flip). Only keep media that actually uploaded — local-only
+    // blobs are meaningless server-side. scheduledDate is required by the API,
+    // so a date-less draft defaults to today.
+    const uploaded = (currentPost.media || []).filter((m) => m.status === "uploaded");
+    const created = await createPost({
+      content: currentPost.content || "",
+      platforms: currentPost.platforms || {},
+      status: "draft",
+      scheduledDate: currentPost.scheduledDate || isoDateKey(startOfToday()),
+      timezone: getScheduleTimezone(),
+      media: uploaded,
+      ratios:
+        currentPost.ratios && Object.keys(currentPost.ratios).length
+          ? currentPost.ratios
+          : undefined,
+    });
+    dispatch(
+      addNotification({
+        message: created
+          ? "Draft saved to your Library."
+          : "Draft saved locally (backend unavailable).",
+        type: created ? "success" : "info",
+      })
+    );
   };
 }
 

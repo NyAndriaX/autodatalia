@@ -944,6 +944,15 @@ export default function SettingsView() {
         <Section icon={Send} title={t("telegramSectionTitle")}>
           {/* The bot token / webhook secret are server-side deployment config —
               not surfaced here. Users only manage their own chat id + test. */}
+          <div className="mb-4 rounded-xl p-3.5 text-xs leading-relaxed"
+            style={{ background:"rgba(29,63,190,.07)", border:"1px solid rgba(29,63,190,.2)", color:"var(--text-secondary)" }}>
+            <p className="mb-1.5 font-bold">{t("telegramHowToTitle")}</p>
+            <ol className="list-decimal space-y-1 pl-4">
+              <li>{t("telegramStep1")}</li>
+              <li>{t("telegramStep2")}</li>
+              <li>{t("telegramStep3")}</li>
+            </ol>
+          </div>
           <Champ label={t("telegramChatIdLabel")} name="telegramChatId" value={s.telegramChatId}
             onChange={update} placeholder={t("telegramChatIdPlaceholder")} />
 
