@@ -157,6 +157,13 @@ services:
       LTX_API_KEY: ${LTX_API_KEY:-}
       LTX_API_BASE_URL: ${LTX_API_BASE_URL:-https://api.ltx.video/v1}
       LTX_VIDEO_MODEL: ${LTX_VIDEO_MODEL:-ltx-2-3-pro}
+      # Zernio unified social API. Set ZERNIO_API_KEY here (e.g. in Dokploy's
+      # env panel) for one GLOBAL Zernio account across the instance, or leave
+      # it empty and have each workspace set its own key in Settings. Per-
+      # workspace profiles isolate accounts under whichever key resolves. The
+      # BASE URL is env-only by design (never tenant-editable; no SSRF surface).
+      ZERNIO_API_KEY: ${ZERNIO_API_KEY:-}
+      ZERNIO_API_BASE_URL: ${ZERNIO_API_BASE_URL:-https://zernio.com/api/v1}
       VIDEO_COST_PER_SECOND_USD: ${VIDEO_COST_PER_SECOND_USD:-0.04}
       CONTENT_DIR: /home/app/content
       DATALIA_DEFAULT_TZ: ${DATALIA_DEFAULT_TZ:-Europe/Paris}

@@ -61,6 +61,10 @@ EDITABLE_KEYS: dict[str, str] = {
     # var (see telegram_validation.register_webhook). Only the per-tenant
     # default chat id is editable here.
     "TELEGRAM_DEFAULT_CHAT_ID": "telegram_default_chat_id",
+    # Zernio unified social API key — per-workspace. Editable so an admin can
+    # paste their Zernio key in Settings (CEO ask: a "?" to change the key).
+    # The base URL is deliberately env-only (not editable) — see config.py.
+    "ZERNIO_API_KEY": "zernio_api_key",
 }
 
 
@@ -72,6 +76,7 @@ SECRET_KEYS: set[str] = {
     "FAL_API_KEY",
     "LTX_API_KEY",
     "REPLICATE_API_TOKEN",
+    "ZERNIO_API_KEY",
 }
 
 

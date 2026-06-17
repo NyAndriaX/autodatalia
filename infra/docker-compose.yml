@@ -108,6 +108,12 @@ services:
       LTX_API_BASE_URL: ${LTX_API_BASE_URL:-https://api.ltx.video/v1}
       LTX_VIDEO_MODEL: ${LTX_VIDEO_MODEL:-ltx-2-3-pro}
       VIDEO_COST_PER_SECOND_USD: ${VIDEO_COST_PER_SECOND_USD:-0.04}
+      # Zernio unified social API. ZERNIO_API_KEY is an optional GLOBAL default
+      # (one Zernio account for the whole instance; per-workspace profiles
+      # isolate accounts). It can also be overridden per-workspace in the app's
+      # Settings. The BASE URL is env-only by design (never tenant-editable).
+      ZERNIO_API_KEY: ${ZERNIO_API_KEY:-}
+      ZERNIO_API_BASE_URL: ${ZERNIO_API_BASE_URL:-https://zernio.com/api/v1}
       DATABASE_URL: ${DATABASE_URL:-}
       MARIADB_HOST: ${MARIADB_HOST:-mariadb}
       MARIADB_PORT: ${MARIADB_PORT:-3306}

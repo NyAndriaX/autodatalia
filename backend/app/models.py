@@ -209,8 +209,12 @@ class PublishTarget(BaseModel):
     """
 
     platform: str  # "facebook" | "instagram" | "tiktok" | "linkedin"
-    id: str        # page_id | ig_user_id | open_id | urn
+    id: str        # page_id | ig_user_id | open_id | urn | zernio account id
     label: str | None = None  # human-readable, for the response log
+    # Which backend publishes this target. None/"direct" → the per-platform
+    # handlers in publish.py; "zernio" → routed through the Zernio unified API
+    # (zernio.py). The frontend tags each target from /oauth/connections.
+    provider: str | None = None
     # IG only: when media_kind is "video" the publish call waits for IG
     # to finish processing before publishing the container.
     media_kind: str | None = None  # "image" | "video"

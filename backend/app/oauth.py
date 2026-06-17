@@ -313,6 +313,39 @@ async def oauth_start(provider_id: str, user_id: int = Depends(require_token)) -
     return {"authorize_url": f"{p.authorize_url}?{urlencode(params)}"}
 
 
+@router.get(
+    "/zernio/{platform}/start",
+    dependencies=[Depends(require_permission("connections.manage"))],
+)
+async def zernio_start(platform: str, user_id: int = Depends(require_token)) -> dict[str, str]:
+    """Hosted Zernio authorize URL for linking ``platform`` to this workspace's
+    Zernio profile. Mirrors /oauth/{provider}/start but for the unified
+    provider; the frontend pops it like any other connect popup.
+
+    Unlike the direct providers there is no callback to us — Zernio handles the
+    OAuth and links the account to the profile, so the frontend just refetches
+    /oauth/connections after the popup closes to see the new account.
+    """
+    from . import zernio
+
+    workspace_id = get_active_workspace_id(user_id)
+    if not workspace_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to a workspace before connecting a Zernio account.",
+        )
+    if not zernio.is_enabled(workspace_id):
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "zernio_not_configured", "missing": ["ZERNIO_API_KEY"]},
+        )
+    try:
+        url = await zernio.start_connect(workspace_id, platform)
+    except zernio.ZernioError as exc:
+        raise HTTPException(status_code=exc.status or 502, detail=str(exc))
+    return {"authorize_url": url}
+
+
 async def _exchange_code(
     provider: ProviderSpec, code: str
 ) -> dict[str, Any]:
@@ -1057,5 +1090,27 @@ async def connections(user_id: int = Depends(require_token)) -> dict[str, Any]:
                 )
 
         out["providers"][p.id] = entry
+
+    # Zernio (optional unified provider) folded in alongside the direct
+    # providers so Settings + the publish path treat it uniformly. Inert
+    # (configured=False) when no ZERNIO_API_KEY is set for the workspace, and
+    # never allowed to break the whole connections view.
+    from . import zernio
+
+    try:
+        out["providers"]["zernio"] = await zernio.connections_entry(
+            get_active_workspace_id(user_id)
+        )
+    except Exception as exc:  # noqa: BLE001
+        out["providers"]["zernio"] = {
+            "id": "zernio",
+            "label": zernio.LABEL,
+            "configured": True,
+            "connected": False,
+            "missing_env": [],
+            "targets": [],
+            "is_aggregator": True,
+            "error": str(exc),
+        }
 
     return out

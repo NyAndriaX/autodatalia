@@ -552,6 +552,10 @@ async def publish(
         return meta_pages
 
     resolved: list[dict[str, Any]] = []
+    # Targets published through the Zernio unified API (provider == "zernio").
+    # Collected here and dispatched separately from the direct per-platform
+    # fan-out below — Zernio resolves its own tokens server-side.
+    zernio_targets: list[dict[str, Any]] = []
     for t in body.targets:
         platform = t.platform
         # Per-target media override (frontend can send video for tiktok,
@@ -559,6 +563,16 @@ async def publish(
         # when not set, so the old single-media path keeps working.
         t_media_url = t.media_url or body.media_url
         t_media_urls = t.media_urls or body.media_urls or ([t_media_url] if t_media_url else [])
+        if (t.provider or "").lower() == "zernio":
+            zernio_targets.append(
+                {
+                    "id": t.id,
+                    "label": t.label or t.id,
+                    "platform": platform,
+                    "media_urls": [u for u in t_media_urls if u],
+                }
+            )
+            continue
         if platform in ("facebook", "instagram"):
             if not user_meta_token:
                 resolved.append({
@@ -757,9 +771,30 @@ async def publish(
         else []
     )
 
+    # Zernio targets publish through the unified API — one POST /posts per
+    # distinct media set (Zernio applies a post's media to every platform in the
+    # call, so targets that share media batch into a single post).
+    zernio_results: list[dict[str, Any]] = []
+    if zernio_targets:
+        from . import zernio as zernio_provider
+
+        groups: dict[tuple, list[dict[str, Any]]] = {}
+        for zt in zernio_targets:
+            groups.setdefault(tuple(zt["media_urls"]), []).append(zt)
+        for media_key, group in groups.items():
+            zernio_results.extend(
+                await zernio_provider.publish(
+                    scoped_user_id,
+                    content=body.content,
+                    targets=group,
+                    media_urls=list(media_key),
+                    schedule=None,  # manual /publish == immediate
+                )
+            )
+
     # Preserve original target order in the response.
     by_id: dict[str, dict[str, Any]] = {}
-    for row in succeeded + failed:
+    for row in succeeded + failed + zernio_results:
         by_id[(row["platform"], row["target_id"])] = row
     ordered = [
         by_id.get((t.platform, t.id), {
