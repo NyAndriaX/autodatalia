@@ -284,14 +284,22 @@ def test_member_leaves_workspace():
     owner = _new_client()
     _register(owner, "owner@leave.com", "Owner")
     ws_id = owner.get("/workspace").json()["id"]
-    member, _ = _invite_and_accept(owner, ws_id, "ed@leave.com", "Editor", "Ed")
+    member, member_uid = _invite_and_accept(owner, ws_id, "ed@leave.com", "Editor", "Ed")
+    personal_ws = next(
+        ws
+        for ws in member.get("/workspaces").json()["workspaces"]
+        if ws["is_owner"] and ws["id"] != ws_id
+    )
 
     # The owner can't abandon their own workspace.
     assert owner.post("/workspace/leave").status_code == 400
-    # The member can leave; afterwards they have no active workspace.
+    # The member can leave; afterwards they fall back to their personal workspace.
     assert member.post("/workspace/leave").status_code == 200
-    assert member.get("/workspace").status_code == 403
-    assert all(m["user_id"] != _ for m in workspaces.list_members(ws_id))
+    ws = member.get("/workspace")
+    assert ws.status_code == 200
+    assert ws.json()["id"] == personal_ws["id"]
+    assert ws.json()["role"] == "Owner"
+    assert all(m["user_id"] != member_uid for m in workspaces.list_members(ws_id))
 
 
 # ── 12. Self-service account deletion ─────────────────────────────────────

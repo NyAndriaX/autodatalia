@@ -121,6 +121,27 @@ def test_start_connect_rejects_unknown_platform(zenv):
         asyncio.run(zernio.start_connect(7, "myspace"))
 
 
+def test_request_maps_httpx_network_errors(monkeypatch):
+    monkeypatch.setattr(zernio, "_config", lambda wsid: ("sk_test", "https://zernio.com/api/v1"))
+
+    class BoomClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, *args, **kwargs):
+            raise httpx.ConnectError("network down")
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *args, **kwargs: BoomClient())
+
+    with pytest.raises(zernio.ZernioError) as exc:
+        asyncio.run(zernio._request("GET", "/profiles", workspace_id=7))
+    assert exc.value.status == 502
+    assert "Zernio request failed" in str(exc.value)
+
+
 def test_publish_text_only(zenv):
     targets = [
         {"id": "acc_ig", "label": "brand", "platform": "instagram"},

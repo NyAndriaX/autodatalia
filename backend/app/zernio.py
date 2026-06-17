@@ -138,8 +138,11 @@ async def _request(
     if not key:
         raise ZernioError("Zernio is not configured for this workspace.", status=503)
     url = f"{base}{path}"
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.request(method, url, headers=_headers(key), json=json)
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.request(method, url, headers=_headers(key), json=json)
+    except httpx.HTTPError as exc:
+        raise ZernioError(f"Zernio request failed: {exc}", status=502) from exc
     if resp.status_code >= 400:
         raise ZernioError(_error_text(resp), status=resp.status_code)
     try:
