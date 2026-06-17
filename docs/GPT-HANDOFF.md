@@ -119,8 +119,12 @@ in a workspace whose platform is connected ONLY via Zernio, schedule a post →
 confirm the scheduler fires it through Zernio. The direct scheduler path is
 covered by existing tests (unchanged); the Zernio fallback has no automated test.
 
-**Still not built (cosmetic — for the teammate's visual pass):** #1 reels icon,
-#13 icon cleanup.
+**#1 reels icon — DONE** (`61d0bd6`): the ratio picker shows a Reels (film) icon
+on the 9:16 vertical option (the Reels/Stories/Shorts format) across all
+platforms.
+**Only remaining CEO item: #13** ("avoid useless icons, cleaner/lighter
+design") — a subjective visual-polish pass left for the teammate; no functional
+work outstanding.
 
 ## 4. What Claude verified on the VM (and what it did NOT)
 Verified: backend `compileall`, `test_zernio.py` smoke logic, every edited
