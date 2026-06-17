@@ -384,12 +384,12 @@ export default function CreationEditor() {
 
           {/* Content — tone + caption (fills height) + generate + variants + hashtags */}
           {activeStep === "content" && (
-            <div className={`h-full flex flex-col min-h-0 px-4 sm:px-6 py-5 gap-4 ${fadeIn}`}>
+            <div className={`h-full flex flex-col min-h-0 px-4 sm:px-6 py-3 gap-2.5 ${fadeIn}`}>
               {/* Tone + Transforms */}
-              <div className="flex flex-wrap items-end gap-3 shrink-0">
+              <div className="grid shrink-0 gap-2.5 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
                 <div className="flex-1 min-w-[200px]">
                   <p
-                    className="text-xs font-semibold uppercase tracking-wider mb-2"
+                    className="text-xs font-semibold uppercase tracking-wider mb-1.5"
                     style={{ color: "var(--text-tertiary)" }}
                     id="tone-label"
                   >
@@ -411,7 +411,7 @@ export default function CreationEditor() {
                     ))}
                   </select>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2 xl:justify-end">
                   {QUICK_ACTIONS.map((action) => {
                     const Icon = action.icon;
                     const actionLabel = t(action.id);
@@ -419,7 +419,7 @@ export default function CreationEditor() {
                       <button
                         key={action.id}
                         id={`quick-action-${action.id}`}
-                        className={`${btnSecondary} flex items-center gap-2 text-xs h-9`}
+                        className={`${btnSecondary} flex items-center gap-2 px-4 py-2 text-xs h-9`}
                         disabled={isBusy || !currentPost.content.trim()}
                         onClick={() => dispatch(applyQuickActionThunk(action.id))}
                         aria-label={t("quickActionAria", { action: actionLabel })}
@@ -439,10 +439,10 @@ export default function CreationEditor() {
 
               {/* Post content — fills the remaining page height. No internal
                   scroll: the box grows/shrinks with the step, never scrolls. */}
-              <div className="relative flex flex-col flex-1 min-h-0">
+              <div className="relative flex shrink-0 flex-col">
                 <label
                   htmlFor="content-editor"
-                  className="text-xs font-semibold uppercase tracking-wider mb-2 block"
+                  className="text-xs font-semibold uppercase tracking-wider mb-1.5 block"
                   style={{ color: "var(--text-tertiary)" }}
                 >
                   {t("postContent")}
@@ -452,7 +452,7 @@ export default function CreationEditor() {
                   value={currentPost.content}
                   onChange={(e) => dispatch(setContent(e.target.value))}
                   placeholder={t("promptPlaceholder")}
-                  className="w-full flex-1 min-h-[120px] resize-none overflow-hidden rounded-xl p-5 text-base leading-relaxed"
+                  className="h-[clamp(124px,20vh,180px)] w-full resize-none overflow-hidden rounded-xl p-3.5 text-[15px] leading-relaxed"
                   style={{
                     background: "var(--bg-tertiary)",
                     border: "1px solid var(--border-default)",
@@ -463,16 +463,16 @@ export default function CreationEditor() {
                 />
                 {/* Character & hashtag counters */}
                 <div
-                  className="flex items-center gap-x-4 gap-y-1 flex-wrap mt-3 shrink-0"
+                  className="mt-2 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1"
                   style={{ color: "var(--text-muted)" }}
                   aria-live="polite"
                   aria-atomic="true"
                 >
-                  <span className="flex items-center gap-1.5 text-xs">
+                  <span className="flex items-center gap-1.5 text-[11px]">
                     <Type size={12} aria-hidden="true" />
                     {t("charsCount", { n: contentLength })}
                   </span>
-                  <span className="flex items-center gap-1.5 text-xs">
+                  <span className="flex items-center gap-1.5 text-[11px]">
                     <Hash size={12} aria-hidden="true" />
                     {t("hashtagsCount", { n: hashtagCount })}
                   </span>
@@ -481,7 +481,7 @@ export default function CreationEditor() {
                     return (
                       <span
                         key={p.id}
-                        className="text-xs"
+                        className="text-[11px]"
                         style={{ color: over ? "var(--status-error)" : undefined }}
                         aria-label={t("charsOfPlatform", {
                           platform: p.label,
@@ -514,9 +514,9 @@ export default function CreationEditor() {
                           onClick={() => dispatch(selectVariant(i))}
                           className="text-left rounded-lg p-3 transition-all"
                           style={{
-                            width: "min(168px, 100%)",
-                            flex: "1 1 140px",
-                            maxWidth: 168,
+                            width: "min(152px, 100%)",
+                            flex: "1 1 128px",
+                            maxWidth: 152,
                             background: active ? "rgba(99,102,241,0.10)" : "var(--bg-tertiary)",
                             border: `1px solid ${active ? "var(--border-active)" : "var(--border-default)"}`,
                           }}
@@ -529,7 +529,7 @@ export default function CreationEditor() {
                             {active ? t("variantSelectedSuffix") : ""}
                           </span>
                           <span
-                            className="text-xs block line-clamp-3"
+                            className="block text-[11px] line-clamp-2"
                             style={{ color: "var(--text-secondary)" }}
                           >
                             {v.text}
@@ -542,25 +542,53 @@ export default function CreationEditor() {
               )}
 
               {/* Hashtag suggester — collapsed by default to cut visual noise */}
-              <div className="shrink-0">
-                <button
-                  onClick={() => setShowHashtags((v) => !v)}
-                  className={`${btnSecondary} inline-flex items-center gap-2 text-xs`}
-                  aria-expanded={showHashtags}
-                >
-                  <Hash size={14} aria-hidden="true" />
-                  {showHashtags ? t("hideHashtags") : t("suggestHashtags")}
-                  <ChevronDown
-                    size={12}
-                    aria-hidden="true"
+              {/* Generate — single primary CTA; secondary controls only appear
+                  once variants exist, and Regenerate keeps the confirm step so
+                  accidental clicks don't burn tokens. */}
+              <div className="shrink-0 flex flex-col gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => setShowHashtags((v) => !v)}
+                    className={`${btnSecondary} inline-flex items-center gap-2 px-4 py-2 text-xs`}
+                    aria-expanded={showHashtags}
+                  >
+                    <Hash size={14} aria-hidden="true" />
+                    {showHashtags ? t("hideHashtags") : t("suggestHashtags")}
+                    <ChevronDown
+                      size={12}
+                      aria-hidden="true"
+                      style={{
+                        transform: showHashtags ? "rotate(180deg)" : "none",
+                        transition: "transform 0.2s",
+                      }}
+                    />
+                  </button>
+                  <button
+                    id="generate-ai-btn"
+                    onClick={() => dispatch(generateContentThunk())}
+                    disabled={aiGeneration.isGenerating}
+                    aria-busy={aiGeneration.isGenerating}
+                    className={`${btnPrimary} flex min-w-[220px] flex-1 items-center justify-center gap-2 px-5 py-2.5 text-sm sm:flex-none`}
                     style={{
-                      transform: showHashtags ? "rotate(180deg)" : "none",
-                      transition: "transform 0.2s",
+                      opacity: aiGeneration.isGenerating ? 0.7 : 1,
+                      cursor: aiGeneration.isGenerating ? "not-allowed" : "pointer",
                     }}
-                  />
-                </button>
+                  >
+                    {aiGeneration.isGenerating ? (
+                      <>
+                        <Loader2 size={18} className="animate-spin" aria-hidden="true" />
+                        {t("generating")}
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={18} aria-hidden="true" />
+                        {t("generate")}{currentPost.tone ? ` (${TONES.find((tone) => tone.id === currentPost.tone)?.label || t("tone")})` : ""}
+                      </>
+                    )}
+                  </button>
+                </div>
                 {showHashtags && (
-                  <div className={`flex gap-2 flex-wrap mt-3 ${fadeIn}`}>
+                  <div className={`flex gap-2 flex-wrap ${fadeIn}`}>
                     {SUGGESTED_HASHTAGS.map((tag) => (
                       <button
                         key={tag}
@@ -569,7 +597,7 @@ export default function CreationEditor() {
                           const sep = c === "" || c.endsWith(" ") || c.endsWith("\n") ? "" : " ";
                           dispatch(setContent(c + sep + tag));
                         }}
-                        className="text-xs px-2.5 py-1 rounded-full transition-all"
+                        className="rounded-full px-2.5 py-1 text-xs transition-all"
                         style={{
                           background: "var(--bg-tertiary)",
                           border: "1px solid var(--border-default)",
@@ -581,38 +609,21 @@ export default function CreationEditor() {
                     ))}
                   </div>
                 )}
-              </div>
-
-              {/* Generate — single primary CTA; secondary controls only appear
-                  once variants exist, and Regenerate keeps the confirm step so
-                  accidental clicks don't burn tokens. */}
-              <div className="shrink-0">
-                <button
-                  id="generate-ai-btn"
-                  onClick={() => dispatch(generateContentThunk())}
-                  disabled={aiGeneration.isGenerating}
-                  aria-busy={aiGeneration.isGenerating}
-                  className={`${btnPrimary} flex items-center justify-center gap-2 w-full py-3 text-base`}
-                  style={{
-                    opacity: aiGeneration.isGenerating ? 0.7 : 1,
-                    cursor: aiGeneration.isGenerating ? "not-allowed" : "pointer",
-                  }}
-                >
-                  {aiGeneration.isGenerating ? (
-                    <>
-                      <Loader2 size={20} className="animate-spin" aria-hidden="true" />
-                      {t("generating")}
-                    </>
+                <div className="mt-1 min-h-[24px]">
+                  {aiGeneration.error ? (
+                    <p
+                      className="px-2 text-center text-xs leading-tight break-words"
+                      style={{ color: "var(--status-error)" }}
+                      role="alert"
+                    >
+                      {aiGeneration.error}
+                    </p>
                   ) : (
-                    <>
-                      <Sparkles size={20} aria-hidden="true" />
-                      {t("generate")}{currentPost.tone ? ` (${TONES.find((tone) => tone.id === currentPost.tone)?.label || t("tone")})` : ""}
-                    </>
+                    <p className="text-[11px] text-center" style={{ color: "var(--text-muted)" }}>
+                      {t("unchangedReuses")}
+                    </p>
                   )}
-                </button>
-                <p className="text-[11px] text-center mt-2" style={{ color: "var(--text-muted)" }}>
-                  {t("unchangedReuses")}
-                </p>
+                </div>
                 {aiGeneration.variants.length > 0 && (
                   <div className="flex items-center justify-center gap-4 mt-2">
                     <button
@@ -644,11 +655,6 @@ export default function CreationEditor() {
                       {t("plusAlternatives")}
                     </button>
                   </div>
-                )}
-                {aiGeneration.error && (
-                  <p className="text-xs text-center mt-1" style={{ color: "var(--status-error)" }} role="alert">
-                    {aiGeneration.error}
-                  </p>
                 )}
               </div>
             </div>

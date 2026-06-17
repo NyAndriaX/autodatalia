@@ -92,11 +92,43 @@ ALLOWED_VIDEO_CONTENT_TYPES = {
 }
 
 
-def _upstream_error_detail(message: str, upstream_status: int) -> dict[str, Any]:
-    return {
+def _extract_upstream_error(response: httpx.Response) -> str:
+    """Best-effort extraction of a concise upstream provider error string."""
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            text = (
+                error.get("message")
+                or error.get("detail")
+                or error.get("type")
+                or ""
+            )
+            if text:
+                return str(text).strip()[:240]
+        for key in ("message", "detail", "error"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:240]
+    text = (response.text or "").strip()
+    return text[:240] if text else ""
+
+
+def _upstream_error_detail(
+    message: str,
+    upstream_status: int,
+    upstream_error: str = "",
+) -> dict[str, Any]:
+    detail = {
         "message": message,
         "upstream_status": upstream_status,
     }
+    if upstream_error:
+        detail["upstream_error"] = upstream_error
+    return detail
 
 
 def _upload_kind_for(file: UploadFile, suffix: str) -> str:
@@ -261,6 +293,7 @@ async def generate_captions(
             detail=_upstream_error_detail(
                 "AI API request failed.",
                 response.status_code,
+                _extract_upstream_error(response),
             ),
         )
 
@@ -510,6 +543,7 @@ async def _post_chat(
             detail=_upstream_error_detail(
                 "AI API request failed.",
                 response.status_code,
+                _extract_upstream_error(response),
             ),
         )
 

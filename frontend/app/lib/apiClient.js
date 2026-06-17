@@ -17,12 +17,25 @@ export async function apiFetch(path, options = {}) {
     let detail = "";
     try {
       const data = await res.json();
-      detail =
+      const baseDetail =
         data?.detail?.message ||
         data?.detail?.error ||
         (typeof data?.detail === "string" ? data.detail : "") ||
         data?.message ||
         "";
+      const upstreamStatus = data?.detail?.upstream_status;
+      const upstreamError = data?.detail?.upstream_error;
+      if (upstreamStatus || upstreamError) {
+        const suffix = [
+          upstreamStatus ? `upstream ${upstreamStatus}` : "",
+          upstreamError || "",
+        ]
+          .filter(Boolean)
+          .join(": ");
+        detail = baseDetail ? `${baseDetail} (${suffix})` : suffix;
+      } else {
+        detail = baseDetail;
+      }
     } catch {}
     const err = new Error(detail || `API ${res.status} ${path}`);
     err.status = res.status;

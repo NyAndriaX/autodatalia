@@ -2,8 +2,8 @@ import { Share2, FileText, Image, Send } from "lucide-react";
 
 export const CREATION_STEPS = [
   { id: "platforms", label: "Platforms", hint: "Pick targets", icon: Share2 },
-  { id: "content", label: "Content", hint: "Write & generate", icon: FileText },
   { id: "media", label: "Media", hint: "Add visuals", icon: Image },
+  { id: "content", label: "Content", hint: "Write & generate", icon: FileText },
   { id: "publish", label: "Publish", hint: "Review & go live", icon: Send },
 ];
 
@@ -20,14 +20,14 @@ export function deriveCreationWorkflow(post) {
 
   const completedIds = [];
   if (hasPlatforms) completedIds.push("platforms");
-  if (hasContent) completedIds.push("content");
   if (hasMedia) completedIds.push("media");
+  if (hasContent) completedIds.push("content");
   if (readyToPublish) completedIds.push("publish");
 
   let currentId = "platforms";
   if (!hasPlatforms) currentId = "platforms";
-  else if (!hasContent) currentId = "content";
   else if (!hasMedia) currentId = "media";
+  else if (!hasContent) currentId = "content";
   else currentId = "publish";
 
   const progressPct = Math.round((completedIds.length / CREATION_STEPS.length) * 100);

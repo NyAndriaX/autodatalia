@@ -16,7 +16,7 @@ export default function WorkflowSteps({
 
   return (
     <nav
-      className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-card)] px-4 py-3"
+      className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2.5"
       aria-label={ariaLabel}
     >
       <ol className="m-0 flex list-none items-start p-0">
@@ -39,7 +39,7 @@ export default function WorkflowSteps({
               )}
               <button
                 type="button"
-                className="relative z-10 flex w-full flex-col items-center gap-2 border-0 bg-transparent px-2 py-1 text-center disabled:cursor-default"
+                className="relative z-10 flex w-full flex-col items-center gap-1.5 border-0 bg-transparent px-1.5 py-0.5 text-center disabled:cursor-default"
                 onClick={clickable ? () => onStepClick(step.id) : undefined}
                 disabled={!clickable}
                 aria-current={isCurrent ? "step" : undefined}
@@ -47,7 +47,7 @@ export default function WorkflowSteps({
               >
                 <span
                   className={`flex items-center justify-center rounded-full border-2 font-bold transition-all duration-200 ${
-                    compact ? "h-8 w-8 text-xs" : "h-9 w-9 text-sm"
+                    compact ? "h-8 w-8 text-xs" : "h-8.5 w-8.5 text-sm"
                   } ${
                     isCurrent
                       ? "border-transparent text-white shadow-[var(--accent-glow)] bg-[image:var(--accent-gradient)]"
@@ -75,14 +75,14 @@ export default function WorkflowSteps({
                 {!compact && (
                   <span className="flex min-w-0 flex-col gap-0.5">
                     <span
-                      className={`max-w-full truncate text-xs font-bold ${
+                      className={`max-w-full truncate text-[11px] font-bold ${
                         isCurrent ? "text-[var(--accent-primary)]" : "text-[var(--text-primary)]"
                       }`}
                     >
                       {step.label}
                     </span>
                     {step.hint && (
-                      <span className="max-w-full truncate text-[10px] text-[var(--text-muted)] max-sm:hidden">
+                      <span className="max-w-full truncate text-[10px] leading-tight text-[var(--text-muted)] max-sm:hidden">
                         {step.hint}
                       </span>
                     )}
