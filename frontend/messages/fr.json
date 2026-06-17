@@ -276,7 +276,7 @@
     "targetPlatforms": "Plateformes cibles",
     "clickToUpload": "Cliquer pour téléverser",
     "orDragDrop": "ou glisser-déposer",
-    "uploadFormats": "PNG · JPG · GIF · WebP · MP4 · MOV — jusqu'à 50 Mo",
+    "uploadFormats": "PNG · JPG · GIF · WebP · MP4 · MOV — jusqu'à 500 Mo",
     "libraryPickerTitle": "Choisir dans votre bibliothèque",
     "libraryPickerEmpty": "Votre bibliothèque est vide — téléversez d'abord un média.",
     "libraryPickerLoading": "Chargement de votre bibliothèque…",

@@ -452,7 +452,10 @@ function AuthPanel({ isDark, dispatch, resolved }) {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
+        // `safe center` keeps the block centered when it fits, but top-aligns it
+        // when the (taller) Create Account form overflows — otherwise plain
+        // `center` clips the header above the scroll area and it's unreachable.
+        justifyContent: "safe center",
         position: "relative",
       }}
     >

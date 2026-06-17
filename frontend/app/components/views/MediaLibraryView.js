@@ -576,33 +576,28 @@ export default function MediaLibraryView() {
   const handleDelete = useCallback(async (item) => {
     if (!window.confirm(t("deleteConfirm", { name: item.name }))) return;
 
+    // A purely-local item (failed/too-large upload, never persisted) just drops
+    // from local state — there's nothing on the server to delete.
     const isRemote = !!item.remoteUrl || /^[^_].*\.[a-z0-9]+$/i.test(item.id || "");
-    if (!isRemote) {
-      setUploads((prev) => prev.filter((u) => u.id !== item.id));
-      return;
-    }
-
-    setUploads((prev) => prev.map((u) => (u.id === item.id ? { ...u, status: "deleting" } : u)));
-    setRemoteHits((prev) => prev.map((h) => (h.id === item.id ? { ...h, status: "deleting" } : h)));
-
-    const backendPath = item.id?.includes("/") || /\.[a-z0-9]+$/i.test(item.id || "") ? item.id : item.name;
-    const { ok, status } = await deleteFromBackend(backendPath);
-
-    if (!ok && status !== 404) {
-      setUploads((prev) => prev.map((u) => (u.id === item.id ? { ...u, status: "uploaded" } : u)));
-      setRemoteHits((prev) => prev.map((h) => (h.id === item.id ? { ...h, status: "uploaded" } : h)));
-      window.alert(t("deleteFailed", { name: item.name, status: status || "?" }));
-      return;
+    if (isRemote) {
+      // Best-effort backend delete, then remove from the UI regardless — same
+      // as bulk delete, so a path mismatch / already-gone file never leaves a
+      // stuck tile (the listMedia refresh below reconciles if it truly failed).
+      const backendPath =
+        item.id?.includes("/") || /\.[a-z0-9]+$/i.test(item.id || "") ? item.id : item.name;
+      try { await deleteFromBackend(backendPath); } catch { /* best-effort */ }
     }
 
     setUploads((prev) => prev.filter((u) => u.id !== item.id));
     setRemoteHits((prev) => prev.filter((h) => h.id !== item.id));
     setSelectedIds((prev) => { const next = new Set(prev); next.delete(item.id); return next; });
 
-    try {
-      const hits = await listMedia(query.trim());
-      setRemoteHits(hits);
-    } catch { /* best-effort */ }
+    if (isRemote) {
+      try {
+        const hits = await listMedia(query.trim());
+        setRemoteHits(hits);
+      } catch { /* best-effort */ }
+    }
   }, [query, t]);
 
   const handleBulkDelete = useCallback(async () => {

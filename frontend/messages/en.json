@@ -276,7 +276,7 @@
     "targetPlatforms": "Target platforms",
     "clickToUpload": "Click to upload",
     "orDragDrop": "or drag & drop",
-    "uploadFormats": "PNG · JPG · GIF · WebP · MP4 · MOV — up to 50 MB",
+    "uploadFormats": "PNG · JPG · GIF · WebP · MP4 · MOV — up to 500 MB",
     "libraryPickerTitle": "Choose from your library",
     "libraryPickerEmpty": "Your library is empty — upload media first.",
     "libraryPickerLoading": "Loading your library…",

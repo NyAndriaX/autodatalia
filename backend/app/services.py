@@ -75,7 +75,7 @@ def atomic_write_text(path, content: str, *, encoding: str = "utf-8") -> None:
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".gif"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".m4v"}
 DESCRIPTION_EXTENSIONS = (".txt", ".md")
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+MAX_UPLOAD_BYTES = 500 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/gif",

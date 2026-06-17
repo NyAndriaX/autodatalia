@@ -30,24 +30,14 @@ import { COMMON_TIMEZONES, getBrowserTimezone } from "../../lib/timezone";
 const PLATFORM_TO_PROVIDER    = { facebook:"meta", instagram:"meta", tiktok:"tiktok", linkedin:"linkedin" };
 const TARGET_KIND_FOR_PLATFORM = { facebook:"facebook_page", instagram:"instagram_business" };
 
-// Networks Zernio can connect (mirrors backend zernio.ZERNIO_PLATFORMS). Each
-// id is the slug sent to /oauth/zernio/{id}/start.
+// Networks offered for Zernio connect. Zernio supports 15, but Datalia only
+// publishes to our four, so we only offer those (id = slug sent to
+// /oauth/zernio/{id}/start). Mirrors the direct PLATFORMS set.
 const ZERNIO_PLATFORMS = [
-  { id:"instagram",      label:"Instagram" },
-  { id:"tiktok",         label:"TikTok" },
-  { id:"twitter",        label:"X / Twitter" },
-  { id:"facebook",       label:"Facebook" },
-  { id:"linkedin",       label:"LinkedIn" },
-  { id:"youtube",        label:"YouTube" },
-  { id:"threads",        label:"Threads" },
-  { id:"pinterest",      label:"Pinterest" },
-  { id:"reddit",         label:"Reddit" },
-  { id:"bluesky",        label:"Bluesky" },
-  { id:"telegram",       label:"Telegram" },
-  { id:"googlebusiness", label:"Google Business" },
-  { id:"snapchat",       label:"Snapchat" },
-  { id:"whatsapp",       label:"WhatsApp" },
-  { id:"discord",        label:"Discord" },
+  { id:"facebook",  label:"Facebook" },
+  { id:"instagram", label:"Instagram" },
+  { id:"tiktok",    label:"TikTok" },
+  { id:"linkedin",  label:"LinkedIn" },
 ];
 
 function formatCompact(n) {

@@ -2,7 +2,7 @@ import { apiUpload } from "./apiClient";
 import { config } from "./config";
 
 export const ACCEPTED_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "video/mp4", "video/quicktime"];
-export const MAX_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
+export const MAX_SIZE_BYTES = 500 * 1024 * 1024; // 500 MB
 
 let idSeq = 0;
 
