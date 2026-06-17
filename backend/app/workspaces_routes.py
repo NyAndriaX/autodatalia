@@ -163,6 +163,49 @@ async def members_remove(
     return {"ok": True}
 
 
+@router.delete("/workspace/members/{user_id}/account")
+async def members_delete_account(
+    user_id: int,
+    ctx: WorkspaceContext = Depends(require_permission("members.manage")),
+) -> dict[str, Any]:
+    """Permanently delete another user's ACCOUNT (not just their membership) —
+    destructive + irreversible. The target must be a member of this workspace
+    and must not be its owner."""
+    if user_id == ctx.user_id:
+        raise HTTPException(400, "Use Delete account for yourself.")
+    if not workspaces.get_membership(user_id, ctx.workspace_id):
+        raise HTTPException(404, "Member not found.")
+    if workspaces.is_owner(ctx.workspace_id, user_id):
+        raise HTTPException(400, "You can't delete the workspace owner's account.")
+    workspaces.delete_user(user_id)
+    return {"ok": True}
+
+
+# ── Workspace deletion / leave (destructive) ────────────────────────────────
+@router.delete("/workspace")
+async def workspace_delete(
+    ctx: WorkspaceContext = Depends(require_permission("workspace.manage")),
+) -> dict[str, Any]:
+    """Delete the caller's active workspace and ALL its data (owner-only via the
+    workspace.manage permission). Irreversible."""
+    workspaces.delete_workspace(ctx.workspace_id)
+    return {"ok": True}
+
+
+@router.post("/workspace/leave")
+async def workspace_leave(
+    ctx: WorkspaceContext = Depends(require_workspace),
+) -> dict[str, Any]:
+    """A non-owner member leaves their active workspace. The owner must transfer
+    ownership or delete the workspace instead."""
+    if not workspaces.leave_workspace(ctx.user_id, ctx.workspace_id):
+        raise HTTPException(
+            400,
+            "You can't leave a workspace you own — transfer ownership or delete it instead.",
+        )
+    return {"ok": True}
+
+
 # ── Roles ─────────────────────────────────────────────────────────────────
 @router.get("/workspace/roles")
 async def roles_list(

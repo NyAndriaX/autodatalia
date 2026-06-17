@@ -17,9 +17,11 @@ import hashlib
 import json
 import logging
 import secrets
+import shutil
 import time
 from typing import Any
 
+from .config import settings
 from .db import _DOC_TABLE, _connect, _execute, _fetchall, _fetchone
 
 log = logging.getLogger("datalia.workspaces")
@@ -506,6 +508,108 @@ def remove_member(workspace_id: int, user_id: int) -> bool:
         return cur.rowcount > 0
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Deletion — workspace / leave / account (all destructive + irreversible)
+# ---------------------------------------------------------------------------
+def transfer_ownership(workspace_id: int, new_owner_user_id: int) -> bool:
+    """Make ``new_owner_user_id`` the workspace owner and give them the Owner
+    role. They must already be a member."""
+    wid, nid = int(workspace_id), int(new_owner_user_id)
+    if not get_membership(nid, wid):
+        return False
+    _execute("UPDATE workspaces SET owner_user_id = %s WHERE id = %s", (nid, wid))
+    owner_role_id = get_role_id_by_name(wid, OWNER_ROLE_NAME)
+    if owner_role_id:
+        _execute(
+            "UPDATE workspace_members SET role_id = %s WHERE workspace_id = %s AND user_id = %s",
+            (int(owner_role_id), wid, nid),
+        )
+    return True
+
+
+def _delete_workspace_media(workspace_id: int) -> None:
+    # Media cleanup must never block the DB delete — swallow any FS error.
+    try:
+        shutil.rmtree(settings.content_dir / "ws" / str(int(workspace_id)), ignore_errors=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def delete_workspace(workspace_id: int) -> bool:
+    """Delete a workspace and ALL of its data: roles, role-permissions, members,
+    invitations, the tenant's app_documents (``ws:{id}`` scope) and uploaded
+    media. Clears ``active_workspace_id`` for anyone pointing at it."""
+    wid = int(workspace_id)
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM roles WHERE workspace_id = %s", (wid,))
+        role_ids = [int(r["id"]) for r in cur.fetchall()]
+        if role_ids:
+            placeholders = ",".join(["%s"] * len(role_ids))
+            cur.execute(
+                f"DELETE FROM role_permissions WHERE role_id IN ({placeholders})",
+                tuple(role_ids),
+            )
+        cur.execute("DELETE FROM roles WHERE workspace_id = %s", (wid,))
+        cur.execute("DELETE FROM workspace_members WHERE workspace_id = %s", (wid,))
+        cur.execute("DELETE FROM workspace_invitations WHERE workspace_id = %s", (wid,))
+        cur.execute(f"DELETE FROM {_DOC_TABLE} WHERE scope_key = %s", (f"ws:{wid}",))
+        cur.execute(
+            "UPDATE users SET active_workspace_id = NULL WHERE active_workspace_id = %s",
+            (wid,),
+        )
+        cur.execute("DELETE FROM workspaces WHERE id = %s", (wid,))
+    finally:
+        conn.close()
+    _delete_workspace_media(wid)
+    return True
+
+
+def leave_workspace(user_id: int, workspace_id: int) -> bool:
+    """A non-owner member removes themselves. The owner must transfer ownership
+    or delete the workspace instead (returns False for an owner / non-member)."""
+    uid, wid = int(user_id), int(workspace_id)
+    if is_owner(wid, uid):
+        return False
+    if not get_membership(uid, wid):
+        return False
+    _execute(
+        "DELETE FROM workspace_members WHERE workspace_id = %s AND user_id = %s",
+        (wid, uid),
+    )
+    # If they were sitting in this workspace, repoint active to any remaining one.
+    _execute(
+        "UPDATE users SET active_workspace_id = "
+        "(SELECT workspace_id FROM workspace_members WHERE user_id = %s ORDER BY id ASC LIMIT 1) "
+        "WHERE id = %s AND active_workspace_id = %s",
+        (uid, uid, wid),
+    )
+    return True
+
+
+def delete_user(user_id: int) -> bool:
+    """Delete a user account. For each workspace they OWN: transfer ownership to
+    the earliest other member if any, else delete the workspace outright. Then
+    drop all remaining memberships and the user row."""
+    uid = int(user_id)
+    owned = _fetchall("SELECT id FROM workspaces WHERE owner_user_id = %s", (uid,))
+    for row in owned:
+        wid = int(row["id"])
+        heir = _fetchone(
+            "SELECT user_id FROM workspace_members "
+            "WHERE workspace_id = %s AND user_id <> %s ORDER BY created_at ASC, id ASC LIMIT 1",
+            (wid, uid),
+        )
+        if heir:
+            transfer_ownership(wid, int(heir["user_id"]))
+        else:
+            delete_workspace(wid)
+    _execute("DELETE FROM workspace_members WHERE user_id = %s", (uid,))
+    _execute("DELETE FROM users WHERE id = %s", (uid,))
+    return True
 
 
 # ---------------------------------------------------------------------------

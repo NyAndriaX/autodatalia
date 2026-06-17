@@ -248,3 +248,104 @@ def test_accept_invite_rejects_unknown_account():
     from app.db import get_user_by_email
 
     assert get_user_by_email("nobody@stale.com") is None
+
+
+def _invite_and_accept(owner, ws_id, email, role_name, name="M"):
+    """Register a fresh client, invite it into ws_id at role_name, accept."""
+    owner_uid = int(owner.get("/auth/me").json()["id"])
+    role_id = workspaces.get_role_id_by_name(ws_id, role_name)
+    member = _new_client()
+    _register(member, email, name)
+    token = workspaces.create_invitation(ws_id, email, role_id, owner_uid)
+    member.post(
+        "/auth/accept-invite",
+        json={"token": token, "name": name, "password": "secret123"},
+    )
+    return member, int(member.get("/auth/me").json()["id"])
+
+
+# ── 10. Owner deletes the whole workspace (destructive) ───────────────────
+def test_owner_deletes_workspace():
+    settings.allow_open_auth = False
+    owner = _new_client()
+    _register(owner, "owner@del.com", "Owner")
+    ws_id = owner.get("/workspace").json()["id"]
+    owner.post("/posts", json={"scheduledDate": "2026-06-01", "content": "doomed"})
+
+    assert owner.delete("/workspace").status_code == 200
+    # Workspace + its data are gone; the now-workspaceless owner gets 403.
+    assert workspaces.get_workspace(ws_id) is None
+    assert owner.get("/workspace").status_code == 403
+
+
+# ── 11. Non-owner leaves; owner cannot leave ──────────────────────────────
+def test_member_leaves_workspace():
+    settings.allow_open_auth = False
+    owner = _new_client()
+    _register(owner, "owner@leave.com", "Owner")
+    ws_id = owner.get("/workspace").json()["id"]
+    member, _ = _invite_and_accept(owner, ws_id, "ed@leave.com", "Editor", "Ed")
+
+    # The owner can't abandon their own workspace.
+    assert owner.post("/workspace/leave").status_code == 400
+    # The member can leave; afterwards they have no active workspace.
+    assert member.post("/workspace/leave").status_code == 200
+    assert member.get("/workspace").status_code == 403
+    assert all(m["user_id"] != _ for m in workspaces.list_members(ws_id))
+
+
+# ── 12. Self-service account deletion ─────────────────────────────────────
+def test_delete_own_account():
+    from app.db import get_user_by_email
+
+    settings.allow_open_auth = False
+    c = _new_client()
+    _register(c, "bye@del.com", "Bye")
+    assert c.post("/auth/delete-account").status_code == 200
+    assert get_user_by_email("bye@del.com") is None
+    # Session cookie was cleared + the user is gone → /me is 401.
+    assert c.get("/auth/me").status_code == 401
+
+
+# ── 13. Deleting an owner with co-members transfers ownership ─────────────
+def test_delete_owner_transfers_ownership():
+    from app.db import get_user_by_email
+
+    settings.allow_open_auth = False
+    owner = _new_client()
+    _register(owner, "owner@xfer.com", "Owner")
+    ws_id = owner.get("/workspace").json()["id"]
+    owner.post("/posts", json={"scheduledDate": "2026-06-01", "content": "kept"})
+    member, member_uid = _invite_and_accept(owner, ws_id, "heir@xfer.com", "Editor", "Heir")
+
+    # Owner deletes their own account — the workspace must survive and pass to
+    # the remaining member, who becomes Owner.
+    assert owner.post("/auth/delete-account").status_code == 200
+    assert get_user_by_email("owner@xfer.com") is None
+    assert workspaces.get_workspace(ws_id) is not None
+    assert int(workspaces.get_workspace(ws_id)["owner_user_id"]) == member_uid
+    mws = member.get("/workspace").json()
+    assert mws["is_owner"] is True and mws["role"] == "Owner"
+    assert any(p["content"] == "kept" for p in member.get("/posts").json()["posts"])
+
+
+# ── 14. Admin deletes another member's account ────────────────────────────
+def test_admin_deletes_member_account():
+    from app.db import get_user_by_email
+
+    settings.allow_open_auth = False
+    owner = _new_client()
+    _register(owner, "owner@adm.com", "Owner")
+    ws_id = owner.get("/workspace").json()["id"]
+    owner_uid = int(owner.get("/auth/me").json()["id"])
+    member, member_uid = _invite_and_accept(owner, ws_id, "victim@adm.com", "Editor", "Victim")
+
+    # Can't target yourself or the owner via this endpoint.
+    assert owner.delete(f"/workspace/members/{owner_uid}/account").status_code == 400
+    # An Editor lacks members.manage → forbidden.
+    assert member.delete(f"/workspace/members/{owner_uid}/account").status_code == 403
+
+    # Owner fully deletes the member's account.
+    assert owner.delete(f"/workspace/members/{member_uid}/account").status_code == 200
+    assert get_user_by_email("victim@adm.com") is None
+    assert all(m["user_id"] != member_uid for m in workspaces.list_members(ws_id))

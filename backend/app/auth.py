@@ -355,6 +355,23 @@ async def logout(response: Response) -> Response:
     response.status_code = 204
     return response
 
+
+@router.post("/delete-account", status_code=200)
+async def delete_account(
+    response: Response, user_id: int = Depends(require_token)
+) -> dict[str, Any]:
+    """Permanently delete the caller's OWN account (self-service, irreversible).
+
+    Workspaces they solely own are deleted with all their data; co-owned ones
+    transfer ownership to the earliest other member (see workspaces.delete_user).
+    Clears the session cookie so the now-dead session can't be reused.
+    """
+    if user_id <= 0:
+        raise HTTPException(status_code=401, detail="Not signed in.")
+    workspaces.delete_user(int(user_id))
+    _clear_session_cookie(response)
+    return {"deleted": True}
+
 @router.get("/me")
 async def get_me(user_id: int = Depends(require_token)) -> dict[str, Any]:
     # The shared/global scope (user_id <= 0) is a NON-INTERACTIVE machine
