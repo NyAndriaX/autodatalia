@@ -12,7 +12,7 @@ import {
   Typography,
   message,
 } from "antd";
-import { TeamOutlined, MailOutlined, DeleteOutlined } from "@ant-design/icons";
+import { TeamOutlined, MailOutlined, DeleteOutlined, UserDeleteOutlined } from "@ant-design/icons";
 import { usePermission } from "../../lib/permissions";
 import {
   fetchMembers,
@@ -21,6 +21,7 @@ import {
   inviteMember,
   changeMemberRole,
   removeMember,
+  deleteMemberAccount,
   revokeInvitation,
 } from "../../lib/workspaceService";
 
@@ -102,6 +103,16 @@ export default function MembersView() {
     }
   };
 
+  const onDeleteAccount = async (userId) => {
+    try {
+      await deleteMemberAccount(userId);
+      message.success(t("memberAccountDeleted"));
+      reload();
+    } catch (err) {
+      message.error(err?.message || t("deleteAccountMemberFailed"));
+    }
+  };
+
   const onRevoke = async (id) => {
     try {
       await revokeInvitation(id);
@@ -149,14 +160,25 @@ export default function MembersView() {
       align: "right",
       render: (_, m) =>
         canManage && !m.is_owner && !m.is_self ? (
-          <Popconfirm
-            title={t("removeMemberConfirm")}
-            okText={t("remove")}
-            cancelText={t("cancel")}
-            onConfirm={() => onRemove(m.user_id)}
-          >
-            <Button size="small" danger type="text" icon={<DeleteOutlined />} />
-          </Popconfirm>
+          <span style={{ display: "inline-flex", gap: 4 }}>
+            <Popconfirm
+              title={t("removeMemberConfirm")}
+              okText={t("remove")}
+              cancelText={t("cancel")}
+              onConfirm={() => onRemove(m.user_id)}
+            >
+              <Button size="small" danger type="text" icon={<DeleteOutlined />} title={t("removeMemberConfirm")} />
+            </Popconfirm>
+            <Popconfirm
+              title={t("deleteAccountMemberConfirm")}
+              okText={t("deleteAccountMember")}
+              okButtonProps={{ danger: true }}
+              cancelText={t("cancel")}
+              onConfirm={() => onDeleteAccount(m.user_id)}
+            >
+              <Button size="small" danger type="text" icon={<UserDeleteOutlined />} title={t("deleteAccountMember")} />
+            </Popconfirm>
+          </span>
         ) : null,
     },
   ];
