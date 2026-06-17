@@ -71,6 +71,7 @@
     "library": "Bibliothèque",
     "libraryDesc": "Assets & modèles",
     "videos": "Vidéo IA",
+    "imageStudio": "Image IA",
     "videosDesc": "Générations LTX & files",
     "analytics": "Analytique",
     "analyticsDesc": "KPI & coûts API",
@@ -557,6 +558,19 @@
     "brandKitSubtitle": "Logos, palette de couleurs et polices de votre marque — configurez-les dans les Paramètres",
     "openSettings": "Ouvrir les Paramètres",
     "deleteFailed": "Impossible de supprimer « {name} » (HTTP {status})."
+  },
+  "imageStudio": {
+    "title": "Image IA",
+    "subtitle": "Générez une image à partir d'un prompt — enregistrée dans votre Bibliothèque.",
+    "promptLabel": "Prompt",
+    "promptPlaceholder": "Un café minimaliste chaleureux, lumière du matin, sans texte…",
+    "ratioLabel": "Format",
+    "generate": "Générer l'image",
+    "savedToLibrary": "Image générée et enregistrée dans votre Bibliothèque.",
+    "savedHint": "Enregistrée dans votre Bibliothèque · via {provider}",
+    "useInPost": "Utiliser dans un post",
+    "emptyState": "Votre image générée apparaîtra ici.",
+    "failed": "Échec de la génération d'image : {error}"
   },
   "videos": {
     "title": "Génération vidéo IA",

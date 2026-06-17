@@ -18,6 +18,7 @@ import {
   MenuUnfoldOutlined,
   ThunderboltOutlined,
   VideoCameraOutlined,
+  FileImageOutlined,
   PlusOutlined,
   TeamOutlined,
   SafetyCertificateOutlined,
@@ -44,17 +45,19 @@ export default function Sidebar() {
     {
       title: t("sectionContent"),
       items: [
-        { key: "dashboard", icon: <DashboardOutlined />, label: tSidebar("dashboard") },
-        { key: "creation",  icon: <EditOutlined />,      label: tCreation("title")    },
-        { key: "calendar",  icon: <CalendarOutlined />,  label: tSidebar("calendar")  },
-        { key: "library",   icon: <PictureOutlined />,   label: tSidebar("library")   },
+        { key: "dashboard", icon: <DashboardOutlined />,   label: tSidebar("dashboard")   },
+        { key: "creation",  icon: <EditOutlined />,        label: tCreation("title")      },
+        // AI Image + AI Video creation, grouped right under "Create a post".
+        { key: "image",     icon: <FileImageOutlined />,   label: tSidebar("imageStudio") },
+        { key: "videos",    icon: <VideoCameraOutlined />, label: tSidebar("videos")      },
+        { key: "calendar",  icon: <CalendarOutlined />,    label: tSidebar("calendar")    },
+        { key: "library",   icon: <PictureOutlined />,     label: tSidebar("library")     },
       ],
     },
     {
       title: t("sectionAutomation"),
       items: [
-        { key: "automation", icon: <RobotOutlined />,       label: tSidebar("automation") },
-        { key: "videos",     icon: <VideoCameraOutlined />, label: tSidebar("videos")     },
+        { key: "automation", icon: <RobotOutlined />, label: tSidebar("automation") },
       ],
     },
     {

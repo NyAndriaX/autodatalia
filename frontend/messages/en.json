@@ -71,6 +71,7 @@
     "library": "Library",
     "libraryDesc": "Assets & templates",
     "videos": "AI Video",
+    "imageStudio": "AI Image",
     "videosDesc": "LTX generations & jobs",
     "analytics": "Analytics",
     "analyticsDesc": "KPIs & API costs",
@@ -557,6 +558,19 @@
     "brandKitSubtitle": "Logos, color palette and fonts of your brand — configure them in Settings",
     "openSettings": "Open Settings",
     "deleteFailed": "Could not delete \"{name}\" (HTTP {status})."
+  },
+  "imageStudio": {
+    "title": "AI Image",
+    "subtitle": "Generate an image from a prompt — it's saved to your Library.",
+    "promptLabel": "Prompt",
+    "promptPlaceholder": "A cozy minimalist coffee shop, warm morning light, no text…",
+    "ratioLabel": "Aspect ratio",
+    "generate": "Generate image",
+    "savedToLibrary": "Image generated and saved to your Library.",
+    "savedHint": "Saved to your Library · via {provider}",
+    "useInPost": "Use in a post",
+    "emptyState": "Your generated image will appear here.",
+    "failed": "Image generation failed: {error}"
   },
   "videos": {
     "title": "AI video generation",

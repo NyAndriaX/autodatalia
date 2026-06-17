@@ -18,6 +18,7 @@ import SettingsView from "../components/views/SettingsView";
 import DashboardView from "../components/views/DashboardView";
 import CreditsView from "../components/views/CreditsView";
 import VideoJobsView from "../components/views/VideoJobsView";
+import ImageStudioView from "../components/views/ImageStudioView";
 import MembersView from "../components/views/MembersView";
 import RolesView from "../components/views/RolesView";
 
@@ -69,6 +70,8 @@ export default function Home() {
         return <MediaLibraryView />;
       case "videos":
         return <VideoJobsView />;
+      case "image":
+        return <ImageStudioView />;
       case "analytics":
         return <AnalyticsView />;
       case "credits":
