@@ -342,7 +342,20 @@ async def zernio_start(platform: str, user_id: int = Depends(require_token)) -> 
     try:
         url = await zernio.start_connect(workspace_id, platform)
     except zernio.ZernioError as exc:
-        raise HTTPException(status_code=exc.status or 502, detail=str(exc))
+        # Upstream Zernio failure. A 5xx from Zernio is a bad gateway from our
+        # side (not our server erroring), so report 502 with Zernio's own
+        # message; pass 4xx (bad key / profile / platform) through with its
+        # status. Either way the message reaches the UI notification.
+        status = exc.status if exc.status and exc.status < 500 else 502
+        raise HTTPException(status_code=status, detail=f"Zernio: {exc}")
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — never leak a bare 500; log + report
+        import traceback
+
+        print(f"[zernio_start] {platform} connect failed: {exc!r}")
+        traceback.print_exc()
+        raise HTTPException(status_code=502, detail=f"Zernio connect failed: {exc}")
     return {"authorize_url": url}
 
 

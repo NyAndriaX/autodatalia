@@ -144,7 +144,15 @@ async def _request(
     except httpx.HTTPError as exc:
         raise ZernioError(f"Zernio request failed: {exc}", status=502) from exc
     if resp.status_code >= 400:
-        raise ZernioError(_error_text(resp), status=resp.status_code)
+        body = _error_text(resp)
+        # Log the exact upstream failure so a 500/401/403 from Zernio is
+        # diagnosable from the server logs (the key, profile, or platform-
+        # enablement is the usual culprit), and put it in the error message so
+        # it reaches the UI notification instead of a bare "API 500".
+        print(f"[zernio] {method} {path} -> {resp.status_code}: {body}")
+        raise ZernioError(
+            f"{method} {path} -> HTTP {resp.status_code}: {body}", status=resp.status_code
+        )
     try:
         data = resp.json()
     except Exception:
@@ -191,9 +199,27 @@ async def start_connect(workspace_id: int | None, platform: str) -> str:
     if slug not in ZERNIO_PLATFORMS:
         raise ZernioError(f"Unsupported Zernio platform: {platform}", status=400)
     profile_id = await get_or_create_profile(workspace_id)
-    data = await _request(
-        "GET", f"/connect/{slug}?profileId={profile_id}", workspace_id=workspace_id
-    )
+    try:
+        data = await _request(
+            "GET", f"/connect/{slug}?profileId={profile_id}", workspace_id=workspace_id
+        )
+    except ZernioError:
+        # The cached profile may be stale — e.g. the API key was rotated, so the
+        # stored profile_id belongs to a *different* Zernio account and
+        # /connect?profileId=<stale> fails. Drop it, create a fresh profile under
+        # the current key, and retry once. (Usual cause of a sudden 500 on /start
+        # after the key was replaced.)
+        state = _state(workspace_id)
+        if state.get("profile_id"):
+            state.pop("profile_id", None)
+            state.pop("profile_created_at", None)
+            _save_state(workspace_id, state)
+            profile_id = await get_or_create_profile(workspace_id)
+            data = await _request(
+                "GET", f"/connect/{slug}?profileId={profile_id}", workspace_id=workspace_id
+            )
+        else:
+            raise
     auth_url = data.get("authUrl") or data.get("url") or data.get("authorize_url")
     if not auth_url:
         raise ZernioError("Zernio did not return an authorize URL.")
