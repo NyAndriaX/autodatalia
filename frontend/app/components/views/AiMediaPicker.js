@@ -134,14 +134,21 @@ export default function AiMediaPicker({ kind, onClose }) {
         </div>
 
         <div className="flex shrink-0 items-center justify-between px-4 py-3" style={{ borderTop: "1px solid var(--border-default)" }}>
-          <button
-            type="button"
-            onClick={goGenerate}
-            className="inline-flex items-center gap-1.5 text-xs font-semibold"
-            style={{ color: "var(--accent-primary)", background: "none", border: "none", cursor: "pointer" }}
-          >
-            <Sparkles size={13} /> {t("aiPickerGenerate")}
-          </button>
+          {/* The empty state already shows a centered "Generate new" CTA, so the
+              footer link is only rendered when there ARE items (otherwise it's a
+              duplicate of the centered button). Keeps exactly one per state. */}
+          {items && items.length > 0 ? (
+            <button
+              type="button"
+              onClick={goGenerate}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold"
+              style={{ color: "var(--accent-primary)", background: "none", border: "none", cursor: "pointer" }}
+            >
+              <Sparkles size={13} /> {t("aiPickerGenerate")}
+            </button>
+          ) : (
+            <span />
+          )}
           <button
             onClick={onClose}
             className="rounded-md px-3 py-1.5 text-xs font-medium"

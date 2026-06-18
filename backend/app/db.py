@@ -228,11 +228,33 @@ def init_db(*, retries: int = 30, delay: float = 1.0) -> None:
                         id            BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
                         name          VARCHAR(255) NOT NULL,
                         owner_user_id BIGINT NOT NULL,
+                        is_personal   TINYINT(1) NOT NULL DEFAULT 0,
                         created_at    DOUBLE NOT NULL,
                         KEY idx_owner (owner_user_id)
                     ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
                     """
                 )
+                # is_personal: a user's HOME workspace (created at registration)
+                # which can never be deleted. On existing installs the column is
+                # missing — add it and backfill the earliest-owned workspace per
+                # owner as their personal one.
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS n FROM information_schema.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'workspaces'
+                      AND COLUMN_NAME = 'is_personal'
+                    """
+                )
+                if int((cur.fetchone() or {}).get("n") or 0) == 0:
+                    cur.execute(
+                        "ALTER TABLE workspaces ADD COLUMN is_personal "
+                        "TINYINT(1) NOT NULL DEFAULT 0"
+                    )
+                    cur.execute(
+                        "UPDATE workspaces t JOIN ("
+                        "  SELECT MIN(id) AS id FROM workspaces GROUP BY owner_user_id"
+                        ") m ON t.id = m.id SET t.is_personal = 1"
+                    )
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS workspace_members (

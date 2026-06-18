@@ -1136,6 +1136,10 @@
     "passwordMin": "8 caractères minimum.",
     "joinButton": "Rejoindre le workspace",
     "inviteInvalidExpired": "Cette invitation est invalide ou a expiré.",
-    "workspace": "Workspace"
+    "workspace": "Workspace",
+    "createWorkspace": "Créer un espace",
+    "createWorkspacePrompt": "Nom de votre nouvel espace",
+    "workspaceCreated": "Espace créé",
+    "createFailed": "Échec de la création de l'espace"
   }
 }

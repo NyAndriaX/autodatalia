@@ -19,6 +19,7 @@ import { clearNotifications } from "../../store/uiSlice";
 import {
   fetchMyWorkspaces,
   switchWorkspace,
+  createWorkspace,
   fetchMyInvitations,
   acceptInvitation,
   refuseInvitation,
@@ -109,20 +110,46 @@ export default function WorkspaceControls() {
     }
   };
 
+  // Create a new workspace (so a user can own more than just their home one).
+  const onCreate = async () => {
+    if (busy) return;
+    const name = (typeof window !== "undefined" ? window.prompt(t("createWorkspacePrompt")) : "") || "";
+    if (!name.trim()) return;
+    setBusy(true);
+    try {
+      await createWorkspace(name.trim());
+      await refreshWorkspaceData();
+      await loadWorkspaces();
+      message.success(t("workspaceCreated"));
+    } catch (e) {
+      message.error(e?.message || t("createFailed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const activeWs = workspaces.find((w) => w.id === activeWsId);
 
   const wsMenu = {
-    items: workspaces.map((w) => ({
-      key: String(w.id),
-      label: (
-        <span>
-          {w.is_active ? "✓ " : ""}
-          {w.name}
-          <span style={{ opacity: 0.6, fontSize: 11 }}> · {w.role}</span>
-        </span>
-      ),
-      onClick: () => onSwitch(w.id),
-    })),
+    items: [
+      ...workspaces.map((w) => ({
+        key: String(w.id),
+        label: (
+          <span>
+            {w.is_active ? "✓ " : ""}
+            {w.name}
+            <span style={{ opacity: 0.6, fontSize: 11 }}> · {w.role}</span>
+          </span>
+        ),
+        onClick: () => onSwitch(w.id),
+      })),
+      { type: "divider" },
+      {
+        key: "__create__",
+        label: <span>＋ {t("createWorkspace")}</span>,
+        onClick: onCreate,
+      },
+    ],
   };
 
   const invitesContent = (

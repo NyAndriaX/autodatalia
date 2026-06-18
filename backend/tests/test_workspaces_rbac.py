@@ -357,3 +357,50 @@ def test_admin_deletes_member_account():
     assert owner.delete(f"/workspace/members/{member_uid}/account").status_code == 200
     assert get_user_by_email("victim@adm.com") is None
     assert all(m["user_id"] != member_uid for m in workspaces.list_members(ws_id))
+
+
+# ── 15. A personal (home) workspace can never be deleted ──────────────────
+def test_personal_workspace_cannot_be_deleted():
+    settings.allow_open_auth = False
+    c = _new_client()
+    _register(c, "home@p.com", "Home")
+    ws = c.get("/workspace").json()
+    assert ws["is_personal"] is True
+    home_id = ws["id"]
+    # The owner has workspace.manage, but deleting the home workspace is refused.
+    resp = c.delete("/workspace")
+    assert resp.status_code == 400
+    assert "personal" in resp.json()["detail"].lower()
+    assert workspaces.get_workspace(home_id) is not None
+
+
+# ── 16. Create an additional workspace, then delete it (home stays) ────────
+def test_create_additional_workspace_then_delete():
+    settings.allow_open_auth = False
+    c = _new_client()
+    _register(c, "multi@p.com", "Multi")
+    home_id = c.get("/workspace").json()["id"]
+
+    created = c.post("/workspaces", json={"name": "Side Project"})
+    assert created.status_code == 200
+    extra_id = created.json()["workspace_id"]
+    assert extra_id != home_id
+
+    # Creating switches the active workspace to the new (non-personal) one.
+    active = c.get("/workspace").json()
+    assert active["id"] == extra_id
+    assert active["is_personal"] is False
+    assert active["is_owner"] is True
+
+    # The additional workspace CAN be deleted, and the user falls back home.
+    assert c.delete("/workspace").status_code == 200
+    assert workspaces.get_workspace(extra_id) is None
+    assert c.get("/workspace").json()["id"] == home_id
+
+
+# ── 17. A blank workspace name is rejected on create ──────────────────────
+def test_create_workspace_requires_name():
+    settings.allow_open_auth = False
+    c = _new_client()
+    _register(c, "blank@p.com", "Blank")
+    assert c.post("/workspaces", json={"name": "   "}).status_code == 400

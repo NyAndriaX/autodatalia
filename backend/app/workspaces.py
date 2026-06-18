@@ -117,13 +117,14 @@ def workspace_name_for(full_name: str | None, email: str | None) -> str:
 # ---------------------------------------------------------------------------
 # Workspace / role / membership creation (used by registration + migration)
 # ---------------------------------------------------------------------------
-def create_workspace(name: str, owner_user_id: int) -> int:
+def create_workspace(name: str, owner_user_id: int, *, is_personal: bool = False) -> int:
     conn = _connect()
     try:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO workspaces (name, owner_user_id, created_at) VALUES (%s, %s, %s)",
-            (name, int(owner_user_id), _now()),
+            "INSERT INTO workspaces (name, owner_user_id, is_personal, created_at) "
+            "VALUES (%s, %s, %s, %s)",
+            (name, int(owner_user_id), 1 if is_personal else 0, _now()),
         )
         return int(cur.lastrowid)
     finally:
@@ -179,16 +180,26 @@ def add_member(workspace_id: int, user_id: int, role_id: int) -> None:
     )
 
 
-def create_workspace_with_owner(name: str, owner_user_id: int) -> int:
+def create_workspace_with_owner(
+    name: str, owner_user_id: int, *, is_personal: bool = True
+) -> int:
     """Atomic-ish bootstrap: workspace + seeded roles + owner membership.
 
     Used by registration and by the legacy migration so a user can never exist
-    without a workspace. Returns the new workspace id.
+    without a workspace — those create the user's PERSONAL (home) workspace, so
+    is_personal defaults True. Additional workspaces created later pass
+    is_personal=False (see create_additional_workspace). Returns the new id.
     """
-    workspace_id = create_workspace(name, owner_user_id)
+    workspace_id = create_workspace(name, owner_user_id, is_personal=is_personal)
     roles = seed_default_roles(workspace_id)
     add_member(workspace_id, owner_user_id, roles[OWNER_ROLE_NAME])
     return workspace_id
+
+
+def create_additional_workspace(owner_user_id: int, name: str) -> int:
+    """Create a NON-personal workspace the user owns (the 'create workspace'
+    action). Unlike the home workspace, an additional one can be deleted."""
+    return create_workspace_with_owner(name, owner_user_id, is_personal=False)
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +244,7 @@ def list_user_workspaces(user_id: int) -> list[dict[str, Any]]:
     active = get_active_workspace_id(uid)
     rows = _fetchall(
         """
-        SELECT w.id, w.name, w.owner_user_id, r.name AS role_name
+        SELECT w.id, w.name, w.owner_user_id, w.is_personal, r.name AS role_name
         FROM workspace_members m
         JOIN workspaces w ON w.id = m.workspace_id
         JOIN roles r ON r.id = m.role_id
@@ -251,6 +262,7 @@ def list_user_workspaces(user_id: int) -> list[dict[str, Any]]:
                 "name": r["name"],
                 "role": r["role_name"],
                 "is_owner": int(r["owner_user_id"]) == uid,
+                "is_personal": bool(r["is_personal"]),
                 "is_active": wid == active,
             }
         )
@@ -333,10 +345,13 @@ def role_name_for(user_id: int, workspace_id: int) -> str | None:
 # Workspace + role reads
 # ---------------------------------------------------------------------------
 def get_workspace(workspace_id: int) -> dict[str, Any] | None:
-    return _fetchone(
-        "SELECT id, name, owner_user_id, created_at FROM workspaces WHERE id = %s",
+    row = _fetchone(
+        "SELECT id, name, owner_user_id, is_personal, created_at FROM workspaces WHERE id = %s",
         (int(workspace_id),),
     )
+    if row:
+        row["is_personal"] = bool(row.get("is_personal"))
+    return row
 
 
 def get_role(role_id: int) -> dict[str, Any] | None:
@@ -460,6 +475,42 @@ def _rescope_user_data(user_id: int, workspace_id: int) -> int:
 def is_owner(workspace_id: int, user_id: int) -> bool:
     ws = get_workspace(workspace_id)
     return bool(ws and int(ws["owner_user_id"]) == int(user_id))
+
+
+def is_personal_workspace(workspace_id: int) -> bool:
+    """True if this is a user's home workspace (created at registration) — these
+    can never be deleted."""
+    ws = get_workspace(workspace_id)
+    return bool(ws and ws.get("is_personal"))
+
+
+def get_personal_workspace_id(user_id: int) -> int | None:
+    """The user's home workspace (owned + is_personal), earliest if several."""
+    row = _fetchone(
+        "SELECT id FROM workspaces WHERE owner_user_id = %s AND is_personal = 1 "
+        "ORDER BY id ASC LIMIT 1",
+        (int(user_id),),
+    )
+    return int(row["id"]) if row else None
+
+
+def ensure_personal_workspace(
+    user_id: int, full_name: str | None = None, email: str | None = None
+) -> int:
+    """Guarantee the user has a home workspace, creating one if missing and
+    pointing their active workspace at it. Safety net so a user can never be left
+    workspace-less. Returns the personal workspace id."""
+    pid = get_personal_workspace_id(int(user_id))
+    if pid:
+        return pid
+    ws_id = create_workspace_with_owner(
+        workspace_name_for(full_name, email), int(user_id), is_personal=True
+    )
+    _execute(
+        "UPDATE users SET active_workspace_id = %s WHERE id = %s",
+        (int(ws_id), int(user_id)),
+    )
+    return ws_id
 
 
 # ---------------------------------------------------------------------------

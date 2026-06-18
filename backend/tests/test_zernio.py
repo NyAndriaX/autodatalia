@@ -18,6 +18,10 @@ def _mock_handler(request: httpx.Request, calls: list) -> httpx.Response:
     calls.append((request.method, request.url.path, request.read()))
     path = request.url.path
     method = request.method
+    if method == "GET" and path.endswith("/profiles"):
+        # No pre-existing profiles by default, so get_or_create takes the create
+        # path. Tests that exercise adoption use their own stateful handler.
+        return httpx.Response(200, json={"profiles": []})
     if method == "POST" and path.endswith("/profiles"):
         return httpx.Response(200, json={"profile": {"_id": "prof_1"}})
     if method == "GET" and "/connect/" in path:
@@ -195,6 +199,63 @@ def test_publish_scheduled(zenv):
     assert sent["scheduledFor"] == "2026-07-01T10:00:00Z"
     assert sent["timezone"] == "Europe/Paris"
     assert "publishNow" not in sent
+
+
+def _zernio_with_handler(monkeypatch, handler):
+    """Wire a custom MockTransport + in-memory blob store + key for one test."""
+    store: dict = {}
+    monkeypatch.setattr(
+        zernio, "load_scoped_blob",
+        lambda name, *, user_id=None, default=None: store.get((name, user_id), default),
+    )
+    monkeypatch.setattr(
+        zernio, "save_scoped_blob",
+        lambda name, payload, *, user_id=None: store.__setitem__((name, user_id), payload),
+    )
+    monkeypatch.setattr(zernio, "_config", lambda wsid: ("sk_test", "https://zernio.com/api/v1"))
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient",
+        lambda *a, **k: real(transport=httpx.MockTransport(handler), timeout=5.0),
+    )
+    return store
+
+
+def test_get_or_create_adopts_existing_profile_by_name(monkeypatch):
+    # Cached id is gone but Zernio already has our named profile -> adopt it,
+    # never POST a duplicate (which Zernio 400s "already exists").
+    posts: list = []
+
+    def handler(req):
+        if req.method == "GET" and req.url.path.endswith("/profiles"):
+            return httpx.Response(200, json={"profiles": [{"_id": "prof_x", "name": "datalia-ws-7"}]})
+        if req.method == "POST" and req.url.path.endswith("/profiles"):
+            posts.append(1)
+            return httpx.Response(200, json={"profile": {"_id": "prof_new"}})
+        return httpx.Response(404, json={"error": {"message": "no route"}})
+
+    _zernio_with_handler(monkeypatch, handler)
+    assert asyncio.run(zernio.get_or_create_profile(7)) == "prof_x"
+    assert posts == []  # adopted, never created
+
+
+def test_get_or_create_recovers_from_duplicate_name_400(monkeypatch):
+    # The list is briefly empty so a create is attempted, Zernio 400s on the
+    # duplicate name, then a re-list finds it and we adopt instead of failing.
+    state = {"created": False}
+
+    def handler(req):
+        p, m = req.url.path, req.method
+        if m == "GET" and p.endswith("/profiles"):
+            profiles = [{"_id": "prof_dup", "name": "datalia-ws-7"}] if state["created"] else []
+            return httpx.Response(200, json={"profiles": profiles})
+        if m == "POST" and p.endswith("/profiles"):
+            state["created"] = True
+            return httpx.Response(400, json={"error": {"message": "A profile with this name already exists"}})
+        return httpx.Response(404, json={"error": {"message": "no route"}})
+
+    _zernio_with_handler(monkeypatch, handler)
+    assert asyncio.run(zernio.get_or_create_profile(7)) == "prof_dup"
 
 
 def test_publish_maps_upstream_error(zenv, monkeypatch):

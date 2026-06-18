@@ -49,6 +49,10 @@ class SwitchBody(BaseModel):
     workspace_id: int
 
 
+class CreateWorkspaceBody(BaseModel):
+    name: str = ""
+
+
 # ── Workspace ─────────────────────────────────────────────────────────────
 @router.get("/workspace")
 async def workspace_info(
@@ -61,6 +65,7 @@ async def workspace_info(
         "role": ctx.role,
         "permissions": sorted(ctx.permissions),
         "is_owner": workspaces.is_owner(ctx.workspace_id, ctx.user_id),
+        "is_personal": bool(ws.get("is_personal")),
     }
 
 
@@ -187,7 +192,15 @@ async def workspace_delete(
     ctx: WorkspaceContext = Depends(require_permission("workspace.manage")),
 ) -> dict[str, Any]:
     """Delete the caller's active workspace and ALL its data (owner-only via the
-    workspace.manage permission). Irreversible."""
+    workspace.manage permission). Irreversible. A user's PERSONAL (home)
+    workspace can never be deleted — create or switch to another workspace to
+    delete that one instead."""
+    if workspaces.is_personal_workspace(ctx.workspace_id):
+        raise HTTPException(
+            400,
+            "You can't delete your personal workspace. Create or switch to "
+            "another workspace to delete that one.",
+        )
     workspaces.delete_workspace(ctx.workspace_id)
     return {"ok": True}
 
@@ -300,6 +313,21 @@ async def workspace_switch(
     if not workspaces.switch_workspace(ctx.user_id, body.workspace_id):
         raise HTTPException(403, "You are not a member of that workspace.")
     return {"ok": True, "workspace_id": body.workspace_id}
+
+
+@router.post("/workspaces")
+async def workspaces_create(
+    body: CreateWorkspaceBody,
+    ctx: WorkspaceContext = Depends(require_workspace),
+) -> dict[str, Any]:
+    """Create a new (deletable, non-personal) workspace owned by the caller and
+    switch to it — so a user can have more than just their home workspace."""
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(400, "Workspace name is required.")
+    ws_id = workspaces.create_additional_workspace(ctx.user_id, name)
+    workspaces.switch_workspace(ctx.user_id, ws_id)
+    return {"ok": True, "workspace_id": ws_id}
 
 
 # ── Invitations inbox (the invitee's own pending invites) ───────────────────

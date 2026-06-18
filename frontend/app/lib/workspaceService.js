@@ -121,6 +121,14 @@ export async function switchWorkspace(workspaceId) {
   });
 }
 
+// Create a new (deletable, non-personal) workspace and switch to it.
+export async function createWorkspace(name) {
+  return apiFetch("/workspaces", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
 // ── Destructive: delete the active workspace / leave it ─────────────────────
 export async function deleteWorkspace() {
   return apiFetch("/workspace", { method: "DELETE" });

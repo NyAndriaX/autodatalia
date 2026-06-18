@@ -1010,15 +1010,18 @@ export default function SettingsView() {
                 onAction={handleLeaveWorkspace}
               />
             )}
-            {(user?.workspace?.is_owner ||
-              (user?.permissions || []).includes("workspace.manage")) && (
-              <DangerRow
-                title={t("deleteWorkspaceBtn")}
-                desc={t("deleteWorkspaceDesc")}
-                icon={Trash2}
-                onAction={handleDeleteWorkspace}
-              />
-            )}
+            {/* Your personal (home) workspace can never be deleted — the row
+                only shows for additional workspaces you can manage. */}
+            {!user?.workspace?.is_personal &&
+              (user?.workspace?.is_owner ||
+                (user?.permissions || []).includes("workspace.manage")) && (
+                <DangerRow
+                  title={t("deleteWorkspaceBtn")}
+                  desc={t("deleteWorkspaceDesc")}
+                  icon={Trash2}
+                  onAction={handleDeleteWorkspace}
+                />
+              )}
             <DangerRow
               title={t("deleteAccountBtn")}
               desc={t("deleteAccountDesc")}

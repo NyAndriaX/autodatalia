@@ -171,22 +171,79 @@ def _save_state(workspace_id: int | None, state: dict[str, Any]) -> None:
     save_scoped_blob("zernio", state, user_id=workspace_id)
 
 
+def _profile_id_of(profile: Any) -> str | None:
+    if not isinstance(profile, dict):
+        return None
+    pid = profile.get("_id") or profile.get("id")
+    return str(pid) if pid else None
+
+
+async def _list_profiles(workspace_id: int | None) -> list[dict[str, Any]]:
+    """All Zernio profiles under the current key (or [] if the call fails)."""
+    try:
+        data = await _request("GET", "/profiles", workspace_id=workspace_id)
+    except ZernioError:
+        return []
+    profiles = data.get("profiles")
+    if not isinstance(profiles, list):
+        profiles = data.get("data") if isinstance(data.get("data"), list) else []
+    return [p for p in profiles if isinstance(p, dict)]
+
+
+async def _find_profile_by_name(workspace_id: int | None, name: str) -> dict[str, Any] | None:
+    for p in await _list_profiles(workspace_id):
+        if p.get("name") == name:
+            return p
+    return None
+
+
+def _cache_profile(workspace_id: int | None, pid: str) -> None:
+    state = _state(workspace_id)
+    state["profile_id"] = pid
+    state["profile_created_at"] = time.time()
+    _save_state(workspace_id, state)
+
+
 async def get_or_create_profile(workspace_id: int | None, *, name: str | None = None) -> str:
-    """Return this workspace's Zernio profile id, creating it on first use."""
+    """Return this workspace's Zernio profile id, provisioning it on first use.
+
+    Idempotent by name: if we have no cached id but Zernio already has a profile
+    with our deterministic name (a previous create succeeded but the cached id
+    was lost, or two requests raced), we ADOPT that profile instead of trying to
+    create a duplicate — which Zernio rejects with
+    ``400 A profile with this name already exists`` and which used to surface as
+    a permanent connect failure.
+    """
     state = _state(workspace_id)
     pid = state.get("profile_id")
     if pid:
         return str(pid)
-    payload = {"name": name or f"datalia-ws-{workspace_id or 'global'}"}
-    data = await _request("POST", "/profiles", workspace_id=workspace_id, json=payload)
-    profile = data.get("profile") if isinstance(data.get("profile"), dict) else data
-    pid = profile.get("_id") or profile.get("id")
+    desired = name or f"datalia-ws-{workspace_id or 'global'}"
+    # Adopt an existing same-named profile before attempting to create one.
+    existing = await _find_profile_by_name(workspace_id, desired)
+    if existing and _profile_id_of(existing):
+        pid = _profile_id_of(existing)
+        _cache_profile(workspace_id, pid)
+        return pid
+    try:
+        data = await _request(
+            "POST", "/profiles", workspace_id=workspace_id, json={"name": desired}
+        )
+    except ZernioError as exc:
+        # Lost the race (or a list call that briefly failed): the name now
+        # exists. Re-resolve by name and adopt it rather than failing.
+        if exc.status == 400 and "already exist" in str(exc).lower():
+            existing = await _find_profile_by_name(workspace_id, desired)
+            if existing and _profile_id_of(existing):
+                pid = _profile_id_of(existing)
+                _cache_profile(workspace_id, pid)
+                return pid
+        raise
+    pid = _profile_id_of(data.get("profile") if isinstance(data.get("profile"), dict) else data)
     if not pid:
         raise ZernioError("Zernio did not return a profile id.")
-    state["profile_id"] = str(pid)
-    state["profile_created_at"] = time.time()
-    _save_state(workspace_id, state)
-    return str(pid)
+    _cache_profile(workspace_id, pid)
+    return pid
 
 
 # ── Connect + accounts ─────────────────────────────────────────────────────

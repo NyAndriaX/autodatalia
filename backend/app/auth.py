@@ -200,6 +200,12 @@ def _user_payload(user: dict[str, Any]) -> dict[str, Any]:
     # live (cheap) so a role change is reflected on the next /auth/me.
     uid = int(user["id"])
     workspace_id = workspaces.get_active_workspace_id(uid)
+    # Safety net: a real user must always have a home workspace. If somehow none
+    # (legacy data), provision their personal one so they're never locked out.
+    if not workspace_id and uid > 0:
+        workspace_id = workspaces.ensure_personal_workspace(
+            uid, user.get("full_name"), user.get("email")
+        )
     permissions: list[str] = []
     workspace = None
     if workspace_id:
@@ -210,6 +216,7 @@ def _user_payload(user: dict[str, Any]) -> dict[str, Any]:
             "name": ws.get("name"),
             "role": workspaces.role_name_for(uid, workspace_id),
             "is_owner": workspaces.is_owner(workspace_id, uid),
+            "is_personal": bool(ws.get("is_personal")),
         }
     return {
         "id": str(user["id"]),
