@@ -1116,6 +1116,7 @@ def test_telegram_feedback_resubmit_keeps_automation_post_awaiting_validation(
 
 
 def test_media_generate_image_uses_fallback_and_persists_asset(workspace_client):
+    ws_id = workspace_client.get("/workspace").json()["id"]
     settings.ai_image_model = ""
     r = workspace_client.post(
         "/media/generate/image",
@@ -1125,7 +1126,9 @@ def test_media_generate_image_uses_fallback_and_persists_asset(workspace_client)
     body = r.json()
     assert body["kind"] == "image"
     assert body["provider"] == "fallback-poster"
-    assert (settings.content_dir / "generated" / body["filename"]).exists()
+    assert (
+        settings.content_dir / "ws" / str(ws_id) / "generated" / body["filename"]
+    ).exists()
 
 
 def test_generate_image_file_falls_back_when_provider_errors(monkeypatch):
@@ -1151,6 +1154,8 @@ def test_generate_image_file_falls_back_when_provider_errors(monkeypatch):
 
 
 def test_media_generate_video_persists_motion_asset(workspace_client, monkeypatch):
+    ws_id = workspace_client.get("/workspace").json()["id"]
+
     async def fake_render_motion_video(source, dest, width, height, duration_seconds):
         dest.write_bytes(b"fake-mp4")
 
@@ -1163,13 +1168,16 @@ def test_media_generate_video_persists_motion_asset(workspace_client, monkeypatc
             "ratio": "9:16",
             "duration_seconds": 6,
             "async_mode": False,
+            "provider": "fallback",
         },
     )
     assert r.status_code == 200
     body = r.json()
     assert body["kind"] == "video"
     assert body["provider"] == "fallback"
-    assert (settings.content_dir / "generated" / body["filename"]).exists()
+    assert (
+        settings.content_dir / "ws" / str(ws_id) / "generated" / body["filename"]
+    ).exists()
 
 
 def test_oauth_connections_surfaces_linkedin_target(workspace_client):

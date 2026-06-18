@@ -269,13 +269,21 @@ def test_owner_deletes_workspace():
     settings.allow_open_auth = False
     owner = _new_client()
     _register(owner, "owner@del.com", "Owner")
-    ws_id = owner.get("/workspace").json()["id"]
+    home_id = owner.get("/workspace").json()["id"]
+
+    created = owner.post("/workspaces", json={"name": "Disposable workspace"})
+    assert created.status_code == 200
+    ws_id = created.json()["workspace_id"]
     owner.post("/posts", json={"scheduledDate": "2026-06-01", "content": "doomed"})
 
     assert owner.delete("/workspace").status_code == 200
-    # Workspace + its data are gone; the now-workspaceless owner gets 403.
+    # The secondary workspace + its data are gone, then the owner falls home.
     assert workspaces.get_workspace(ws_id) is None
-    assert owner.get("/workspace").status_code == 403
+    active = owner.get("/workspace")
+    assert active.status_code == 200
+    assert active.json()["id"] == home_id
+    assert active.json()["is_personal"] is True
+    assert owner.get("/posts").json()["posts"] == []
 
 
 # ── 11. Non-owner leaves; owner cannot leave ──────────────────────────────
