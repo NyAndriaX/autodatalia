@@ -537,6 +537,8 @@ def change_member_role(workspace_id: int, user_id: int, role_id: int) -> bool:
     role = get_role(role_id)
     if not role or int(role.get("workspace_id") or 0) != int(workspace_id):
         return False
+    if role["name"] == OWNER_ROLE_NAME and not is_owner(workspace_id, user_id):
+        return False  # ownership only moves via transfer_ownership()
     if is_owner(workspace_id, user_id) and role["name"] != OWNER_ROLE_NAME:
         return False  # never demote the workspace owner
     _execute(
@@ -564,20 +566,61 @@ def remove_member(workspace_id: int, user_id: int) -> bool:
 # ---------------------------------------------------------------------------
 # Deletion — workspace / leave / account (all destructive + irreversible)
 # ---------------------------------------------------------------------------
-def transfer_ownership(workspace_id: int, new_owner_user_id: int) -> bool:
-    """Make ``new_owner_user_id`` the workspace owner and give them the Owner
-    role. They must already be a member."""
+def _delete_workspace_rows(cur, workspace_id: int) -> None:
+    """Delete all DB rows owned by one workspace using the caller's cursor."""
+    wid = int(workspace_id)
+    cur.execute("SELECT id FROM roles WHERE workspace_id = %s", (wid,))
+    role_ids = [int(r["id"]) for r in cur.fetchall()]
+    if role_ids:
+        placeholders = ",".join(["%s"] * len(role_ids))
+        cur.execute(
+            f"DELETE FROM role_permissions WHERE role_id IN ({placeholders})",
+            tuple(role_ids),
+        )
+    cur.execute("DELETE FROM roles WHERE workspace_id = %s", (wid,))
+    cur.execute("DELETE FROM workspace_members WHERE workspace_id = %s", (wid,))
+    cur.execute("DELETE FROM workspace_invitations WHERE workspace_id = %s", (wid,))
+    cur.execute(f"DELETE FROM {_DOC_TABLE} WHERE scope_key = %s", (f"ws:{wid}",))
+    cur.execute(
+        "UPDATE users SET active_workspace_id = NULL WHERE active_workspace_id = %s",
+        (wid,),
+    )
+    cur.execute("DELETE FROM workspaces WHERE id = %s", (wid,))
+
+
+def _transfer_ownership_rows(cur, workspace_id: int, new_owner_user_id: int) -> bool:
+    """Cursor-aware ownership transfer used inside larger transactions."""
     wid, nid = int(workspace_id), int(new_owner_user_id)
     if not get_membership(nid, wid):
         return False
-    _execute("UPDATE workspaces SET owner_user_id = %s WHERE id = %s", (nid, wid))
+    cur.execute("UPDATE workspaces SET owner_user_id = %s WHERE id = %s", (nid, wid))
     owner_role_id = get_role_id_by_name(wid, OWNER_ROLE_NAME)
     if owner_role_id:
-        _execute(
+        cur.execute(
             "UPDATE workspace_members SET role_id = %s WHERE workspace_id = %s AND user_id = %s",
             (int(owner_role_id), wid, nid),
         )
     return True
+
+
+def transfer_ownership(workspace_id: int, new_owner_user_id: int) -> bool:
+    """Make ``new_owner_user_id`` the workspace owner and give them the Owner
+    role. They must already be a member."""
+    conn = _connect()
+    try:
+        conn.begin()
+        cur = conn.cursor()
+        ok = _transfer_ownership_rows(cur, int(workspace_id), int(new_owner_user_id))
+        if not ok:
+            conn.rollback()
+            return False
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _delete_workspace_media(workspace_id: int) -> None:
@@ -595,24 +638,13 @@ def delete_workspace(workspace_id: int) -> bool:
     wid = int(workspace_id)
     conn = _connect()
     try:
+        conn.begin()
         cur = conn.cursor()
-        cur.execute("SELECT id FROM roles WHERE workspace_id = %s", (wid,))
-        role_ids = [int(r["id"]) for r in cur.fetchall()]
-        if role_ids:
-            placeholders = ",".join(["%s"] * len(role_ids))
-            cur.execute(
-                f"DELETE FROM role_permissions WHERE role_id IN ({placeholders})",
-                tuple(role_ids),
-            )
-        cur.execute("DELETE FROM roles WHERE workspace_id = %s", (wid,))
-        cur.execute("DELETE FROM workspace_members WHERE workspace_id = %s", (wid,))
-        cur.execute("DELETE FROM workspace_invitations WHERE workspace_id = %s", (wid,))
-        cur.execute(f"DELETE FROM {_DOC_TABLE} WHERE scope_key = %s", (f"ws:{wid}",))
-        cur.execute(
-            "UPDATE users SET active_workspace_id = NULL WHERE active_workspace_id = %s",
-            (wid,),
-        )
-        cur.execute("DELETE FROM workspaces WHERE id = %s", (wid,))
+        _delete_workspace_rows(cur, wid)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
     _delete_workspace_media(wid)
@@ -646,21 +678,36 @@ def delete_user(user_id: int) -> bool:
     the earliest other member if any, else delete the workspace outright. Then
     drop all remaining memberships and the user row."""
     uid = int(user_id)
-    owned = _fetchall("SELECT id FROM workspaces WHERE owner_user_id = %s", (uid,))
-    for row in owned:
-        wid = int(row["id"])
-        heir = _fetchone(
-            "SELECT user_id FROM workspace_members "
-            "WHERE workspace_id = %s AND user_id <> %s ORDER BY created_at ASC, id ASC LIMIT 1",
-            (wid, uid),
-        )
-        if heir:
-            transfer_ownership(wid, int(heir["user_id"]))
-        else:
-            delete_workspace(wid)
-    _execute("DELETE FROM workspace_members WHERE user_id = %s", (uid,))
-    _execute("DELETE FROM users WHERE id = %s", (uid,))
-    return True
+    conn = _connect()
+    try:
+        conn.begin()
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM workspaces WHERE owner_user_id = %s", (uid,))
+        owned = [dict(row) for row in cur.fetchall()]
+        for row in owned:
+            wid = int(row["id"])
+            cur.execute(
+                "SELECT user_id FROM workspace_members "
+                "WHERE workspace_id = %s AND user_id <> %s ORDER BY created_at ASC, id ASC LIMIT 1",
+                (wid, uid),
+            )
+            heir = cur.fetchone()
+            if heir:
+                ok = _transfer_ownership_rows(cur, wid, int(heir["user_id"]))
+                if not ok:
+                    conn.rollback()
+                    return False
+            else:
+                _delete_workspace_rows(cur, wid)
+        cur.execute("DELETE FROM workspace_members WHERE user_id = %s", (uid,))
+        cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------

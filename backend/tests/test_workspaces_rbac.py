@@ -412,3 +412,38 @@ def test_create_workspace_requires_name():
     c = _new_client()
     _register(c, "blank@p.com", "Blank")
     assert c.post("/workspaces", json={"name": "   "}).status_code == 400
+
+
+# ── 18. The Owner role cannot be granted by a simple member-role change ─────
+def test_owner_role_cannot_be_assigned_via_role_change():
+    settings.allow_open_auth = False
+    owner = _new_client()
+    _register(owner, "owner@assign.com", "Owner")
+    ws_id = owner.get("/workspace").json()["id"]
+    owner_uid = int(owner.get("/auth/me").json()["id"])
+    owner_role = workspaces.get_role_id_by_name(ws_id, "Owner")
+
+    admin, admin_uid = _invite_and_accept(owner, ws_id, "admin@assign.com", "Admin", "Admin")
+    member, member_uid = _invite_and_accept(owner, ws_id, "member@assign.com", "Editor", "Member")
+
+    before_owner = workspaces.get_workspace(ws_id)
+    assert before_owner and int(before_owner["owner_user_id"]) == owner_uid
+    assert workspaces.role_name_for(admin_uid, ws_id) == "Admin"
+    assert workspaces.role_name_for(member_uid, ws_id) == "Editor"
+
+    # Even the owner cannot mint a second Owner through the plain role-change path.
+    assert owner.patch(
+        f"/workspace/members/{member_uid}", json={"role_id": owner_role}
+    ).status_code == 400
+    # Nor can an Admin escalate somebody (or themselves) to Owner.
+    assert admin.patch(
+        f"/workspace/members/{member_uid}", json={"role_id": owner_role}
+    ).status_code == 400
+    assert admin.patch(
+        f"/workspace/members/{admin_uid}", json={"role_id": owner_role}
+    ).status_code == 400
+
+    after_owner = workspaces.get_workspace(ws_id)
+    assert after_owner and int(after_owner["owner_user_id"]) == owner_uid
+    assert workspaces.role_name_for(admin_uid, ws_id) == "Admin"
+    assert workspaces.role_name_for(member_uid, ws_id) == "Editor"
