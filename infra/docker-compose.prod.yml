@@ -193,8 +193,17 @@ services:
       start_period: 30s
       retries: 5
 
+# Pin each volume to an explicit, project-independent name so your data ALWAYS
+# attaches to the same volume — even if the deploy manager (e.g. Dokploy) changes
+# the compose project name or the app is recreated. Without this, a renamed
+# project creates fresh EMPTY volumes and orphans the old ones (looks like "all
+# users disappeared"). See DEPLOY.md → "Updating without resetting users/data".
 volumes:
   caption-content:
+    name: datalia_caption-content
   caddy-data:
+    name: datalia_caddy-data
   caddy-config:
+    name: datalia_caddy-config
   mariadb-data:
+    name: datalia_mariadb-data
