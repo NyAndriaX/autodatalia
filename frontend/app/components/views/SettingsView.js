@@ -181,9 +181,9 @@ function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconn
       }}>
       {/* ligne principale */}
       <div className="flex flex-wrap items-center gap-3 px-4 py-3.5">
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white text-sm font-black"
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white"
           style={{ background: p.color, boxShadow:`0 4px 12px ${p.color}50` }}>
-          {p.label[0]}
+          {Icon ? <Icon size={20} aria-hidden="true" /> : p.label[0]}
         </span>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-bold leading-tight" style={{ color:"var(--text-primary)" }}>{p.label}</p>

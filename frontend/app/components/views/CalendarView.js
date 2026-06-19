@@ -79,6 +79,7 @@ function PostChip({ post, onEdit, onCancel, compact }) {
   const t = useTranslations("calendar");
   const activeIds = activePlatformIds(post.platforms);
   const primary = activeIds[0] ? PLATFORM_MAP[activeIds[0]] : null;
+  const PrimaryIcon = primary?.icon;
   const status = STATUS_META[post.status] ?? STATUS_META.draft;
   // First successful publish on a fired post (the scheduler writes results
   // back to the post via PATCH). The chip surfaces this as an external-link
@@ -113,6 +114,14 @@ function PostChip({ post, onEdit, onCancel, compact }) {
         className="w-1.5 h-1.5 rounded-full shrink-0"
         style={{ background: status.colorVar }}
       />
+      {PrimaryIcon && (
+        <PrimaryIcon
+          size={11}
+          className="shrink-0"
+          style={{ color: primary.color }}
+          aria-hidden="true"
+        />
+      )}
       {post.media?.length > 0 &&
         (post.media.some((m) => m.kind === "video") ? (
           <Film size={11} className="shrink-0" style={{ color: "var(--text-muted)" }} />

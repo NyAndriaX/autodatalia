@@ -1,0 +1,186 @@
+# Dokploy production compose for Datalia.
+#
+# Use THIS file (not docker-compose.prod.yml) when deploying through Dokploy.
+# The difference: there is NO Caddy service and NO host ports (80/443) here.
+# Dokploy's built-in proxy (Traefik) is the single edge — it terminates HTTPS
+# and routes your domains to these containers. Running our own Caddy too would
+# fight Traefik for ports 80/443, so it's removed. See DEPLOY.md → "Deploying on
+# Dokploy (simple UI guide)".
+#
+# In Dokploy: create a "Compose" service, point it at this file, set the env in
+# the Environment panel, then add two Domains (see DEPLOY.md). Traefik reaches
+# these containers over the shared `dokploy-network`; that's why the web-facing
+# services join it below and expose (not publish) their ports.
+
+# Pin the project name so the data volumes below keep the SAME `datalia_*` names
+# across every redeploy. This is what protects users/data from "disappearing"
+# when a manager recreates the stack — do NOT change it.
+name: datalia
+
+networks:
+  # Created by Dokploy; Traefik lives here. Declared external so we attach to it
+  # rather than making a new one. If a deploy errors with "network
+  # dokploy-network not found", Dokploy isn't installed/initialised on the host.
+  dokploy-network:
+    external: true
+  # Private network for app <-> database traffic. The DB is NOT on
+  # dokploy-network, so it is never reachable from the public edge.
+  internal:
+    driver: bridge
+
+services:
+  mariadb:
+    image: mariadb:11.4
+    container_name: datalia-mariadb
+    restart: always
+    networks:
+      - internal
+    environment:
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-datalia}
+      MARIADB_USER: ${MARIADB_USER:-datalia}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-datalia}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-datalia-root}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h 127.0.0.1 -u$${MARIADB_USER} -p$${MARIADB_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  caption-api:
+    build:
+      context: ../backend
+      args:
+        INSTALL_DEV_DEPS: "false"
+    container_name: caption-api
+    restart: always
+    # KEEP THIS AT ONE INSTANCE. The scheduler + automation + video workers run
+    # in-process; a second replica would double-publish. Do NOT enable Dokploy
+    # replicas / rolling-overlap deploys for this service.
+    networks:
+      - internal          # talk to mariadb
+      - dokploy-network   # be reachable by Traefik for the api.* domain
+    expose:
+      - "8000"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys, urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3); sys.exit(0)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    environment:
+      AI_API_BASE_URL: ${AI_API_BASE_URL:-https://openrouter.ai/api/v1}
+      AI_MODEL: ${AI_MODEL:-google/gemini-2.5-flash}
+      AI_MODEL_FAST: ${AI_MODEL_FAST:-google/gemini-2.5-flash}
+      AI_MODEL_PREMIUM: ${AI_MODEL_PREMIUM:-}
+      AI_INCLUDE_IMAGES: ${AI_INCLUDE_IMAGES:-false}
+      AI_DAILY_LIMIT: ${AI_DAILY_LIMIT:-200}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS}
+      BACKEND_AUTH_TOKEN: ${BACKEND_AUTH_TOKEN}
+      ALLOW_OPEN_AUTH: ${ALLOW_OPEN_AUTH:-false}
+      ALLOW_OPEN_REGISTRATION: ${ALLOW_OPEN_REGISTRATION:-true}
+      AUTH_RATE_LIMIT_ATTEMPTS: ${AUTH_RATE_LIMIT_ATTEMPTS:-10}
+      AUTH_RATE_LIMIT_WINDOW_SECONDS: ${AUTH_RATE_LIMIT_WINDOW_SECONDS:-300}
+      TUNNEL_ENABLED: "false"
+      # OAuth callbacks + generated-media URLs must resolve on the public API
+      # domain, so these derive from API_DOMAIN (set it in the env panel).
+      OAUTH_REDIRECT_BASE: https://${API_DOMAIN}
+      PUBLIC_BASE_URL: https://${API_DOMAIN}
+      META_APP_ID: ${META_APP_ID}
+      META_APP_SECRET: ${META_APP_SECRET}
+      INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-}
+      INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:-}
+      TIKTOK_CLIENT_KEY: ${TIKTOK_CLIENT_KEY}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET}
+      TIKTOK_DOMAIN_VERIFY: ${TIKTOK_DOMAIN_VERIFY}
+      TIKTOK_SCOPES: ${TIKTOK_SCOPES:-user.info.basic,video.upload}
+      TIKTOK_UPLOAD_MODE: ${TIKTOK_UPLOAD_MODE:-file}
+      LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
+      LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
+      LINKEDIN_API_VERSION: ${LINKEDIN_API_VERSION:-202603}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
+      JWT_SECRET: ${JWT_SECRET:-}
+      ENV: production
+      DATABASE_URL: ${DATABASE_URL:-}
+      MARIADB_HOST: ${MARIADB_HOST:-mariadb}
+      MARIADB_PORT: ${MARIADB_PORT:-3306}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-datalia}
+      MARIADB_USER: ${MARIADB_USER:-datalia}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-datalia}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_DEFAULT_CHAT_ID: ${TELEGRAM_DEFAULT_CHAT_ID:-}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
+      AI_IMAGE_API_BASE_URL: ${AI_IMAGE_API_BASE_URL:-}
+      AI_IMAGE_MODEL: ${AI_IMAGE_MODEL:-}
+      AI_VIDEO_API_BASE_URL: ${AI_VIDEO_API_BASE_URL:-}
+      AI_VIDEO_MODEL: ${AI_VIDEO_MODEL:-}
+      REPLICATE_API_TOKEN: ${REPLICATE_API_TOKEN:-}
+      REPLICATE_VIDEO_MODEL: ${REPLICATE_VIDEO_MODEL:-lightricks/ltx-video}
+      REPLICATE_VIDEO_VERSION: ${REPLICATE_VIDEO_VERSION:-}
+      FAL_API_KEY: ${FAL_API_KEY:-}
+      FAL_VIDEO_MODEL: ${FAL_VIDEO_MODEL:-fal-ai/ltx-video}
+      LTX_API_KEY: ${LTX_API_KEY:-}
+      LTX_API_BASE_URL: ${LTX_API_BASE_URL:-https://api.ltx.video/v1}
+      LTX_VIDEO_MODEL: ${LTX_VIDEO_MODEL:-ltx-2-3-pro}
+      ZERNIO_API_KEY: ${ZERNIO_API_KEY:-}
+      ZERNIO_API_BASE_URL: ${ZERNIO_API_BASE_URL:-https://zernio.com/api/v1}
+      VIDEO_COST_PER_SECOND_USD: ${VIDEO_COST_PER_SECOND_USD:-0.04}
+      CONTENT_DIR: /home/app/content
+      DATALIA_DEFAULT_TZ: ${DATALIA_DEFAULT_TZ:-Europe/Paris}
+    volumes:
+      - caption-content:/home/app/content
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        # Baked into the static bundle at BUILD time — changing API_DOMAIN means
+        # you must Redeploy (rebuild), not just restart. Set API_DOMAIN in the
+        # env panel before the first deploy.
+        - NEXT_PUBLIC_API_BASE_URL=https://${API_DOMAIN}
+    container_name: frontend
+    restart: always
+    networks:
+      - dokploy-network   # be reachable by Traefik for the app.* domain
+    expose:
+      - "3000"
+    depends_on:
+      caption-api:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+# Pinned, project-independent names so EVERY redeploy attaches the SAME volume —
+# this is the no-data-loss guarantee. If Dokploy ever recreates the stack, the
+# data re-attaches by these names instead of silently starting empty. Never
+# rename these and never `down -v` / prune them.
+volumes:
+  caption-content:
+    name: datalia_caption-content
+  mariadb-data:
+    name: datalia_mariadb-data

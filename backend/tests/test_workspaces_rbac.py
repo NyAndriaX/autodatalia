@@ -447,3 +447,91 @@ def test_owner_role_cannot_be_assigned_via_role_change():
     assert after_owner and int(after_owner["owner_user_id"]) == owner_uid
     assert workspaces.role_name_for(admin_uid, ws_id) == "Admin"
     assert workspaces.role_name_for(member_uid, ws_id) == "Editor"
+
+
+# ── 19. Re-registering a deleted email yields a brand-new account ──────────
+def test_reregister_deleted_email_is_a_fresh_account():
+    """Deleting an account frees its email. Registering that email again creates
+    a NEW user + NEW personal workspace with different indices and NONE of the
+    old data (posts, uploaded media, OAuth tokens) — never a revival of the old
+    account."""
+    from app.db import get_user_by_email, load_scoped_blob, save_scoped_blob
+
+    settings.allow_open_auth = False
+    prev_open_reg = settings.allow_open_registration
+    settings.allow_open_registration = True  # other tests already created users
+    try:
+        c = _new_client()
+        assert _register(c, "rebirth@x.com", "First").status_code == 200
+        old_uid = int(c.get("/auth/me").json()["id"])
+        old_ws = int(c.get("/workspace").json()["id"])
+
+        # Seed the old account: a post, an upload, and an OAuth-token blob.
+        c.post("/posts", json={"scheduledDate": "2026-06-01", "content": "old-secret"})
+        up = c.post(
+            "/upload", files={"file": ("old.png", b"\x89PNG old-bytes", "image/png")}
+        )
+        assert up.status_code == 200
+        save_scoped_blob(
+            "oauth_tokens", {"meta": {"access_token": "OLD-TOKEN"}}, user_id=old_ws
+        )
+        assert load_scoped_blob("oauth_tokens", user_id=old_ws, default={}).get("meta")
+
+        # Delete the account → email freed, old workspace + its data destroyed.
+        assert c.post("/auth/delete-account").status_code == 200
+        assert get_user_by_email("rebirth@x.com") is None
+        assert workspaces.get_workspace(old_ws) is None
+
+        # Re-register the SAME email → a brand-new account.
+        c2 = _new_client()
+        assert _register(c2, "rebirth@x.com", "Second").status_code == 200
+        new_uid = int(c2.get("/auth/me").json()["id"])
+        me_ws = c2.get("/workspace").json()
+        new_ws = int(me_ws["id"])
+
+        # New indices — not a revival of the old user/workspace.
+        assert new_uid != old_uid
+        assert new_ws != old_ws
+        # Fresh personal workspace, owner, with none of the old data.
+        assert me_ws["is_owner"] is True and me_ws["is_personal"] is True
+        assert c2.get("/posts").json()["posts"] == []
+        assert c2.get("/search").json()["results"] == []
+        assert not (load_scoped_blob("oauth_tokens", user_id=new_ws, default={}) or {})
+    finally:
+        settings.allow_open_registration = prev_open_reg
+
+
+# ── 20. Deleting an account purges pending invitations to its email ────────
+def test_delete_account_purges_pending_invitations():
+    """A pending invitation addressed to the deleted account's email is dropped,
+    so re-registering that email starts with an empty inbox instead of inheriting
+    invites sent to the account that no longer exists."""
+    settings.allow_open_auth = False
+    prev_open_reg = settings.allow_open_registration
+    settings.allow_open_registration = True
+    try:
+        # A separate owner invites our user's email to THEIR workspace.
+        host = _new_client()
+        _register(host, "host@purge.com", "Host")
+        host_ws = int(host.get("/workspace").json()["id"])
+        host_uid = int(host.get("/auth/me").json()["id"])
+        editor_role = workspaces.get_role_id_by_name(host_ws, "Editor")
+
+        user = _new_client()
+        _register(user, "guest@purge.com", "Guest")
+        workspaces.create_invitation(host_ws, "guest@purge.com", editor_role, host_uid)
+        assert workspaces.list_invitations_for_email("guest@purge.com")  # pending
+
+        # Deleting the account purges the invitations addressed to its email…
+        assert user.post("/auth/delete-account").status_code == 200
+        assert workspaces.list_invitations_for_email("guest@purge.com") == []
+
+        # …and the host's workspace itself is untouched (it had an owner/heir).
+        assert workspaces.get_workspace(host_ws) is not None
+
+        # Re-registering the same email begins with a clean inbox.
+        again = _new_client()
+        assert _register(again, "guest@purge.com", "Guest2").status_code == 200
+        assert workspaces.list_invitations_for_email("guest@purge.com") == []
+    finally:
+        settings.allow_open_registration = prev_open_reg

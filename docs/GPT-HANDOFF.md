@@ -42,6 +42,137 @@ frontend + run the backend suite, then click-test:
 10. **Draft edit in place** (`6e76783`) — editing a draft updates it instead of
     creating a new one; "New post" resets the editor.
 
+## Round 4b — account-deletion media cleanup + clean re-registration (backend)
+
+Follow-up on Round 4 (which you committed + verified at `4cb1356`, 104 passing).
+Three items, all in `backend/app/workspaces.py` + two new tests:
+
+1. **`delete_user` now cleans up media** for any workspace it fully deletes (the
+   no-heir branch). The Round 4 refactor dropped this: account deletion removed
+   the DB rows but left `content/ws/{id}/` files orphaned on disk. Now, mirroring
+   `delete_workspace`, it collects the deleted workspace ids and calls
+   `_delete_workspace_media` AFTER the transaction commits (FS error can't roll
+   back / block the DB delete). Low severity (disk leak, no exposure) but it's the
+   difference between a re-registered email truly starting clean vs. leaving junk.
+
+2. **Clean re-registration is guaranteed + tested.** Confirmed at the data layer
+   (no code change needed beyond #1): `create_user` is a plain `INSERT` → a fresh
+   auto-increment **user id**, and registration creates a fresh personal workspace
+   → fresh `ws:{id}` **scope**, so a re-registered email gets a NEW index and NONE
+   of the old account's posts / uploaded media / OAuth tokens / runtime settings.
+   `delete_user` frees the email (drops the `users` row) and destroys the old
+   workspace's scope + media. The "Email already registered" guard only trips for a
+   *live* email; a deleted one passes (subject to the normal open-registration
+   switch — this is NOT a special bypass of that policy).
+   - **New test:** `test_reregister_deleted_email_is_a_fresh_account` — seeds a
+     post + upload + OAuth-token blob, deletes the account, re-registers the same
+     email, and asserts a different user id + workspace id, owner of a fresh
+     personal workspace, and empty posts / media / oauth tokens.
+
+3. **`delete_user` now purges pending invitations addressed to the email.**
+   Previously a pending `workspace_invitations` row sent to `x@y.com` survived
+   deletion of the `x@y.com` account, so a re-registration inherited an inbox of
+   invites sent to the *previous* account. Now `delete_user` captures the email
+   inside the transaction and `DELETE`s `workspace_invitations WHERE email = ?`
+   before commit. Invites the user *sent* for workspaces that survive (heir
+   transfer) are untouched — only the addressee's inbox is cleared. This completes
+   the clean-slate guarantee.
+   - **New test:** `test_delete_account_purges_pending_invitations` — a second
+     owner invites the user's email, the user deletes their account, and the test
+     asserts `list_invitations_for_email` is empty, the host workspace still
+     exists, and a re-registration of the same email starts with an empty inbox.
+
+**Run it** (DB-backed; expect 106 now — Round 4's 104 + these 2 new tests):
+
+```bash
+docker compose -f infra/docker-compose.yml exec -T caption-api \
+    python -m pytest tests/test_workspaces_rbac.py -q     # expect 20 passed
+docker compose -f infra/docker-compose.yml exec -T caption-api \
+    python -m pytest tests/ -q                            # expect 106 passed
+```
+
+**Claude verified (VM):** `py_compile` of both files, media-cleanup wiring
+(`deleted_media_wids` collected in the no-heir branch, drained after commit),
+invitation-purge wiring (email captured pre-delete, `workspace_invitations`
+dropped by email before commit), `settings.allow_open_registration` exists.
+**NOT verified (your job):** the pytest run against MariaDB.
+
+## Round 4 — workspace/deletion hardening (backend, test this)
+
+Two real issues found in a read-only review of the Zernio / workspaces / deletion
+logic. Both fixed in `backend/app/workspaces.py`; one new test added. **Run the
+backend suite** (these touch destructive paths):
+
+```bash
+docker compose -f infra/docker-compose.yml exec -T caption-api \
+    python -m pytest tests/test_workspaces_rbac.py -q
+docker compose -f infra/docker-compose.yml exec -T caption-api \
+    python -m pytest tests/ -q          # full regression
+```
+
+1. **Atomic destructive deletes.** `db._connect()` uses `autocommit=True`, so the
+   cascade deletes ran as separate auto-committed statements — a mid-cascade
+   failure could leave a half-deleted workspace (orphaned roles/docs, or a
+   workspace row whose children are gone) or, in `delete_user`, a workspace owned
+   by an already-deleted user. Now each runs in ONE transaction
+   (`conn.begin()` / `commit` / `rollback`):
+   - New cursor-aware helpers `_delete_workspace_rows(cur, wid)` and
+     `_transfer_ownership_rows(cur, wid, nid)` do the SQL on a caller-owned cursor.
+   - `delete_workspace`, `transfer_ownership`, and `delete_user` wrap them in a
+     transaction. `delete_user` now does the whole transfer/delete/cleanup loop on
+     a single connection, so it's all-or-nothing.
+   - Filesystem media cleanup (`_delete_workspace_media`) runs only AFTER the DB
+     commit, so an FS error never rolls back (or blocks) the DB delete.
+   - **Behavior is unchanged on the happy path** — existing deletion tests
+     (`test_owner_deletes_workspace`, `test_delete_own_account`,
+     `test_delete_owner_transfers_ownership`, `test_admin_deletes_member_account`,
+     `test_member_leaves_workspace`, the personal-workspace guard) should all stay
+     green. They're the regression check for this change.
+
+2. **Owner-role escalation blocked.** `change_member_role` only blocked *demoting*
+   the owner — it let anyone with `members.manage` (e.g. an Admin) assign the
+   system **Owner** role to another member, minting a second member holding
+   `workspace.manage` (which the Admin doesn't have). Now `change_member_role`
+   rejects assigning the Owner role to a non-owner; ownership moves ONLY via
+   `transfer_ownership`. **New test:** `test_owner_role_cannot_be_assigned_via_role_change`
+   (both owner and admin attempts → 400; ownership + member role unchanged).
+
+**Claude verified (VM):** `py_compile` of `workspaces.py` + the test file, helper
+wiring (begin/rollback present on all three paths). **NOT verified (your job):**
+the pytest run against MariaDB — these are DB-transaction changes, so the suite is
+the real check. Confirm no deletion test regressed and the new test passes.
+
+> Note: the one-time migration helper `_rescope_user_data` is still non-atomic,
+> but it only runs when zero workspaces exist (fresh migration) and is
+> idempotent-ish, so it was left as-is. Flag if you want it wrapped too.
+
+## Round 3 — real platform logos (test this)
+
+**Real brand logos for Facebook / Instagram / TikTok / LinkedIn.** Before, the
+platform marks came from `lucide-react`, which ships only generic outline icons
+and **has no TikTok icon at all** — TikTok fell back to a generic `Video` play
+icon, and FB/IG/LI were outline glyphs, not the real logos. Several surfaces
+(Settings cards, publish modal, calendar chips) showed no logo at all (letter
+avatars / colored dots).
+
+- **New dependency:** `react-icons` (Simple Icons set) in `frontend/package.json`.
+  **You must `npm install` first** — `react-icons` is not in `node_modules` yet,
+  so the build fails until you do, and `package-lock.json` needs reconciling
+  (commit the updated lock).
+- **Central swap:** `app/lib/platforms.js` now maps each platform to
+  `SiFacebook / SiInstagram / SiTiktok / SiLinkedin`. This propagates real logos
+  to every consumer of `PLATFORMS`/`PLATFORM_MAP` (CreationEditor toggles + pills
+  + preview tabs + header, PostEditorPopup, AutomationView).
+- **No-logo surfaces now show the real logo:**
+  - `SettingsView.js` (CartePlateforme) — the F/I/T/L letter avatar is now the
+    brand logo on the colored tile.
+  - `PublishConfirmModal.js` — the colored dot per target is now the brand logo.
+  - `CalendarView.js` (PostChip) — the chip now shows the primary platform's logo
+    next to the status dot.
+- **Claude verified (VM):** edits balanced, no leftover lucide brand imports,
+  dependency added. **NOT verified:** `npm install` / `npm run build` / render —
+  your job. Check TikTok especially (the one that had no real logo before).
+
 ## 0. Pull + bring up
 
 ```bash

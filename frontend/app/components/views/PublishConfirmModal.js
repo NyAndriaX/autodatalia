@@ -185,17 +185,27 @@ export default function PublishConfirmModal({
                 {targetsByPlatform.flatMap(({ platformId, targets }) =>
                   targets.map((t) => {
                     const platform = PLATFORMS.find((p) => p.id === platformId);
+                    const PlatIcon = platform?.icon;
                     return (
                       <li
                         key={`${platformId}-${t.id}`}
                         className="flex items-center gap-2 flex-wrap text-xs px-2 py-1.5 rounded-md"
                         style={{ background: "var(--bg-secondary)" }}
                       >
-                        <span
-                          className="w-1.5 h-1.5 rounded-full shrink-0"
-                          style={{ background: platform?.color || "var(--accent-primary)" }}
-                          aria-hidden="true"
-                        />
+                        {PlatIcon ? (
+                          <PlatIcon
+                            size={14}
+                            className="shrink-0"
+                            style={{ color: platform?.color || "var(--accent-primary)" }}
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <span
+                            className="w-1.5 h-1.5 rounded-full shrink-0"
+                            style={{ background: platform?.color || "var(--accent-primary)" }}
+                            aria-hidden="true"
+                          />
+                        )}
                         <span style={{ color: "var(--text-secondary)" }}>{platform?.label || platformId}</span>
                         <span style={{ color: "var(--text-muted)" }}>·</span>
                         <span className="break-words min-w-0" style={{ color: "var(--text-primary)" }}>{t.label}</span>

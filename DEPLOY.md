@@ -175,6 +175,11 @@ Save and exit (`Ctrl+O`, Enter, `Ctrl+X` in nano).
 
 ## Part 5 — Start the production stack
 
+> **Using Dokploy?** Skip this manual `docker compose` path and follow
+> *[Deploying on Dokploy (simple UI guide)](#deploying-on-dokploy-simple-ui-guide)*
+> below — it uses `docker-compose.dokploy.yml` (no Caddy, Traefik handles HTTPS).
+> The steps below are the bare-VM path that runs our own Caddy.
+
 ```bash
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 ```
@@ -371,6 +376,59 @@ TikTok requires a screen recording of your app to approve `video.publish`. Your 
 - **TikTok `access_token_invalid` returned 24h after a successful connect.** The refresh-token flow handles this automatically. If publishing still fails after refresh, reconnect TikTok from Settings.
 - **Telegram approve doesn't publish.** Check the post's status in the calendar — if it says `scheduled` but isn't firing, the scheduler is waiting for the scheduled time. Check the container logs for `[scheduler]` lines.
 - **Automation rule fires but no Telegram card arrives.** Settings → Telegram section → confirm all three status dots are green. If the bot token dot is red, `TELEGRAM_BOT_TOKEN` is missing/wrong in `.env.production`. Also verify the webhook registered successfully (Part 3.3).
+
+---
+
+## Deploying on Dokploy (simple UI guide)
+
+This is the recommended way to run Datalia. Use
+**`infra/docker-compose.dokploy.yml`** (not `docker-compose.prod.yml`). It has
+**no Caddy and no host ports** — Dokploy's built-in proxy (**Traefik**) is the
+single front door that handles HTTPS and routing. Running our own Caddy *and*
+Dokploy's Traefik would make them fight over ports 80/443, so the Dokploy file
+drops Caddy. **Pick one proxy; on Dokploy it's Traefik.**
+
+**Step 0 — DNS (do this first, domain owner's job).**
+Add two **A records** at the domain registrar, both pointing to the Dokploy
+server's public IP. Same as adding any website to the domain:
+
+| Record | Points to | Becomes |
+|--------|-----------|---------|
+| `api` | Dokploy server IP | `api.datalia.app` (the backend) |
+| `app` | Dokploy server IP | `app.datalia.app` (what users + TikTok's reviewer open) |
+
+DNS must be live *before* deploying so Dokploy can issue the HTTPS certificates.
+
+**Step 1 — Create the app in Dokploy.**
+1. New **Project** → inside it, **Create Service → Compose**.
+2. **Source:** connect the Git repo (or paste the compose). Set the
+   **Compose Path** to `infra/docker-compose.dokploy.yml`.
+
+**Step 2 — Environment.**
+Open the service's **Environment** panel and paste the production env
+(see *Part 2 — Generate secrets* and *Part 4 — Configure the app*). At minimum:
+`API_DOMAIN=api.datalia.app`, `FRONTEND_DOMAIN=app.datalia.app`,
+`CORS_ALLOW_ORIGINS=https://app.datalia.app`, a generated `JWT_SECRET`,
+`MARIADB_PASSWORD`, `MARIADB_ROOT_PASSWORD`, and the TikTok/Meta keys.
+> ⚠️ Set these **once** and leave them. Regenerating `MARIADB_PASSWORD` or
+> `JWT_SECRET` after the first deploy locks you out of the existing database.
+
+**Step 3 — Domains (this is the routing).**
+In the service's **Domains** tab, add **two** domains. Dokploy writes the Traefik
+rules for you; just fill the form:
+
+| Host | Service | Container Port | HTTPS |
+|------|---------|----------------|-------|
+| `api.datalia.app` | `caption-api` | `8000` | On (Let's Encrypt) |
+| `app.datalia.app` | `frontend` | `3000` | On (Let's Encrypt) |
+
+**Step 4 — Deploy.** Hit **Deploy**. First build takes a few minutes; the HTTPS
+certs appear ~30s after the domains resolve. Then open `https://app.datalia.app`.
+
+**Updating later:** push code → hit **Redeploy** in Dokploy. Never **Delete +
+recreate** the service (that can rename the data volumes — see the no-data-loss
+rules below). Changing `API_DOMAIN`/`FRONTEND_DOMAIN` needs a **Redeploy**
+(rebuild), not just a restart, because the frontend bakes the API URL at build.
 
 ---
 

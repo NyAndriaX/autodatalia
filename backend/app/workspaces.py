@@ -676,12 +676,27 @@ def leave_workspace(user_id: int, workspace_id: int) -> bool:
 def delete_user(user_id: int) -> bool:
     """Delete a user account. For each workspace they OWN: transfer ownership to
     the earliest other member if any, else delete the workspace outright. Then
-    drop all remaining memberships and the user row."""
+    drop all remaining memberships and the user row.
+
+    Media for any workspace that is fully deleted (no heir) is removed from disk
+    AFTER the DB transaction commits — mirroring ``delete_workspace`` — so a
+    deleted account leaves no orphaned ``content/ws/{id}/`` files behind and a
+    later re-registration with the same email starts from a clean slate.
+
+    Pending invitations addressed to this user's email are also purged, so a
+    re-registration with the same address starts with an empty inbox rather than
+    inheriting invites that were sent to the now-deleted account."""
     uid = int(user_id)
+    deleted_media_wids: list[int] = []
     conn = _connect()
     try:
         conn.begin()
         cur = conn.cursor()
+        # Capture the email up front (inside the txn) so we can purge invitations
+        # addressed to it before the users row is gone.
+        cur.execute("SELECT email FROM users WHERE id = %s", (uid,))
+        urow = cur.fetchone()
+        email = str((urow or {}).get("email") or "").strip().lower()
         cur.execute("SELECT id FROM workspaces WHERE owner_user_id = %s", (uid,))
         owned = [dict(row) for row in cur.fetchall()]
         for row in owned:
@@ -699,15 +714,25 @@ def delete_user(user_id: int) -> bool:
                     return False
             else:
                 _delete_workspace_rows(cur, wid)
+                deleted_media_wids.append(wid)
         cur.execute("DELETE FROM workspace_members WHERE user_id = %s", (uid,))
         cur.execute("DELETE FROM users WHERE id = %s", (uid,))
+        if email:
+            # Purge invitations addressed to this email (the deleted account's
+            # inbox). Invites the user SENT for workspaces that survive (via heir
+            # transfer) stay valid; only the addressee's pending invites go.
+            cur.execute(
+                "DELETE FROM workspace_invitations WHERE email = %s", (email,)
+            )
         conn.commit()
-        return True
     except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
+    for wid in deleted_media_wids:
+        _delete_workspace_media(wid)
+    return True
 
 
 # ---------------------------------------------------------------------------
