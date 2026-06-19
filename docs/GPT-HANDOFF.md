@@ -37,8 +37,9 @@ frontend + run the backend suite, then click-test:
    chips that augment the prompt.
 8. **Singular media delete** (`5afbb22`) — per-tile trash in the Library now
    removes the item (mirrors bulk delete).
-9. **500 MB media limit** (`5afbb22`) — frontend + backend. **A prod proxy
-   (Caddy) may need a matching request-body limit for 500 MB uploads.**
+9. **500 MB media limit** (`5afbb22`) — frontend + backend. **The prod proxy
+   (Dokploy's Traefik) may need a matching request-body limit for 500 MB
+   uploads** (Traefik defaults to unlimited, so usually fine).
 10. **Draft edit in place** (`6e76783`) — editing a draft updates it instead of
     creating a new one; "New post" resets the editor.
 
@@ -96,6 +97,64 @@ docker compose -f infra/docker-compose.yml exec -T caption-api \
 invitation-purge wiring (email captured pre-delete, `workspace_invitations`
 dropped by email before commit), `settings.allow_open_registration` exists.
 **NOT verified (your job):** the pytest run against MariaDB.
+
+## Round 5 — real platform logos + Dokploy-only deploy (test this)
+
+Two things landed: real brand logos across the app, and a **deploy-shape change**
+you need to know before you try to run prod.
+
+### 5a. Real platform logos (frontend — build + eyeball)
+
+`frontend/app/lib/platforms.js` now uses real brand glyphs via **react-icons**:
+`SiFacebook` / `SiInstagram` / `SiTiktok` (Simple Icons) + **`FaLinkedin`**
+(Font Awesome). LinkedIn comes from `fa6` because Simple Icons removed the
+LinkedIn mark — importing `SiLinkedin` **fails the build** (this was a real break;
+Claude found and fixed it). `react-icons` is **pinned to exact `5.6.0`** so a
+future minor can't drop FB/IG/TikTok the same way.
+
+**Claude verified (VM):** `npm install` + `npm run build` → `✓ Compiled
+successfully`. So this one IS build-checked. Still, on the PC:
+```bash
+cd frontend && npm install && npm run build      # expect ✓ Compiled successfully
+```
+**Eyeball it** — real logos (not lucide outlines / letter avatars / colored dots)
+should show in: Settings platform cards, Publish-confirm targets, Calendar post
+chips, the Create editor, PostEditorPopup, and AutomationView. All read from the
+one central `PLATFORM` map, so if `platforms.js` is right they all are.
+
+Backend suite is unchanged from Round 4b (still **106**).
+
+### 5b. Deploy is now Dokploy-only — Caddy removed (IMPORTANT before you run prod)
+
+**The distinction:** there is now a **single** prod compose,
+`infra/docker-compose.prod.yml`, and it is **built for Dokploy**:
+- **No Caddy service** and **no host ports (80/443/3000/8000)**. Dokploy's
+  built-in proxy (**Traefik**) is the only edge — it does HTTPS + routing. We
+  removed Caddy so it can't fight Traefik for 80/443. The old
+  `infra/caddy/Caddyfile` and the temporary `docker-compose.dokploy.yml` are
+  **deleted** (no duplicates).
+- Web services join an **external `dokploy-network`** (that's how Traefik reaches
+  them); MariaDB stays on a private `internal` network.
+- Data volumes are pinned to `datalia_mariadb-data` / `datalia_caption-content`
+  so every redeploy re-attaches the SAME data (24/7, no data loss).
+
+**How to TEST it without a Dokploy host:**
+```bash
+# 1) Config is valid (unset-var warnings are expected, ignore them):
+docker compose -f infra/docker-compose.prod.yml config -q
+
+# 2) If you actually want to `up` it on a plain PC, the external network must
+#    exist first (on a real Dokploy host it already does):
+docker network create dokploy-network
+docker compose -f infra/docker-compose.prod.yml --env-file infra/.env.production up -d --build
+```
+Note: because there are **no published ports**, you won't reach it on
+`localhost:3000/8000` like the dev stack — Traefik/Dokploy is what exposes it by
+domain. For everyday local testing keep using `infra/docker-compose.yml` (dev),
+which still publishes localhost ports. The prod file is for the Dokploy box.
+
+**The real deploy lives in `DEPLOY.md` → "Deploying on Dokploy (simple UI
+guide)"** (DNS A records → Compose service → env panel → two Domains → Deploy).
 
 ## Round 4 — workspace/deletion hardening (backend, test this)
 

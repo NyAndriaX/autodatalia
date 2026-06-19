@@ -43,7 +43,7 @@ For per-platform publish state see [`PROJECT_STATE.md`](PROJECT_STATE.md).
 |---|---|---|
 | [`frontend/`](frontend/) | Dashboard UI | Next.js 16 (App Router), React 19, Redux Toolkit, Tailwind v4 |
 | [`backend/`](backend/) | API + AI + OAuth + publishing + automation worker | Python, FastAPI, Pydantic, Docker |
-| [`infra/`](infra/) | Docker Compose orchestration + Caddy reverse-proxy config | YAML |
+| [`infra/`](infra/) | Docker Compose orchestration (prod runs on Dokploy / Traefik) | YAML |
 | [`docs/`](docs/) | Per-platform setup notes (TikTok, etc.) | Markdown |
 | [`DEPLOY.md`](DEPLOY.md) | **Production deploy checklist** | Markdown |
 

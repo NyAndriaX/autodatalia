@@ -11,13 +11,14 @@ compose stack.
 ```text
 infra/
 |-- docker-compose.yml           # Local dev: frontend + caption-api + mariadb
-|-- docker-compose.prod.yml      # Production: Caddy + frontend + caption-api + mariadb
+|-- docker-compose.prod.yml      # Production (Dokploy): frontend + caption-api + mariadb
 |-- .env.example                 # Safe local env template
 |-- .env                         # Local secrets, git-ignored
-|-- .env.production.example      # Safe production env template
-`-- caddy/
-    `-- Caddyfile                # HTTPS reverse proxy for production API + dashboard
+`-- .env.production.example      # Safe production env template
 ```
+
+Production HTTPS + routing is handled by Dokploy's built-in proxy (Traefik), so
+there is no Caddy service or Caddyfile — see `../DEPLOY.md`.
 
 The local stack builds the backend from `../backend`, serves the dashboard on
 `http://localhost:3005`, the API on `http://localhost:8000`, and keeps app
@@ -102,7 +103,13 @@ can fetch media during publish.
 
 ## Production Stack
 
-Production uses:
+Production runs on **Dokploy** — see `../DEPLOY.md` →
+"Deploying on Dokploy (simple UI guide)" for the full click-by-click steps.
+Dokploy's Traefik terminates HTTPS and routes the two domains; the compose has
+no Caddy and publishes no host ports.
+
+For debugging directly on the Dokploy host (where the `dokploy-network` already
+exists):
 
 ```bash
 docker compose -f infra/docker-compose.prod.yml --env-file infra/.env.production up -d --build
@@ -112,13 +119,13 @@ The production compose runs:
 
 | Service | Purpose |
 |---|---|
-| `caddy` | HTTPS reverse proxy and Let's Encrypt certificate management |
-| `caption-api` | FastAPI backend, exposed only on the Docker network |
-| `frontend` | Next.js dashboard, exposed only through Caddy |
+| `caption-api` | FastAPI backend, reached by Traefik over `dokploy-network` (port 8000) |
+| `frontend` | Next.js dashboard, reached by Traefik over `dokploy-network` (port 3000) |
+| `mariadb` | Database, on a private `internal` network only (never public) |
 
 Set `API_DOMAIN` for the API host and `FRONTEND_DOMAIN` for the dashboard host
 in `infra/.env.production`. Persistent media lives in the `caption-content`
-named volume. App state and user accounts live in MariaDB.
+named volume. App state and user accounts live in MariaDB (`mariadb-data`).
 
 ## Backend Endpoints
 

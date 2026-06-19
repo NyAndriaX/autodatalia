@@ -100,15 +100,18 @@ option, not needed at single-team scale.
 
 ## Migration order
 
+> **Current approach: Dokploy.** The steps below are the original bare-server
+> plan and are kept for context. In practice we deploy via Dokploy, whose Traefik
+> proxy replaces the Caddy step — see `DEPLOY.md` → "Deploying on Dokploy".
+
 1. **Install Docker** on the server (`curl -fsSL get.docker.com | sh`)
-2. **Copy `infra/docker-compose.prod.yml`, `infra/caddy/Caddyfile`,
-   `backend/Dockerfile`, and `.env.production`** to the server
-3. **Point DNS** — domain → server IP
-4. **Set up Caddy** as reverse proxy with Let's Encrypt for both the
-   API and frontend (or whichever reverse proxy the team prefers)
-5. **`docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build`**
-6. **Build & deploy frontend** — `npm run build` on the server
-   (or build in CI and copy the artifacts)
+2. **Point Dokploy at the repo** with `infra/docker-compose.prod.yml` as the
+   Compose path (or copy the compose + `.env.production` for a manual run)
+3. **Point DNS** — `api.` + `app.` → server IP
+4. **Routing + TLS** — Dokploy/Traefik issues Let's Encrypt certs for both
+   domains automatically (no manual reverse-proxy setup)
+5. **Deploy** from the Dokploy UI (builds backend + frontend)
+6. Frontend is built by the compose; no separate `npm run build` step
 7. **Update dev portal redirect URIs** for Meta, TikTok, LinkedIn,
    Google to `https://<domain>/oauth/<provider>/callback`
 8. **Verify TikTok URL Properties** for `https://<domain>/content/` if using

@@ -58,10 +58,10 @@ dig +short api.datalia.app
 dig +short app.datalia.app
 ```
 
-Both must return your server's public IP **before you start the stack in Part 5**.
-Caddy provisions a Let's Encrypt certificate for each host on first request; if a
-host does not yet resolve to this server, the ACME HTTP/TLS challenge fails and
-cert provisioning errors out. Don't move on until both resolve.
+Both must return your server's public IP **before you deploy**. Dokploy's proxy
+(Traefik) provisions a Let's Encrypt certificate for each host on first request;
+if a host does not yet resolve to this server, the ACME challenge fails and cert
+provisioning errors out. Don't move on until both resolve.
 
 ### 1.3 Install Docker
 ```bash
@@ -175,21 +175,22 @@ Save and exit (`Ctrl+O`, Enter, `Ctrl+X` in nano).
 
 ## Part 5 — Start the production stack
 
-> **Using Dokploy?** Skip this manual `docker compose` path and follow
+> **Deploy through Dokploy** — that's the supported path. Follow
 > *[Deploying on Dokploy (simple UI guide)](#deploying-on-dokploy-simple-ui-guide)*
-> below — it uses `docker-compose.dokploy.yml` (no Caddy, Traefik handles HTTPS).
-> The steps below are the bare-VM path that runs our own Caddy.
+> below; you don't run `docker compose` by hand. There is a single compose file,
+> `infra/docker-compose.prod.yml` (no Caddy — Dokploy's Traefik handles HTTPS).
+
+The commands below are only for **debugging on the Dokploy host** (the server
+already has the `dokploy-network` Traefik uses):
 
 ```bash
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
-```
-
-First build takes 2–4 min. Watch progress with:
-```bash
 docker compose -f docker-compose.prod.yml --env-file .env.production logs -f
 ```
 
-Caddy automatically provisions Let's Encrypt certificates on the first requests to `API_DOMAIN` and `FRONTEND_DOMAIN` — no manual `certbot` setup, no renewal cron, it handles renewal ~30 days before expiry.
+Traefik automatically provisions Let's Encrypt certificates for `API_DOMAIN` and
+`FRONTEND_DOMAIN` on first request — no manual `certbot`, no renewal cron, it
+renews ~30 days before expiry.
 
 **Verify it's up:**
 ```bash
@@ -197,10 +198,9 @@ curl https://api.datalia.app/health
 # → {"status":"ok","dependencies":{"mariadb":"ok"}}
 ```
 
-If you see a TLS error, wait 30 seconds and retry (Caddy is still
-provisioning the cert). If the error persists, check DNS actually
-points to this server for **both** hosts:
-`dig +short api.datalia.app` and `dig +short app.datalia.app`.
+If you see a TLS error, wait 30 seconds and retry (the cert is still being
+provisioned). If it persists, check DNS actually points to this server for
+**both** hosts: `dig +short api.datalia.app` and `dig +short app.datalia.app`.
 
 ---
 
@@ -250,7 +250,7 @@ When LTX runs out of credits or is overloaded, the backend **automatically falls
 
 ## Part 7 — Verify the frontend
 
-The frontend is built by `docker-compose.prod.yml` and served by Caddy at `https://app.datalia.app` using `FRONTEND_DOMAIN`. No separate `npm install`, pm2 process, or exposed `:3000` port is needed.
+The frontend is built by `docker-compose.prod.yml` and served via Dokploy's Traefik at `https://app.datalia.app` using `FRONTEND_DOMAIN`. No separate `npm install`, pm2 process, or published `:3000` port is needed.
 
 ```bash
 curl -I https://app.datalia.app
@@ -371,7 +371,7 @@ TikTok requires a screen recording of your app to approve `video.publish`. Your 
 
 ## Common gotchas
 
-- **TLS error from your domain right after starting Caddy.** First-cert provisioning takes 20-40s. Wait and retry.
+- **TLS error from your domain right after deploying.** First-cert provisioning (Traefik/Let's Encrypt) takes 20-40s. Wait and retry.
 - **`Meta 100: Authorization Error subcode 33` on Instagram carousels.** Should not happen on a real domain. If you see it on `api.datalia.app`, check the Meta app permissions for `instagram_basic` + `instagram_content_publish`, and confirm the API hostname is reachable from Meta's IPs (no firewall block on `facebookexternalhit/1.1` user agents).
 - **TikTok `access_token_invalid` returned 24h after a successful connect.** The refresh-token flow handles this automatically. If publishing still fails after refresh, reconnect TikTok from Settings.
 - **Telegram approve doesn't publish.** Check the post's status in the calendar — if it says `scheduled` but isn't firing, the scheduler is waiting for the scheduled time. Check the container logs for `[scheduler]` lines.
@@ -381,12 +381,11 @@ TikTok requires a screen recording of your app to approve `video.publish`. Your 
 
 ## Deploying on Dokploy (simple UI guide)
 
-This is the recommended way to run Datalia. Use
-**`infra/docker-compose.dokploy.yml`** (not `docker-compose.prod.yml`). It has
-**no Caddy and no host ports** — Dokploy's built-in proxy (**Traefik**) is the
-single front door that handles HTTPS and routing. Running our own Caddy *and*
-Dokploy's Traefik would make them fight over ports 80/443, so the Dokploy file
-drops Caddy. **Pick one proxy; on Dokploy it's Traefik.**
+This is the supported way to run Datalia. There is a single compose file,
+**`infra/docker-compose.prod.yml`**, and it is built for Dokploy: **no Caddy and
+no host ports** — Dokploy's built-in proxy (**Traefik**) is the single front door
+that handles HTTPS and routing. (A self-hosted Caddy would fight Traefik over
+ports 80/443, so it's intentionally absent.) **One proxy; on Dokploy it's Traefik.**
 
 **Step 0 — DNS (do this first, domain owner's job).**
 Add two **A records** at the domain registrar, both pointing to the Dokploy
@@ -402,7 +401,7 @@ DNS must be live *before* deploying so Dokploy can issue the HTTPS certificates.
 **Step 1 — Create the app in Dokploy.**
 1. New **Project** → inside it, **Create Service → Compose**.
 2. **Source:** connect the Git repo (or paste the compose). Set the
-   **Compose Path** to `infra/docker-compose.dokploy.yml`.
+   **Compose Path** to `infra/docker-compose.prod.yml`.
 
 **Step 2 — Environment.**
 Open the service's **Environment** panel and paste the production env
@@ -449,10 +448,9 @@ The stack is built to run unattended. Three things matter for that:
    redeploys — don't deploy with an ephemeral/empty content dir or generated
    media vanishes on restart.
 3. **Upload size at the proxy.** The app upload limit is **500 MB** (frontend +
-   backend). The bundled Caddy is set to `request_body max_size 512MB` to match.
-   **If Dokploy fronts the stack with its own Traefik**, make sure that proxy
-   also allows ≥500 MB bodies (Traefik defaults to unlimited, so usually fine —
-   but if you added a `buffering` middleware, raise its `maxRequestBodyBytes`).
+   backend). Dokploy's Traefik must allow ≥500 MB bodies — it defaults to
+   unlimited, so this is usually fine, but if you added a `buffering` middleware,
+   raise its `maxRequestBodyBytes` to match.
 
 Public URLs (`PUBLIC_BASE_URL` / `OAUTH_REDIRECT_BASE`) are already set to
 `https://${API_DOMAIN}` so generated-media URLs and OAuth callbacks resolve on

@@ -19,7 +19,7 @@ Datalia. Two stages:
   rejects `localhost` and any HTTP redirect URI. Any tunneling option
   with a fixed hostname works for dev (Cloudflare Tunnel, Tailscale
   Funnel, ngrok with a reserved domain, etc.). For prod, use the real
-  domain Caddy will serve — see `DEPLOY.md`.
+  domain Dokploy/Traefik serves — see `DEPLOY.md`.
 
 ---
 

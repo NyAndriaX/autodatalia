@@ -37,11 +37,11 @@ work when the dev machine sleeps. Deployment also eliminates all ngrok friction
 | # | Task | Detail |
 |---|---|---|
 | 1.1 | Install Docker on server | `curl -fsSL get.docker.com \| sh` |
-| 1.2 | Copy production infra files to server | `infra/docker-compose.prod.yml`, `infra/caddy/Caddyfile`, `backend/Dockerfile`, `infra/.env.production` |
-| 1.3 | Point DNS | Domain → server IP (team handles this) |
-| 1.4 | Set up Caddy reverse proxy | SSL via Let's Encrypt, route API + frontend |
-| 1.5 | Launch backend | `docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build` |
-| 1.6 | Build & serve frontend | `npm run build`, serve via Caddy or `next start` |
+| 1.2 | Point Dokploy at the repo | `infra/docker-compose.prod.yml` as the Compose path (see `DEPLOY.md`) |
+| 1.3 | Point DNS | `api.` + `app.` A records → server IP (team handles this) |
+| 1.4 | Routing + TLS | Dokploy/Traefik via the two Domains in the UI — SSL auto via Let's Encrypt |
+| 1.5 | Deploy | Hit Deploy in Dokploy (builds backend + frontend, single backend replica) |
+| 1.6 | Verify | `curl https://api.<domain>/health`, open `https://app.<domain>` |
 | 1.7 | Update OAuth redirect URIs | Meta, TikTok, LinkedIn, Google → `https://<domain>/oauth/<provider>/callback` |
 | 1.8 | Verify TikTok URL Properties if using pull mode | `https://<domain>/content/` — direct file upload mode can avoid this for video |
 | 1.9 | Reconnect each provider | Re-auth in Settings after redirect URI change |

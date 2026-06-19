@@ -15,9 +15,9 @@ canonical source of truth**; when this file disagrees with it, README wins.
   (generates rule-driven candidates), video jobs worker (polls external
   video providers).
 - **`infra/docker-compose.yml`** — dev: `caption-api` + `mariadb:11.4`.
-- **`infra/docker-compose.prod.yml`** — prod: Caddy + `caption-api` +
-  `mariadb:11.4` (or external MariaDB/MySQL via `DATABASE_URL`, scheme
-  `mysql://` or `mariadb://`).
+- **`infra/docker-compose.prod.yml`** — prod (Dokploy/Traefik, no Caddy):
+  `caption-api` + `frontend` + `mariadb:11.4` (or external MariaDB/MySQL via
+  `DATABASE_URL`, scheme `mysql://` or `mariadb://`).
 
 ## Capabilities
 
