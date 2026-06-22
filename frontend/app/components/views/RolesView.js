@@ -111,9 +111,9 @@ export default function RolesView() {
       </Title>
       <Text type="secondary">{t("rolesSubtitle")}</Text>
 
-      <div style={{ display: "flex", gap: 24, marginTop: 20, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 24, marginTop: 20, flexWrap: "wrap", alignItems: "flex-start" }}>
         {/* Role list */}
-        <div style={{ width: 240, flexShrink: 0 }}>
+        <div style={{ width: 280, flexShrink: 0 }}>
           {canManage && (
             <Button
               block
@@ -169,7 +169,7 @@ export default function RolesView() {
         </div>
 
         {/* Editor */}
-        <div style={{ flex: 1, minWidth: 320 }}>
+        <div style={{ flex: 1, minWidth: 360 }}>
           {!draft ? (
             <Empty description={t("selectRolePrompt")} />
           ) : (

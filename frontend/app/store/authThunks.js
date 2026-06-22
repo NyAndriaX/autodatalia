@@ -1,5 +1,6 @@
 import { authStart, authSuccess, authError, authLogout } from "./authSlice";
 import { addNotification, clearNotifications } from "./uiSlice";
+import { resetEditor } from "./editorSlice";
 import { authService } from "../lib/authService";
 
 export function restoreSessionThunk() {
@@ -57,6 +58,7 @@ export function logoutThunk() {
     } finally {
       // Wipe in-memory notifications so the next session doesn't inherit
       // a stale "publish succeeded" banner from someone else's flow.
+      dispatch(resetEditor());
       dispatch(clearNotifications());
       dispatch(authLogout());
       dispatch(addNotification({ messageKey: "signedOut", type: "info" }));

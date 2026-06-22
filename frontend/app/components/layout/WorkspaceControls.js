@@ -3,13 +3,14 @@
 import { useEffect, useState, useCallback } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import { useTranslations } from "next-intl";
-import { Dropdown, Popover, Badge, Button, Empty, message } from "antd";
+import { Dropdown, Popover, Badge, Button, Empty, Input, Modal, message } from "antd";
 import {
   AppstoreOutlined,
   MailOutlined,
   CheckOutlined,
   CloseOutlined,
   DownOutlined,
+  PlusOutlined,
 } from "@ant-design/icons";
 import { useIsMobile } from "../../lib/useIsMobile";
 import { restoreSessionThunk } from "../../store/authThunks";
@@ -39,6 +40,8 @@ export default function WorkspaceControls() {
   const [workspaces, setWorkspaces] = useState([]);
   const [invites, setInvites] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState("");
 
   const loadWorkspaces = useCallback(async () => {
     setWorkspaces(await fetchMyWorkspaces());
@@ -110,16 +113,33 @@ export default function WorkspaceControls() {
     }
   };
 
+  const openCreateModal = () => {
+    if (busy) return;
+    setWorkspaceName("");
+    setCreateOpen(true);
+  };
+
+  const closeCreateModal = () => {
+    if (busy) return;
+    setCreateOpen(false);
+    setWorkspaceName("");
+  };
+
   // Create a new workspace (so a user can own more than just their home one).
   const onCreate = async () => {
     if (busy) return;
-    const name = (typeof window !== "undefined" ? window.prompt(t("createWorkspacePrompt")) : "") || "";
-    if (!name.trim()) return;
+    const name = workspaceName.trim();
+    if (!name) {
+      message.warning(t("createWorkspacePrompt"));
+      return;
+    }
     setBusy(true);
     try {
-      await createWorkspace(name.trim());
+      await createWorkspace(name);
       await refreshWorkspaceData();
       await loadWorkspaces();
+      setCreateOpen(false);
+      setWorkspaceName("");
       message.success(t("workspaceCreated"));
     } catch (e) {
       message.error(e?.message || t("createFailed"));
@@ -132,6 +152,13 @@ export default function WorkspaceControls() {
 
   const wsMenu = {
     items: [
+      {
+        key: "__create__",
+        icon: <PlusOutlined />,
+        label: <strong>{t("createWorkspace")}</strong>,
+        onClick: openCreateModal,
+      },
+      { type: "divider" },
       ...workspaces.map((w) => ({
         key: String(w.id),
         label: (
@@ -143,12 +170,6 @@ export default function WorkspaceControls() {
         ),
         onClick: () => onSwitch(w.id),
       })),
-      { type: "divider" },
-      {
-        key: "__create__",
-        label: <span>＋ {t("createWorkspace")}</span>,
-        onClick: onCreate,
-      },
     ],
   };
 
@@ -209,6 +230,15 @@ export default function WorkspaceControls() {
         </Button>
       </Dropdown>
 
+      <Button
+        size="small"
+        icon={<PlusOutlined />}
+        onClick={openCreateModal}
+        loading={busy}
+        aria-label={t("createWorkspace")}
+        title={t("createWorkspace")}
+      />
+
       <Popover
         content={invitesContent}
         trigger="click"
@@ -219,6 +249,35 @@ export default function WorkspaceControls() {
           <Button size="small" icon={<MailOutlined />} aria-label={t("invitations")} />
         </Badge>
       </Popover>
+
+      <Modal
+        title={t("createWorkspace")}
+        open={createOpen}
+        onOk={onCreate}
+        onCancel={closeCreateModal}
+        okText={t("createWorkspace")}
+        confirmLoading={busy}
+        destroyOnHidden
+      >
+        <div style={{ display: "grid", gap: 12 }}>
+          <label
+            htmlFor="workspace-create-name"
+            style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)" }}
+          >
+            {t("createWorkspacePrompt")}
+          </label>
+          <Input
+            id="workspace-create-name"
+            size="large"
+            value={workspaceName}
+            onChange={(e) => setWorkspaceName(e.target.value)}
+            onPressEnter={onCreate}
+            placeholder={t("createWorkspacePrompt")}
+            autoFocus
+            maxLength={120}
+          />
+        </div>
+      </Modal>
     </div>
   );
 }

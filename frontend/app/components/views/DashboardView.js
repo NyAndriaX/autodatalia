@@ -5,7 +5,7 @@ import { useSelector, useDispatch } from "react-redux";
 import { useTranslations, useFormatter } from "next-intl";
 import { fetchConnections } from "../../lib/oauthService";
 import { setActiveView } from "../../store/uiSlice";
-import { PLATFORMS, STATUS_META, activePlatformIds } from "../../lib/platforms";
+import { PLATFORMS, PLATFORM_MAP, STATUS_LABEL_KEYS, STATUS_META, activePlatformIds } from "../../lib/platforms";
 import { startOfToday, isoDateKey, addDays, parseDateKey } from "../../lib/dateUtils";
 import { useIsMobile } from "../../lib/useIsMobile";
 import {
@@ -215,7 +215,7 @@ function AudienceCard({ audience, totalAudience, onManage }) {
   );
 }
 
-function RecentPost({ post }) {
+function RecentPost({ post, onClick }) {
   const t = useTranslations("dashboard");
   const STATUS_LABELS = {
     published: t("statusPublished"),
@@ -230,8 +230,24 @@ function RecentPost({ post }) {
   const ids = activePlatformIds(post.platforms);
   const statusColor = STATUS_COLORS[post.status] || STATUS_COLORS.draft;
   return (
-    <div className="flex items-start gap-3 px-5 py-3.5 transition-all duration-150 hover:bg-[var(--bg-card-hover)]"
-      style={{ borderBottom:"1px solid var(--border-default)" }}>
+    <div
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onClick={() => onClick?.(post)}
+      onKeyDown={(event) => {
+        if (!onClick) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick(post);
+        }
+      }}
+      className="flex w-full items-start gap-3 px-5 py-3.5 text-left transition-all duration-150 hover:bg-[var(--bg-card-hover)]"
+      style={{
+        borderBottom:"1px solid var(--border-default)",
+        background: "transparent",
+        cursor: onClick ? "pointer" : "default",
+      }}
+    >
       <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-black text-white"
         style={{ background: ids.length > 0 ? (PLATFORM_COLORS[ids[0]] || "#64748b") : "#64748b" }}>
         {ids.length > 0 ? ids[0][0].toUpperCase() : "?"}
@@ -254,6 +270,7 @@ function RecentPost({ post }) {
         </span>
         {post.permalink && (
           <a href={post.permalink} target="_blank" rel="noopener noreferrer"
+            onClick={(event) => event.stopPropagation()}
             className="rounded p-1 transition-opacity hover:opacity-70"
             style={{ color:"var(--accent-primary)" }}>
             <ExternalLink size={12} />
@@ -300,6 +317,7 @@ export default function DashboardView() {
   const today    = useMemo(() => parseDateKey(todayKey), [todayKey]);
 
   const [oauthState, setOauthState] = useState(null);
+  const [selectedPost, setSelectedPost] = useState(null);
   useEffect(() => {
     let alive = true;
     fetchConnections().then((d) => { if (alive) setOauthState(d?.providers || {}); });
@@ -348,9 +366,21 @@ export default function DashboardView() {
       const hit = (p.publish_results || []).find((r) => r?.ok && r?.permalink_url);
       return {
         key: p.id||i, content: p.content, platforms: p.platforms||{},
-        permalink: hit?.permalink_url||null, scheduledDate: p.scheduledDate||null, status: p.status,
+        permalink: hit?.permalink_url||null,
+        scheduledDate: p.scheduledDate||null,
+        status: p.status,
+        publishedAt: p.published_at || null,
+        publishResults: Array.isArray(p.publish_results) ? p.publish_results : [],
       };
     }), [scheduledPosts]);
+
+  const selectedTargets = useMemo(
+    () =>
+      (selectedPost?.publishResults || []).filter(
+        (result) => result?.ok && result?.permalink_url
+      ),
+    [selectedPost]
+  );
 
   const week = useMemo(() => Array.from({ length: 7 }, (_, i) => {
     const date = addDays(today, i);
@@ -476,7 +506,9 @@ export default function DashboardView() {
             </button>
           </div>
         ) : (
-          recentPublished.map((p) => <RecentPost key={p.key} post={p} />)
+          recentPublished.map((p) => (
+            <RecentPost key={p.key} post={p} onClick={setSelectedPost} />
+          ))
         )}
       </div>
 
@@ -492,6 +524,146 @@ export default function DashboardView() {
           <ActionCard icon={BarChart2}  title={tSidebar("analytics")}         description={t("actionAnalyticsDesc")}      color="#059669" onClick={() => dispatch(setActiveView("analytics"))} />
         </div>
       </div>
+
+      {selectedPost && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "rgba(15, 23, 42, 0.55)" }}
+          onClick={() => setSelectedPost(null)}
+        >
+          <div
+            className="w-full max-w-2xl overflow-hidden rounded-[28px]"
+            style={{
+              background: "var(--bg-card)",
+              border: "1px solid var(--border-default)",
+              boxShadow: "0 28px 80px rgba(15, 23, 42, 0.28)",
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div
+              className="flex items-start justify-between gap-4 px-6 py-5"
+              style={{ borderBottom: "1px solid var(--border-default)" }}
+            >
+              <div className="min-w-0">
+                <p
+                  className="text-[11px] font-bold uppercase tracking-widest"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  {t("recentPublishedPosts")}
+                </p>
+                <h3
+                  className="mt-1 text-xl font-extrabold"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  {t("publishedPostDetails")}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedPost(null)}
+                className="rounded-xl px-3 py-2 text-sm font-semibold transition-opacity hover:opacity-70"
+                style={{
+                  border: "1px solid var(--border-default)",
+                  background: "var(--bg-secondary)",
+                  color: "var(--text-secondary)",
+                }}
+              >
+                {t("close")}
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-5 px-6 py-5">
+              <div className="flex flex-wrap items-center gap-3">
+                <span
+                  className="rounded-full px-3 py-1 text-xs font-bold"
+                  style={{
+                    background: (STATUS_COLORS[selectedPost.status] || STATUS_COLORS.draft).bg,
+                    color: (STATUS_COLORS[selectedPost.status] || STATUS_COLORS.draft).text,
+                  }}
+                >
+                  {t(STATUS_LABEL_KEYS[selectedPost.status] || "statusDraft")}
+                </span>
+                <span className="text-sm" style={{ color: "var(--text-muted)" }}>
+                  {selectedPost.scheduledDate || "—"}
+                </span>
+                {selectedPost.publishedAt ? (
+                  <span className="text-sm" style={{ color: "var(--text-muted)" }}>
+                    {format.dateTime(new Date(selectedPost.publishedAt * 1000), {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    })}
+                  </span>
+                ) : null}
+              </div>
+
+              <div
+                className="rounded-2xl p-4 text-sm leading-7"
+                style={{
+                  background: "var(--bg-secondary)",
+                  border: "1px solid var(--border-default)",
+                  color: "var(--text-primary)",
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {selectedPost.content || t("noCaption")}
+              </div>
+
+              <div>
+                <p
+                  className="mb-3 text-[11px] font-bold uppercase tracking-widest"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  {t("publishedLinks")}
+                </p>
+                {selectedTargets.length === 0 ? (
+                  <p className="text-sm" style={{ color: "var(--text-muted)" }}>
+                    {t("noPublishedLinks")}
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {selectedTargets.map((result, index) => {
+                      const platform = PLATFORM_MAP[result.platform] || null;
+                      const Icon = platform?.icon;
+                      const color = platform?.color || "var(--accent-primary)";
+                      const label = result.target_label || platform?.label || result.platform || t("openLivePost");
+                      return (
+                        <a
+                          key={`${result.platform || "unknown"}-${result.target_id || index}`}
+                          href={result.permalink_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center justify-between gap-3 rounded-2xl px-4 py-3 transition-transform duration-150 hover:-translate-y-0.5"
+                          style={{
+                            background: `${color}12`,
+                            border: `1px solid ${color}33`,
+                            color,
+                          }}
+                        >
+                          <span className="flex min-w-0 items-center gap-3">
+                            <span
+                              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white"
+                              style={{ background: color }}
+                            >
+                              {Icon ? <Icon size={18} /> : <ExternalLink size={16} />}
+                            </span>
+                            <span className="min-w-0">
+                              <span className="block truncate text-sm font-bold">{platform?.label || result.platform}</span>
+                              <span className="block truncate text-xs" style={{ color: "var(--text-secondary)" }}>
+                                {label}
+                              </span>
+                            </span>
+                          </span>
+                          <ExternalLink size={16} />
+                        </a>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

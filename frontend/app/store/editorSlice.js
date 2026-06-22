@@ -15,6 +15,7 @@ function freshPost() {
     ratios: {},
     status: "draft", // "draft" | "pending" | "approved" | "published" | "error"
     scheduledDate: null,
+    time: null,
     media: [],
     // TikTok compose flags — the audit requires all four be exposed before publish.
     tiktok: {
@@ -87,6 +88,7 @@ const editorSlice = createSlice({
         ratios: p.ratios || {},
         status: p.status || "draft",
         scheduledDate: p.scheduledDate || null,
+        time: p.time || null,
         media: Array.isArray(p.media) ? p.media : [],
         tiktok: { ...state.currentPost.tiktok, ...(p.tiktok || {}) },
       };
@@ -95,6 +97,32 @@ const editorSlice = createSlice({
     // first persist so subsequent saves update the same draft).
     setDraftId: (state, action) => {
       state.currentPost.draftId = action.payload || null;
+    },
+    hydrateEditorState: (state, action) => {
+      const next = action.payload || {};
+      const post = next.currentPost || {};
+      const ai = next.aiGeneration || {};
+      state.currentPost = {
+        ...freshPost(),
+        ...post,
+        platforms:
+          post.platforms && typeof post.platforms === "object"
+            ? { ...freshPost().platforms, ...post.platforms }
+            : freshPost().platforms,
+        ratios:
+          post.ratios && typeof post.ratios === "object" ? post.ratios : {},
+        media: Array.isArray(post.media) ? post.media : [],
+        tiktok: { ...freshPost().tiktok, ...(post.tiktok || {}) },
+      };
+      state.aiGeneration = {
+        ...freshAi(),
+        ...ai,
+        isGenerating: false,
+        isApplyingAction: false,
+        variants: Array.isArray(ai.variants) ? ai.variants : [],
+        selectedVariant:
+          typeof ai.selectedVariant === "number" ? ai.selectedVariant : null,
+      };
     },
     // Reset the editor to a blank post — wired to the "New post" button so a
     // fresh post never inherits a previous draft's id/content.
@@ -158,6 +186,7 @@ export const {
   setStatus,
   loadDraft,
   setDraftId,
+  hydrateEditorState,
   resetEditor,
   addMedia,
   updateMedia,

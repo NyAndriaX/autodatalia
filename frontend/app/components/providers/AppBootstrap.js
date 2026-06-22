@@ -2,18 +2,21 @@
 
 import { useEffect, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { setTheme } from "../../store/uiSlice";
+import { setLocale, setTheme } from "../../store/uiSlice";
 import { hydrateScheduledPosts } from "../../store/calendarSlice";
+import { hydrateEditorState } from "../../store/editorSlice";
 import { restoreSessionThunk, refreshUserThunk } from "../../store/authThunks";
 import { loadMessagesThunk } from "../../store/searchThunks";
 import { loadScheduledPostsThunk } from "../../store/calendarThunks";
 import { loadScheduledPosts, saveScheduledPosts } from "../../lib/calendarStorage";
+import { loadEditorState, saveEditorState } from "../../lib/editorWorkspaceStorage";
 import {
   getStoredThemePref,
   storeThemePref,
   resolveTheme,
   applyTheme,
 } from "../../lib/theme";
+import { loadWorkspaceLocale, saveWorkspaceLocale } from "../../lib/workspaceLocaleStorage";
 
 // Flip the theme with a smooth, compositor-driven crossfade where supported
 // (View Transitions API); otherwise apply it instantly (no per-element lag).
@@ -33,8 +36,14 @@ function applyThemeAnimated(next) {
 export default function AppBootstrap() {
   const dispatch = useDispatch();
   const theme = useSelector((s) => s.ui.theme);
+  const locale = useSelector((s) => s.ui.locale);
   const scheduledPosts = useSelector((s) => s.calendar.scheduledPosts);
+  const editor = useSelector((s) => s.editor);
+  const activeWorkspaceId = useSelector((s) => s.auth.user?.workspace?.id);
   const didInit = useRef(false);
+  const hydratedWorkspaceRef = useRef(null);
+  const skipNextEditorSaveRef = useRef(null);
+  const skipNextLocaleSaveRef = useRef(null);
 
   // One-time hydration. Backend is the source of truth; localStorage is the
   // offline fallback. If the backend has no posts, we let the CalendarView
@@ -61,6 +70,43 @@ export default function AppBootstrap() {
     if (!didInit.current) return;
     saveScheduledPosts(scheduledPosts);
   }, [scheduledPosts]);
+
+  useEffect(() => {
+    if (!didInit.current || !activeWorkspaceId) {
+      hydratedWorkspaceRef.current = null;
+      skipNextEditorSaveRef.current = null;
+      skipNextLocaleSaveRef.current = null;
+      return;
+    }
+    if (hydratedWorkspaceRef.current === activeWorkspaceId) return;
+    skipNextEditorSaveRef.current = activeWorkspaceId;
+    skipNextLocaleSaveRef.current = activeWorkspaceId;
+    hydratedWorkspaceRef.current = activeWorkspaceId;
+    dispatch(
+      hydrateEditorState(loadEditorState(activeWorkspaceId) || undefined)
+    );
+    dispatch(
+      setLocale(loadWorkspaceLocale(activeWorkspaceId, locale))
+    );
+  }, [activeWorkspaceId, dispatch, locale]);
+
+  useEffect(() => {
+    if (!didInit.current || !activeWorkspaceId) return;
+    if (skipNextEditorSaveRef.current === activeWorkspaceId) {
+      skipNextEditorSaveRef.current = null;
+      return;
+    }
+    saveEditorState(activeWorkspaceId, editor);
+  }, [activeWorkspaceId, editor]);
+
+  useEffect(() => {
+    if (!didInit.current || !activeWorkspaceId) return;
+    if (skipNextLocaleSaveRef.current === activeWorkspaceId) {
+      skipNextLocaleSaveRef.current = null;
+      return;
+    }
+    saveWorkspaceLocale(activeWorkspaceId, locale);
+  }, [activeWorkspaceId, locale]);
 
   // Poll /posts and /messages every 30 s so the calendar reflects scheduler
   // activity (status flips to "published"/"error") and the bell picks up

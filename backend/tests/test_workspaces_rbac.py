@@ -173,6 +173,85 @@ def test_permission_change_is_live():
     ).status_code == 403
 
 
+def test_admin_cannot_create_or_update_roles_above_their_permissions():
+    settings.allow_open_auth = False
+    owner = _new_client()
+    _register(owner, "owner@subset.com", "Owner")
+    ws_id = owner.get("/workspace").json()["id"]
+    admin, _ = _invite_and_accept(owner, ws_id, "admin@subset.com", "Admin", "Admin")
+
+    create_resp = admin.post(
+        "/workspace/roles",
+        json={"name": "Too powerful", "permissions": ["posts.read", "workspace.manage"]},
+    )
+    assert create_resp.status_code == 403
+
+    editor_role = next(
+        r for r in owner.get("/workspace/roles").json()["roles"] if r["name"] == "Editor"
+    )
+    update_resp = admin.patch(
+        f"/workspace/roles/{editor_role['id']}",
+        json={"name": "Editor+", "permissions": ["posts.read", "workspace.manage"]},
+    )
+    assert update_resp.status_code == 400  # built-in role remains immutable
+
+    custom = owner.post(
+        "/workspace/roles",
+        json={"name": "Scoped", "permissions": ["posts.read", "automation.read"]},
+    )
+    assert custom.status_code == 200
+    custom_id = custom.json()["role"]["id"]
+
+    custom_update = admin.patch(
+        f"/workspace/roles/{custom_id}",
+        json={"name": "Scoped+", "permissions": ["posts.read", "workspace.manage"]},
+    )
+    assert custom_update.status_code == 403
+
+
+def test_admin_cannot_invite_or_reassign_roles_above_their_permissions():
+    settings.allow_open_auth = False
+    owner = _new_client()
+    _register(owner, "owner@scope.com", "Owner")
+    ws_id = owner.get("/workspace").json()["id"]
+    admin, admin_uid = _invite_and_accept(owner, ws_id, "admin@scope.com", "Admin", "Admin")
+    editor, editor_uid = _invite_and_accept(owner, ws_id, "editor@scope.com", "Editor", "Editor")
+    viewer_role = workspaces.get_role_id_by_name(ws_id, "Viewer")
+
+    outsider = _new_client()
+    _register(outsider, "outsider@scope.com", "Outsider")
+
+    owner_only_role = owner.post(
+        "/workspace/roles",
+        json={"name": "Ownerish", "permissions": ["members.read", "workspace.manage"]},
+    )
+    assert owner_only_role.status_code == 200
+    owner_only_role_id = owner_only_role.json()["role"]["id"]
+
+    invite_resp = admin.post(
+        "/workspace/members/invite",
+        json={"email": "outsider@scope.com", "role_id": owner_only_role_id},
+    )
+    assert invite_resp.status_code == 403
+
+    reassign_resp = admin.patch(
+        f"/workspace/members/{editor_uid}",
+        json={"role_id": owner_only_role_id},
+    )
+    assert reassign_resp.status_code == 403
+
+    # Admin also can't manage a member currently holding permissions the admin lacks.
+    assert owner.patch(
+        f"/workspace/members/{editor_uid}",
+        json={"role_id": owner_only_role_id},
+    ).status_code == 200
+    downgrade_resp = admin.patch(
+        f"/workspace/members/{editor_uid}",
+        json={"role_id": viewer_role},
+    )
+    assert downgrade_resp.status_code == 403
+
+
 # ── 7. Uploaded media is isolated per workspace ───────────────────────────
 def test_media_is_isolated_between_workspaces():
     settings.allow_open_auth = False
@@ -346,7 +425,7 @@ def test_delete_owner_transfers_ownership():
 
 
 # ── 14. Admin deletes another member's account ────────────────────────────
-def test_admin_deletes_member_account():
+def test_member_account_delete_route_is_not_exposed():
     from app.db import get_user_by_email
 
     settings.allow_open_auth = False
@@ -357,14 +436,14 @@ def test_admin_deletes_member_account():
     member, member_uid = _invite_and_accept(owner, ws_id, "victim@adm.com", "Editor", "Victim")
 
     # Can't target yourself or the owner via this endpoint.
-    assert owner.delete(f"/workspace/members/{owner_uid}/account").status_code == 400
+    assert owner.delete(f"/workspace/members/{owner_uid}/account").status_code == 404
     # An Editor lacks members.manage → forbidden.
-    assert member.delete(f"/workspace/members/{owner_uid}/account").status_code == 403
+    assert member.delete(f"/workspace/members/{owner_uid}/account").status_code == 404
 
     # Owner fully deletes the member's account.
-    assert owner.delete(f"/workspace/members/{member_uid}/account").status_code == 200
-    assert get_user_by_email("victim@adm.com") is None
-    assert all(m["user_id"] != member_uid for m in workspaces.list_members(ws_id))
+    assert owner.delete(f"/workspace/members/{member_uid}/account").status_code == 404
+    assert get_user_by_email("victim@adm.com") is not None
+    assert any(m["user_id"] == member_uid for m in workspaces.list_members(ws_id))
 
 
 # ── 15. A personal (home) workspace can never be deleted ──────────────────
@@ -438,7 +517,7 @@ def test_owner_role_cannot_be_assigned_via_role_change():
     # Nor can an Admin escalate somebody (or themselves) to Owner.
     assert admin.patch(
         f"/workspace/members/{member_uid}", json={"role_id": owner_role}
-    ).status_code == 400
+    ).status_code == 403
     assert admin.patch(
         f"/workspace/members/{admin_uid}", json={"role_id": owner_role}
     ).status_code == 400

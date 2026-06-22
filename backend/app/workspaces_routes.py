@@ -53,6 +53,32 @@ class CreateWorkspaceBody(BaseModel):
     name: str = ""
 
 
+def _clean_permission_keys(raw: list[str] | None) -> set[str]:
+    return {str(p).strip() for p in (raw or []) if str(p).strip()}
+
+
+def _require_permission_subset(
+    requested: list[str] | None,
+    allowed: set[str],
+    *,
+    label: str,
+) -> set[str]:
+    keys = _clean_permission_keys(requested)
+    unknown = sorted(keys - set(workspaces.ALL_PERMISSIONS))
+    if unknown:
+        raise HTTPException(
+            400,
+            f"Unknown permissions in {label}: {', '.join(unknown)}.",
+        )
+    disallowed = sorted(keys - set(allowed))
+    if disallowed:
+        raise HTTPException(
+            403,
+            f"You can't grant permissions you don't have: {', '.join(disallowed)}.",
+        )
+    return keys
+
+
 # ── Workspace ─────────────────────────────────────────────────────────────
 @router.get("/workspace")
 async def workspace_info(
@@ -102,6 +128,11 @@ async def members_invite(
     role = workspaces.get_role(body.role_id)
     if not role or int(role.get("workspace_id") or 0) != ctx.workspace_id:
         raise HTTPException(400, "Unknown role for this workspace.")
+    _require_permission_subset(
+        role.get("permissions"),
+        ctx.permissions,
+        label=f'role "{role.get("name") or body.role_id}"',
+    )
     rate_key = _auth_rate_limit_check("invite", request, f"{ctx.workspace_id}:{email}")
     # Invitations are restricted to people who already have a Datalia account —
     # you can't invite an arbitrary email into existence.
@@ -149,8 +180,25 @@ async def members_change_role(
 ) -> dict[str, Any]:
     if user_id == ctx.user_id:
         raise HTTPException(400, "You can't change your own role.")
-    if not workspaces.get_membership(user_id, ctx.workspace_id):
+    membership = workspaces.get_membership(user_id, ctx.workspace_id)
+    if not membership:
         raise HTTPException(404, "Member not found.")
+    current_role = workspaces.get_role(int(membership.get("role_id") or 0))
+    if not current_role or int(current_role.get("workspace_id") or 0) != ctx.workspace_id:
+        raise HTTPException(400, "Member role is invalid for this workspace.")
+    target_role = workspaces.get_role(body.role_id)
+    if not target_role or int(target_role.get("workspace_id") or 0) != ctx.workspace_id:
+        raise HTTPException(400, "Unknown role for this workspace.")
+    _require_permission_subset(
+        current_role.get("permissions"),
+        ctx.permissions,
+        label=f'current role "{current_role.get("name") or membership.get("role_id")}"',
+    )
+    _require_permission_subset(
+        target_role.get("permissions"),
+        ctx.permissions,
+        label=f'target role "{target_role.get("name") or body.role_id}"',
+    )
     if not workspaces.change_member_role(ctx.workspace_id, user_id, body.role_id):
         raise HTTPException(400, "Cannot change this member's role (unknown role, or demoting the owner).")
     return {"ok": True}
@@ -168,7 +216,6 @@ async def members_remove(
     return {"ok": True}
 
 
-@router.delete("/workspace/members/{user_id}/account")
 async def members_delete_account(
     user_id: int,
     ctx: WorkspaceContext = Depends(require_permission("members.manage")),
@@ -237,7 +284,10 @@ async def roles_create(
         raise HTTPException(400, "Role name is required.")
     if workspaces.get_role_id_by_name(ctx.workspace_id, name):
         raise HTTPException(400, "A role with that name already exists.")
-    role_id = workspaces.create_role(ctx.workspace_id, name, body.permissions)
+    permissions = sorted(
+        _require_permission_subset(body.permissions, ctx.permissions, label="this role")
+    )
+    role_id = workspaces.create_role(ctx.workspace_id, name, permissions)
     return {"role": workspaces.get_role(role_id)}
 
 
@@ -252,10 +302,13 @@ async def roles_update(
         raise HTTPException(404, "Role not found.")
     if role["is_system"]:
         raise HTTPException(400, "Built-in roles can't be modified.")
+    permissions = sorted(
+        _require_permission_subset(body.permissions, ctx.permissions, label="this role")
+    )
     workspaces.update_role(
         role_id,
         name=(body.name.strip() or None) if body.name else None,
-        permissions=body.permissions,
+        permissions=permissions,
     )
     return {"role": workspaces.get_role(role_id)}
 

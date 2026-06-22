@@ -24,6 +24,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .i18n_backend import normalize_locale, t as t_backend
 from .publish import build_targets_from_post, publish_to_targets
 from .services import messages_append, posts_list, posts_update
 from .timezones import get_default_timezone_name
@@ -117,6 +118,7 @@ def _summarize_failures(results: list[dict[str, Any]]) -> str:
 def _record_messages_for_results(
     post_id: str,
     results: list[dict[str, Any]],
+    locale: str,
 ) -> None:
     """Append one bell-feed entry per result so the user sees scheduler activity.
 
@@ -133,7 +135,12 @@ def _record_messages_for_results(
                 "post_id": post_id,
                 "platform": platform,
                 "target_label": target,
-                "message": f"Scheduled post published to {target} ({platform}).",
+                "message": t_backend(
+                    locale,
+                    "scheduler_published",
+                    target=target,
+                    platform=platform,
+                ),
                 "url": r.get("permalink_url"),
             })
         else:
@@ -142,7 +149,13 @@ def _record_messages_for_results(
                 "post_id": post_id,
                 "platform": platform,
                 "target_label": target,
-                "message": f"{target} ({platform}) failed: {r.get('error') or 'unknown'}",
+                "message": t_backend(
+                    locale,
+                    "scheduler_failed",
+                    target=target,
+                    platform=platform,
+                    error=r.get("error") or "unknown",
+                ),
                 "url": None,
             })
 
@@ -165,6 +178,7 @@ async def fire_post(post: dict[str, Any]) -> dict[str, Any]:
     # the per-user scoping in routes/oauth). `owner_scope` is threaded through
     # so token lookups and any owner-scoped writes use the same identity.
     owner_scope = post.get("workspace_id")  # the post's WORKSPACE owns the accounts
+    locale = normalize_locale(post.get("locale"))
     targets, skipped = await build_targets_from_post(
         platforms=post.get("platforms") or {},
         media_url=media_url,
@@ -184,10 +198,7 @@ async def fire_post(post: dict[str, Any]) -> dict[str, Any]:
         messages_append({
             "kind": "publish_error",
             "post_id": pid,
-            "message": (
-                "Scheduled post could not fire — no connected accounts for the "
-                "selected platforms. Reconnect in Settings."
-            ),
+            "message": t_backend(locale, "scheduler_no_targets"),
         })
         return updated or post
 
@@ -207,7 +218,7 @@ async def fire_post(post: dict[str, Any]) -> dict[str, Any]:
         messages_append({
             "kind": "publish_error",
             "post_id": pid,
-            "message": f"Scheduled post crashed: {exc}",
+            "message": t_backend(locale, "scheduler_crashed", error=exc),
         })
         return updated or post
 
@@ -217,7 +228,7 @@ async def fire_post(post: dict[str, Any]) -> dict[str, Any]:
     # drops when only Facebook posted.
     results = list(publish_results) + list(skipped)
     any_ok = any(r.get("ok") for r in results)
-    _record_messages_for_results(pid, results)
+    _record_messages_for_results(pid, results, locale)
     # posts_update skips None values (so empty PATCH bodies don't clobber
     # existing data), which means we only write `error` on the failure
     # branch. On success the field stays absent from the JSON — readers

@@ -718,7 +718,7 @@ def test_generate_forwards_tone_hint(workspace_client, monkeypatch):
     assert seen["tone"] == "playful and witty"
 
 
-def test_validation_submit_creates_pending_post_and_message(workspace_client, monkeypatch):
+def test_validation_submit_creates_awaiting_validation_post_and_message(workspace_client, monkeypatch):
     settings.telegram_bot_token = "telegram-test"
     settings.telegram_default_chat_id = "12345"
     settings.telegram_webhook_secret = _TG_SECRET
@@ -726,7 +726,7 @@ def test_validation_submit_creates_pending_post_and_message(workspace_client, mo
 
     async def fake_send_validation_card(post, chat_id, *, user_id=None):
         assert chat_id == "12345"
-        assert post["status"] == "pending"
+        assert post["status"] == "awaiting_validation"
         return 321
 
     monkeypatch.setattr(tg, "_send_validation_card", fake_send_validation_card)
@@ -740,11 +740,11 @@ def test_validation_submit_creates_pending_post_and_message(workspace_client, mo
     )
     assert r.status_code == 200
     body = r.json()
-    assert body["status"] == "pending"
+    assert body["status"] == "awaiting_validation"
     assert body["message_id"] == 321
     posts = posts_list(user_id=ws_id)
     assert len(posts) == 1
-    assert posts[0]["status"] == "pending"
+    assert posts[0]["status"] == "awaiting_validation"
     feed = messages_list(user_id=ws_id)
     assert any("Telegram validation" in m["message"] or "Submitted post" in m["message"] for m in feed)
 
@@ -836,7 +836,7 @@ def test_telegram_webhook_approve_schedules_automation_post(workspace_client, mo
             "id": "post-1",
             "content": "approve me",
             "platforms": {"facebook": True},
-            "status": "pending",
+            "status": "awaiting_validation",
             "scheduledDate": "2026-06-01",
             "source_rule_id": "rule-1",
             "source_rule_updated_at": rule["updated_at"],
@@ -856,6 +856,45 @@ def test_telegram_webhook_approve_schedules_automation_post(workspace_client, mo
             "callback_query": {
                 "id": "cb_1",
                 "data": "va|a|post-1",
+                "message": {"chat": {"id": 123}},
+            }
+        },
+    )
+    assert r.status_code == 200
+    refreshed = next(p for p in posts_list(user_id=ws_id) if p["id"] == post["id"])
+    assert refreshed["status"] == "scheduled"
+
+
+def test_telegram_webhook_approve_manual_future_post_stays_scheduled(workspace_client, monkeypatch):
+    settings.telegram_bot_token = "telegram-test"
+    settings.telegram_webhook_secret = _TG_SECRET
+    ws_id = workspace_client.get("/workspace").json()["id"]
+    post = tg.posts_create(
+        {
+            "id": "post-manual-future",
+            "content": "approve later",
+            "platforms": {"facebook": True},
+            "status": "awaiting_validation",
+            "scheduledDate": "2099-06-01",
+            "time": "10:00",
+            "timezone": "UTC",
+            "workspace_id": ws_id,
+        }
+    )
+
+    async def fake_answer_callback(callback_query_id, text="", *, user_id=None):
+        assert callback_query_id == "cb_future"
+        assert "scheduled" in text.lower()
+
+    monkeypatch.setattr(tg, "_answer_callback", fake_answer_callback)
+
+    r = workspace_client.post(
+        "/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": _TG_SECRET},
+        json={
+            "callback_query": {
+                "id": "cb_future",
+                "data": "va|a|post-manual-future",
                 "message": {"chat": {"id": 123}},
             }
         },
@@ -1199,6 +1238,98 @@ def test_oauth_connections_surfaces_linkedin_target(workspace_client):
     targets = r.json()["providers"]["linkedin"]["targets"]
     assert targets[0]["id"] == "urn:li:person:abc123"
     assert targets[0]["kind"] == "linkedin_member"
+
+
+def test_oauth_connections_surfaces_zernio_target(workspace_client, monkeypatch):
+    async def fake_entry(_workspace_id):
+        return {
+            "id": "zernio",
+            "label": "Zernio",
+            "configured": True,
+            "connected": True,
+            "targets": [
+                {
+                    "id": "acc_fb",
+                    "label": "Binatna",
+                    "kind": "zernio_facebook",
+                    "platform": "facebook",
+                    "provider": "zernio",
+                    "profile_picture_url": "https://example.com/binatna.jpg",
+                    "audience": 1234,
+                }
+            ],
+        }
+
+    monkeypatch.setattr("app.zernio.connections_entry", fake_entry)
+    r = workspace_client.get("/oauth/connections")
+    assert r.status_code == 200
+    target = r.json()["providers"]["zernio"]["targets"][0]
+    assert target["provider"] == "zernio"
+    assert target["platform"] == "facebook"
+    assert target["label"] == "Binatna"
+
+
+def test_dashboard_summary_counts_zernio_platforms(workspace_client, monkeypatch):
+    async def fake_entry(_workspace_id):
+        return {
+            "id": "zernio",
+            "label": "Zernio",
+            "configured": True,
+            "connected": True,
+            "targets": [
+                {"id": "acc_fb", "label": "Binatna", "kind": "zernio_facebook", "platform": "facebook", "provider": "zernio"},
+                {"id": "acc_ig", "label": "@binatna", "kind": "zernio_instagram", "platform": "instagram", "provider": "zernio"},
+            ],
+        }
+
+    monkeypatch.setattr("app.zernio.connections_entry", fake_entry)
+    r = workspace_client.get("/dashboard-summary")
+    assert r.status_code == 200
+    body = r.json()["connections"]
+    assert body["total_connected"] == 2
+    assert body["connected_platforms"] == ["facebook", "instagram"]
+    assert "zernio" in body["connected_providers"]
+
+
+def test_publish_zernio_appends_workspace_notifications(workspace_client, monkeypatch):
+    ws_id = workspace_client.get("/workspace").json()["id"]
+
+    async def fake_publish(workspace_id, **kwargs):
+        assert workspace_id == ws_id
+        return [
+            {
+                "platform": "facebook",
+                "target_id": "acc_fb",
+                "target_label": "Binatna",
+                "ok": True,
+                "platform_post_id": "post_1",
+                "permalink_url": "https://example.com/post/1",
+                "error": None,
+            }
+        ]
+
+    monkeypatch.setattr("app.zernio.publish", fake_publish)
+    r = workspace_client.post(
+        "/publish",
+        json={
+            "content": "hello from zernio",
+            "targets": [
+                {
+                    "platform": "facebook",
+                    "id": "acc_fb",
+                    "label": "Binatna",
+                    "provider": "zernio",
+                }
+            ],
+        },
+    )
+    assert r.status_code == 200
+    messages = messages_list(user_id=ws_id)
+    assert any(msg.get("workspace_id") == ws_id for msg in messages)
+    assert any(
+        msg.get("message") == "Scheduled post published to Binatna (facebook)."
+        for msg in messages
+    )
 
 
 def test_publish_linkedin_text_success(monkeypatch):

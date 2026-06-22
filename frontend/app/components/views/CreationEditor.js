@@ -11,6 +11,7 @@ import {
   setPlatformRatio,
   selectVariant,
   addMedia,
+  loadDraft,
 } from "../../store/editorSlice";
 import {
   generateContentThunk,
@@ -97,6 +98,8 @@ function effectiveRatio(platformId, ratios) {
 
 export default function CreationEditor() {
   const t = useTranslations("creation");
+  const tTikTok = useTranslations("tiktokOptions");
+  const tCommon = useTranslations("common");
   const dispatch = useDispatch();
   const { currentPost, aiGeneration } = useSelector((state) => state.editor);
   const recentPublishes = useSelector((s) => s.ui.recentPublishes);
@@ -105,6 +108,7 @@ export default function CreationEditor() {
   const [showHashtags, setShowHashtags] = useState(false);
   const [confirmRegen, setConfirmRegen] = useState(false);
   const [showPublishConfirm, setShowPublishConfirm] = useState(false);
+  const [showTikTokOptions, setShowTikTokOptions] = useState(false);
   const [aiPicker, setAiPicker] = useState(null); // null | "image" | "video"
   const [generatingMediaKind, setGeneratingMediaKind] = useState(null);
 
@@ -735,7 +739,39 @@ export default function CreationEditor() {
                 </span>
               </div>
 
-              {currentPost.platforms.tiktok && <TikTokOptionsPanel />}
+              {currentPost.platforms.tiktok && (
+                <div
+                  className="rounded-2xl p-4 space-y-3"
+                  style={{
+                    background: "var(--bg-secondary)",
+                    border: "1px solid var(--border-default)",
+                  }}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p
+                        className="text-[10px] uppercase tracking-wider"
+                        style={{ color: "var(--text-muted)" }}
+                      >
+                        {tTikTok("title")}
+                      </p>
+                      <p
+                        className="mt-1 text-xs"
+                        style={{ color: "var(--text-secondary)" }}
+                      >
+                        {tTikTok("modalSummary")}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className={`${btnSecondary} inline-flex items-center gap-2 text-sm`}
+                      onClick={() => setShowTikTokOptions(true)}
+                    >
+                      {tTikTok("openModal")}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -913,6 +949,51 @@ export default function CreationEditor() {
         <AiMediaPicker kind={aiPicker} onClose={() => setAiPicker(null)} />
       )}
 
+      {showTikTokOptions && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6"
+          style={{ background: "rgba(15, 23, 42, 0.52)" }}
+          onClick={() => setShowTikTokOptions(false)}
+        >
+          <div
+            className={`w-full max-w-[560px] rounded-[24px] p-4 sm:p-5 ${fadeIn}`}
+            style={{
+              background: "var(--bg-card)",
+              border: "1px solid var(--border-default)",
+              boxShadow: "var(--shadow-modal)",
+              maxHeight: "min(85vh, 720px)",
+              overflowY: "auto",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label={tTikTok("title")}
+          >
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h3
+                  className="text-lg font-bold"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  {tTikTok("title")}
+                </h3>
+                <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
+                  {tTikTok("modalSummary")}
+                </p>
+              </div>
+              <button
+                type="button"
+                className={`${btnGhost} text-sm`}
+                onClick={() => setShowTikTokOptions(false)}
+              >
+                {tCommon("close")}
+              </button>
+            </div>
+            <TikTokOptionsPanel />
+          </div>
+        </div>
+      )}
+
       {showSchedule && (
         <ScheduleModal
           initialContent={currentPost.content}
@@ -920,6 +1001,7 @@ export default function CreationEditor() {
           // Pre-fill the calendar with the post's date (e.g. set from a calendar
           // day's "+") so the user doesn't have to re-pick it before scheduling.
           initialDate={currentPost.scheduledDate || undefined}
+          initialTime={currentPost.time || undefined}
           // Forward the editor's already-uploaded media (remoteUrl + status)
           // and ratio picks so the backend scheduler can fire the post with
           // the exact same media URL + crops the manual Publish path uses.
@@ -927,13 +1009,21 @@ export default function CreationEditor() {
           initialRatios={currentPost.ratios}
           initialTikTok={currentPost.tiktok}
           onClose={() => setShowSchedule(false)}
-          onSchedule={(post) => {
+          onSchedule={async (post) => {
             // Carry the draft/post id so editing an existing post schedules it
             // in place instead of creating a duplicate (see schedulePostThunk).
-            dispatch(
+            const saved = await dispatch(
               schedulePostThunk({
                 post: { ...post, id: currentPost.draftId || undefined },
                 date: post.scheduledDate,
+              })
+            );
+            dispatch(
+              loadDraft({
+                ...(saved || {}),
+                ...post,
+                id: saved?.id || currentPost.draftId || undefined,
+                status: saved?.status || currentPost.status || "draft",
               })
             );
             setShowSchedule(false);

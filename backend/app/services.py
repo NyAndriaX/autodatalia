@@ -176,6 +176,51 @@ def _media_root(workspace_id: int | str | None = None) -> Path:
     return root / "ws" / str(wid) if wid > 0 else root
 
 
+def _resolve_uploaded_image_path(
+    image_filename: str | None,
+    *,
+    workspace_id: int | str | None = None,
+) -> Path | None:
+    """Resolve an uploaded image inside the caller's workspace media tree.
+
+    Older code only checked ``content_dir/<filename>``, which broke once media
+    moved under ``content_dir/ws/{workspace_id}/...``. The frontend still sends
+    just the filename, so we resolve it against the workspace root first and
+    then fall back to a bounded recursive search inside that root. A final
+    legacy fallback keeps pre-workspace flat files working during migration.
+    """
+    if not image_filename:
+        return None
+    safe_image_name = _safe_filename(image_filename)
+    if not safe_image_name:
+        return None
+
+    media_root = _media_root(workspace_id)
+    direct = media_root / safe_image_name
+    candidates: list[Path] = [direct]
+
+    legacy = settings.content_dir / safe_image_name
+    if legacy != direct:
+        candidates.append(legacy)
+
+    for candidate in candidates:
+        if (
+            candidate.exists()
+            and candidate.is_file()
+            and candidate.suffix.lower() in IMAGE_EXTENSIONS
+        ):
+            return candidate
+
+    if media_root.exists():
+        for candidate in media_root.rglob(safe_image_name):
+            if (
+                candidate.is_file()
+                and candidate.suffix.lower() in IMAGE_EXTENSIONS
+            ):
+                return candidate
+    return None
+
+
 def iter_content_items(*, workspace_id: int | str | None = None) -> list[dict[str, Any]]:
     """Scan a workspace's content directory and return metadata for every image.
 
@@ -798,16 +843,10 @@ async def generate_post_variants(
     # Resolve the optional uploaded image. We accept just the filename so the
     # frontend never has to re-upload bytes — the file is already in our
     # content dir. Anything outside the content dir is silently ignored.
-    image_path = None
-    if image_filename:
-        safe_image_name = _safe_filename(image_filename)
-        candidate = settings.content_dir / safe_image_name
-        if (
-            candidate.exists()
-            and candidate.is_file()
-            and candidate.suffix.lower() in IMAGE_EXTENSIONS
-        ):
-            image_path = candidate
+    image_path = _resolve_uploaded_image_path(
+        image_filename,
+        workspace_id=user_id,
+    )
 
     # Convert the image (if any) to a short cached description so the vision
     # model is hit at most once per file. Repeat generations on the same

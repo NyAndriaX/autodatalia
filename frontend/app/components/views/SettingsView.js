@@ -13,6 +13,8 @@ import {
   readCachedConnections,
   startConnect,
   connectZernio,
+  disconnectZernio,
+  disconnectZernioAccount,
   disconnect as oauthDisconnect,
 } from "../../lib/oauthService";
 import { fetchTelegramStatus, sendTelegramTest } from "../../lib/validationService";
@@ -21,6 +23,7 @@ import { deleteWorkspace, leaveWorkspace } from "../../lib/workspaceService";
 import { authService } from "../../lib/authService";
 import { authLogout } from "../../store/authSlice";
 import { restoreSessionThunk } from "../../store/authThunks";
+import { resetEditor } from "../../store/editorSlice";
 import {
   Send, KeyRound, Palette, Plug, Check, BadgeCheck, Loader2,
   Trash2, RefreshCw, Clock, Users, Settings, HelpCircle, Zap, AlertTriangle, LogOut,
@@ -33,12 +36,7 @@ const TARGET_KIND_FOR_PLATFORM = { facebook:"facebook_page", instagram:"instagra
 // Networks offered for Zernio connect. Zernio supports 15, but Datalia only
 // publishes to our four, so we only offer those (id = slug sent to
 // /oauth/zernio/{id}/start). Mirrors the direct PLATFORMS set.
-const ZERNIO_PLATFORMS = [
-  { id:"facebook",  label:"Facebook" },
-  { id:"instagram", label:"Instagram" },
-  { id:"tiktok",    label:"TikTok" },
-  { id:"linkedin",  label:"LinkedIn" },
-];
+const ZERNIO_PLATFORMS = PLATFORMS;
 
 function formatCompact(n) {
   if (n < 1000)          return String(n);
@@ -165,6 +163,7 @@ function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconn
   const Icon        = p.icon;
   const providerId  = PLATFORM_TO_PROVIDER[p.id];
   const provider    = connections?.[providerId];
+  const providerLoaded = provider !== undefined;
   const connected   = !!provider?.connected;
   const configured  = !!provider?.configured;
   const isPending   = pendingProvider === providerId;
@@ -187,21 +186,21 @@ function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconn
         </span>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-bold leading-tight" style={{ color:"var(--text-primary)" }}>{p.label}</p>
-          {!configured && connections !== null && (
+          {providerLoaded && !configured && connections !== null && (
             <p className="mt-0.5 text-[11px]" style={{ color:"var(--status-error)" }}>
               {t("platformNotConfigured")}
             </p>
           )}
-          {connected && targets.length > 0 && (
+          {providerLoaded && connected && targets.length > 0 && (
             <p className="mt-0.5 text-[11px]" style={{ color:"var(--text-muted)" }}>
               {t("platformAccountsCount", { count: targets.length })} · {targets.map(tgt => tgt.label).join(", ")}
             </p>
           )}
-          {!connected && configured && (
+          {providerLoaded && !connected && configured && (
             <p className="mt-0.5 text-[11px]" style={{ color:"var(--text-muted)" }}>{t("platformNotConnected")}</p>
           )}
         </div>
-        {!configured ? (
+        {providerLoaded && !configured ? (
           <span className="shrink-0 rounded-lg px-2.5 py-1 text-[11px] font-semibold"
             style={{ background:"rgba(239,68,68,.1)", color:"var(--status-error)" }}>
             {t("platformConfigRequired")}
@@ -277,11 +276,21 @@ function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconn
    Distinct from the direct provider cards: one key + one connect flow for 15
    networks. Inline key field (saved via patchBackendKeys → ZERNIO_API_KEY),
    per-network connect buttons, and a "?" help popover. */
-function CarteZernio({ connections, pendingZernio, onConnect, onSaveKey }) {
+function CarteZernio({
+  connections,
+  pendingZernio,
+  onConnect,
+  onDisconnectPlatform,
+  onDisconnectAccount,
+  onSaveKey,
+}) {
   const t          = useTranslations("settings");
   const z          = connections?.zernio;
   const configured = !!z?.configured;
   const targets    = z?.targets || [];
+  const publishReadyCount = targets.filter(
+    (target) => target.can_post !== false && !target.needs_reconnect,
+  ).length;
   const [keyEdit, setKeyEdit]   = useState("");
   const [savingKey, setSaving]  = useState(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -296,10 +305,11 @@ function CarteZernio({ connections, pendingZernio, onConnect, onSaveKey }) {
   return (
     <div className="overflow-hidden rounded-2xl"
       style={{
-        border: `1.5px solid ${configured ? "rgba(29,63,190,.4)" : "var(--border-default)"}`,
-        background: configured ? "rgba(29,63,190,.05)" : "var(--bg-tertiary)",
+        border: configured ? "1px solid rgba(29,63,190,.22)" : "1px solid var(--border-default)",
+        background: configured ? "linear-gradient(180deg, rgba(29,63,190,.035), rgba(29,63,190,.02))" : "var(--bg-tertiary)",
+        boxShadow: configured ? "0 12px 30px rgba(29,63,190,.08)" : "none",
       }}>
-      <div className="flex flex-wrap items-center gap-3 px-4 py-3.5">
+      <div className="flex flex-wrap items-center gap-3 px-6 py-5">
         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white"
           style={{ background:"var(--accent-primary)", boxShadow:"0 4px 12px rgba(29,63,190,.4)" }}>
           <Zap size={16} />
@@ -324,7 +334,7 @@ function CarteZernio({ connections, pendingZernio, onConnect, onSaveKey }) {
       </div>
 
       {showHelp && (
-        <div className="mx-4 mb-3 rounded-xl p-3 text-[11px] leading-relaxed"
+        <div className="mx-6 mb-4 rounded-xl p-3 text-[11px] leading-relaxed"
           style={{ background:"rgba(29,63,190,.07)", border:"1px solid rgba(29,63,190,.2)", color:"var(--text-secondary)" }}>
           <p className="mb-1 font-bold">{t("zernioHelpTitle")}</p>
           {t("zernioHelpBody")}
@@ -335,11 +345,11 @@ function CarteZernio({ connections, pendingZernio, onConnect, onSaveKey }) {
         </div>
       )}
 
-      <div className="px-4 pb-3" style={{ borderTop:"1px solid rgba(29,63,190,.15)" }}>
+      <div className="mx-6 border-t px-0 pb-4 pt-4" style={{ borderColor:"rgba(29,63,190,.14)" }}>
         <p className="mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wider" style={{ color:"var(--text-tertiary)" }}>
           {t("zernioKeyLabel")}
         </p>
-        <div className="flex gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row">
           <input className={inputField} type="text" value={keyEdit}
             onChange={(e) => setKeyEdit(e.target.value)}
             placeholder={configured ? t("zernioKeyPlaceholderSet") : t("zernioKeyPlaceholderUnset")}
@@ -347,7 +357,7 @@ function CarteZernio({ connections, pendingZernio, onConnect, onSaveKey }) {
             data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other"
             style={{ WebkitTextSecurity:"disc" }} />
           <button type="button" onClick={save} disabled={savingKey || !keyEdit.trim()}
-            className={`${btnPrimary} inline-flex shrink-0 items-center gap-1.5 text-xs`}>
+            className={`${btnPrimary} inline-flex items-center justify-center gap-1.5 text-xs sm:shrink-0`}>
             {savingKey ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
             {t("zernioKeySave")}
           </button>
@@ -355,47 +365,125 @@ function CarteZernio({ connections, pendingZernio, onConnect, onSaveKey }) {
         {!configured && (
           <p className="mt-1.5 text-[11px]" style={{ color:"var(--text-muted)" }}>{t("zernioNotConfigured")}</p>
         )}
+        {configured && targets.length === 0 && !z?.error && (
+          <p className="mt-1.5 text-[11px]" style={{ color:"var(--text-muted)" }}>
+            {t("zernioReadyToConnect")}
+          </p>
+        )}
+        {configured && z?.error && (
+          <p className="mt-2 rounded-lg px-3 py-2 text-[11px]"
+            style={{ background:"rgba(239,68,68,.08)", color:"var(--status-error)" }}>
+            {z.error}
+          </p>
+        )}
       </div>
 
       {configured && (
-        <div className="px-4 py-3" style={{ borderTop:"1px solid rgba(29,63,190,.15)" }}>
-          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
-            {t("zernioConnectedAccounts")}
-          </p>
+        <div className="mx-6 border-t px-0 py-4" style={{ borderColor:"rgba(29,63,190,.12)" }}>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
+              {t("zernioConnectedAccounts")}
+            </p>
+            {targets.length > 0 && (
+              <span className="text-[10px] font-semibold" style={{ color:"var(--text-muted)" }}>
+                {t("zernioConnectedAccountsSummary", { total: targets.length, ready: publishReadyCount })}
+              </span>
+            )}
+          </div>
           {targets.length === 0 ? (
             <p className="text-xs" style={{ color:"var(--text-muted)" }}>{t("zernioNoAccounts")}</p>
           ) : (
-            <div className="flex flex-col gap-1.5">
-              {targets.map((tg) => (
-                <div key={tg.id} className="flex items-center gap-2 text-xs" style={{ color:"var(--text-secondary)" }}>
+            <div className="flex flex-col gap-2">
+              {targets.map((tg) => {
+                const platform = PLATFORMS.find((p) => p.id === tg.platform);
+                const PlatformIcon = platform?.icon;
+                const issues = Array.isArray(tg.issues) ? tg.issues.filter(Boolean) : [];
+                const stateTone = tg.needs_reconnect
+                  ? { bg:"rgba(239,68,68,.08)", border:"rgba(239,68,68,.18)" }
+                  : tg.can_post === false
+                  ? { bg:"rgba(245,158,11,.08)", border:"rgba(245,158,11,.18)" }
+                  : { bg:"rgba(29,63,190,.04)", border:"rgba(29,63,190,.14)" };
+                return (
+                <div key={tg.id} className="flex flex-wrap items-center gap-2 rounded-xl border px-2.5 py-2 text-xs" style={{ color:"var(--text-secondary)", background: stateTone.bg, borderColor: stateTone.border }}>
                   {tg.profile_picture_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={tg.profile_picture_url} alt="" className="h-5 w-5 shrink-0 rounded-full object-cover" referrerPolicy="no-referrer" />
+                    <img src={tg.profile_picture_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" referrerPolicy="no-referrer" />
+                  ) : PlatformIcon ? (
+                    <PlatformIcon size={16} className="shrink-0" style={{ color:platform.color }} aria-hidden="true" />
                   ) : (
                     <span className="h-2 w-2 shrink-0 rounded-full" style={{ background:"var(--accent-primary)" }} />
                   )}
-                  <span className="truncate font-medium">{tg.label}</span>
-                  <span className="text-[10px] uppercase" style={{ color:"var(--text-muted)" }}>· {tg.platform}</span>
+                  <span className="min-w-0 flex-1 truncate font-medium">{tg.label}</span>
+                  <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase"
+                    style={{
+                      color: tg.needs_reconnect ? "var(--status-error)" : tg.can_post === false ? "#d97706" : "var(--text-muted)",
+                      background: tg.needs_reconnect ? "rgba(239,68,68,.12)" : tg.can_post === false ? "rgba(245,158,11,.14)" : "rgba(29,63,190,.08)",
+                    }}>
+                    {tg.needs_reconnect ? t("zernioNeedsReconnect") : tg.can_post === false ? t("zernioPostingBlocked") : (platform?.label || tg.platform)}
+                  </span>
+                  {typeof tg.audience === "number" && tg.audience > 0 && (
+                    <span className="text-[10px]" style={{ color:"var(--text-muted)" }}>
+                      {formatCompact(tg.audience)}
+                    </span>
+                  )}
+                  {tg.profile_name && (
+                    <span className="text-[10px]" style={{ color:"var(--text-muted)" }}>
+                      {t("zernioProfileName", { name: tg.profile_name })}
+                    </span>
+                  )}
+                  {tg.can_fetch_analytics === true && (
+                    <span className="text-[10px]" style={{ color:"var(--status-approved)" }}>
+                      {t("zernioAnalyticsReady")}
+                    </span>
+                  )}
+                  {tg.can_fetch_analytics === false && (
+                    <span className="text-[10px]" style={{ color:"var(--text-muted)" }}>
+                      {t("zernioAnalyticsUnavailable")}
+                    </span>
+                  )}
+                  {tg.is_workspace_profile === false && (
+                    <span className="text-[10px]" style={{ color:"var(--text-muted)" }}>
+                      {t("zernioLinkedOnSameKey")}
+                    </span>
+                  )}
+                  <button type="button" onClick={() => onDisconnectAccount(tg)} disabled={!!pendingZernio}
+                    className="ml-auto inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+                    style={{ background:"rgba(239,68,68,.08)", border:"none", color:"var(--status-error)", cursor:"pointer" }}
+                    title={t("zernioDisconnectAccount", { account: tg.label })}
+                    aria-label={t("zernioDisconnectAccount", { account: tg.label })}>
+                    <Trash2 size={12} />
+                  </button>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
       )}
 
       {configured && (
-        <div className="px-4 py-3" style={{ borderTop:"1px solid rgba(29,63,190,.15)" }}>
+        <div className="mx-6 border-t px-0 py-4" style={{ borderColor:"rgba(29,63,190,.12)" }}>
           <p className="mb-2 text-[10px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>
             {t("zernioAvailableNetworks")}
           </p>
           <div className="flex flex-wrap gap-2">
             {ZERNIO_PLATFORMS.map((p) => {
               const pending = pendingZernio === p.id;
+              const connected = targets.some((target) => target.platform === p.id);
+              const Icon = p.icon;
               return (
-                <button key={p.id} type="button" onClick={() => onConnect(p.id)} disabled={!!pendingZernio}
+                <button key={p.id} type="button"
+                  onClick={() => connected ? onDisconnectPlatform(p.id) : onConnect(p.id)}
+                  disabled={!!pendingZernio}
+                  title={connected ? t("zernioDisconnect", { platform:p.label }) : t("zernioConnect", { platform:p.label })}
                   className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition-all hover:-translate-y-px disabled:opacity-60"
-                  style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)", color:"var(--text-secondary)", cursor: pendingZernio ? "default" : "pointer" }}>
-                  {pending ? <Loader2 size={11} className="animate-spin" /> : <Plug size={11} />}
+                  style={{
+                    background:connected ? `${p.color}14` : "var(--bg-card)",
+                    border:`1px solid ${connected ? `${p.color}70` : "var(--border-default)"}`,
+                    color:connected ? p.color : "var(--text-secondary)",
+                    cursor:pendingZernio ? "default" : "pointer",
+                  }}>
+                  {pending ? <Loader2 size={12} className="animate-spin" /> : connected ? <Check size={12} /> : <Icon size={13} />}
                   {pending ? t("zernioConnecting") : p.label}
                 </button>
               );
@@ -598,8 +686,9 @@ export default function SettingsView() {
   const t        = useTranslations("settings");
   const dispatch = useDispatch();
   const user                                  = useSelector((st) => st.auth.user);
+  const activeWorkspaceId                     = user?.workspace?.id;
   const [s,               setS]               = useState(null);
-  const [connections,     setConnections]     = useState(null);
+  const [connections,     setConnections]     = useState(() => readCachedConnections()?.providers || null);
   const [pendingProvider, setPendingProvider] = useState(null);
   const [pendingZernio,   setPendingZernio]   = useState(null);
   const [refreshing,      setRefreshing]      = useState(false);
@@ -619,7 +708,9 @@ export default function SettingsView() {
     setRefreshing(true);
     try {
       const data = await fetchConnections({ force });
-      setConnections(data?.providers || {});
+      const nextProviders = data?.providers || {};
+      if (data?.error && Object.keys(nextProviders).length === 0) return;
+      setConnections(nextProviders);
     } finally {
       setRefreshing(false);
     }
@@ -627,11 +718,15 @@ export default function SettingsView() {
 
   useEffect(() => {
     queueMicrotask(() => {
-      const cached = readCachedConnections();
-      if (cached?.providers) setConnections(cached.providers);
       actualiserConnexions();
     });
   }, [actualiserConnexions]);
+
+  useEffect(() => {
+    if (activeWorkspaceId == null) return;
+    invalidateConnectionsCache();
+    actualiserConnexions({ force: true });
+  }, [activeWorkspaceId, actualiserConnexions]);
 
   const reloadTelegramConfig = useCallback(async () => {
     try {
@@ -669,11 +764,12 @@ export default function SettingsView() {
 
   const handleConnect = async (platformId) => {
     const providerId = PLATFORM_TO_PROVIDER[platformId];
+    const label = PLATFORMS.find((p) => p.id === platformId)?.label || platformId;
     if (!providerId) return;
     setPendingProvider(providerId);
     try {
       await startConnect(providerId);
-      dispatch(addNotification({ message: t("platformConnectedNotification", { platform: platformId }), type:"success" }));
+      dispatch(addNotification({ message: t("platformConnectedNotification", { platform: label }), type:"success" }));
       invalidateConnectionsCache();
       await actualiserConnexions({ force: true });
     } catch (err) {
@@ -685,11 +781,12 @@ export default function SettingsView() {
 
   const handleDisconnect = async (platformId) => {
     const providerId = PLATFORM_TO_PROVIDER[platformId];
+    const label = PLATFORMS.find((p) => p.id === platformId)?.label || platformId;
     if (!providerId) return;
-    if (!confirm(t("platformDisconnectConfirm", { platform: platformId }))) return;
+    if (!confirm(t("platformDisconnectConfirm", { platform: label }))) return;
     try {
       await oauthDisconnect(providerId);
-      dispatch(addNotification({ message: t("platformDisconnectedNotification", { platform: platformId }), type:"info" }));
+      dispatch(addNotification({ message: t("platformDisconnectedNotification", { platform: label }), type:"info" }));
       await actualiserConnexions({ force: true });
     } catch (err) {
       dispatch(addNotification({ message: t("platformDisconnectFailed", { error: err.message || t("unknownError") }), type:"error" }));
@@ -697,13 +794,47 @@ export default function SettingsView() {
   };
 
   const handleZernioConnect = async (platform) => {
+    const alreadyConnected = (connections?.zernio?.targets || []).some(
+      (target) => target.platform === platform,
+    );
+    if (alreadyConnected) return;
     setPendingZernio(platform);
     try {
       await connectZernio(platform);
-      dispatch(addNotification({ message: t("zernioConnectDone"), type:"info" }));
       await actualiserConnexions({ force: true });
+      dispatch(addNotification({ message: t("zernioConnectDone"), type:"success" }));
     } catch (err) {
       dispatch(addNotification({ message: t("zernioConnectFailed", { error: err.message || t("unknownError") }), type:"error" }));
+    } finally {
+      setPendingZernio(null);
+    }
+  };
+
+  const handleZernioDisconnectPlatform = async (platform) => {
+    const label = PLATFORMS.find((p) => p.id === platform)?.label || platform;
+    if (!confirm(t("zernioDisconnectConfirm", { platform:label }))) return;
+    setPendingZernio(platform);
+    try {
+      await disconnectZernio(platform);
+      await actualiserConnexions({ force: true });
+      dispatch(addNotification({ message:t("zernioDisconnected", { platform:label }), type:"info" }));
+    } catch (err) {
+      dispatch(addNotification({ message:t("zernioDisconnectFailed", { error:err.message || t("unknownError") }), type:"error" }));
+    } finally {
+      setPendingZernio(null);
+    }
+  };
+
+  const handleZernioDisconnectAccount = async (target) => {
+    const label = target?.label || target?.id || t("zernioConnectedAccounts");
+    if (!confirm(t("zernioDisconnectAccountConfirm", { account: label }))) return;
+    setPendingZernio(target?.id || "account");
+    try {
+      await disconnectZernioAccount(target.id);
+      await actualiserConnexions({ force: true });
+      dispatch(addNotification({ message:t("zernioAccountDisconnected", { account: label }), type:"info" }));
+    } catch (err) {
+      dispatch(addNotification({ message:t("zernioDisconnectFailed", { error:err.message || t("unknownError") }), type:"error" }));
     } finally {
       setPendingZernio(null);
     }
@@ -712,6 +843,20 @@ export default function SettingsView() {
   const handleSaveZernioKey = async (value) => {
     try {
       await patchBackendKeys({ ZERNIO_API_KEY: value });
+      setConnections((prev) => ({
+        ...(prev || {}),
+        zernio: {
+          ...(prev?.zernio || {}),
+          id: "zernio",
+          label: prev?.zernio?.label || "Zernio",
+          configured: true,
+          connected: prev?.zernio?.connected || false,
+          missing_env: [],
+          targets: prev?.zernio?.targets || [],
+          error: null,
+          is_aggregator: true,
+        },
+      }));
       dispatch(addNotification({ message: t("zernioKeySaved"), type:"success" }));
       invalidateConnectionsCache();
       await actualiserConnexions({ force: true });
@@ -754,6 +899,7 @@ export default function SettingsView() {
     try {
       await authService.deleteAccount();
       dispatch(addNotification({ message: t("accountDeleted"), type: "info" }));
+      dispatch(resetEditor());
       dispatch(authLogout());
     } catch (err) {
       dispatch(addNotification({ message: err.message || t("unknownError"), type: "error" }));
@@ -807,8 +953,19 @@ export default function SettingsView() {
     }
   };
 
-  const connectéCount  = Object.values(connections || {}).filter((c) => c.connected).length;
-  const totalProviders = Object.keys(connections || {}).length;
+  const platformIsConnected = (platform) => {
+    const provider = connections?.[PLATFORM_TO_PROVIDER[platform]];
+    const kind = TARGET_KIND_FOR_PLATFORM[platform];
+    const directTargets = kind
+      ? (provider?.targets || []).filter((target) => target.kind === kind)
+      : provider?.targets || [];
+    const zernioTargets = (connections?.zernio?.targets || []).filter(
+      (target) => target.platform === platform,
+    );
+    return directTargets.length > 0 || zernioTargets.length > 0;
+  };
+  const connectéCount = PLATFORMS.filter((platform) => platformIsConnected(platform.id)).length;
+  const totalProviders = PLATFORMS.length;
 
   const ONGLETS = [
     { id:"plateformes", label:t("tabPlatforms"), icon:Plug,     badge: connectéCount > 0 ? `${connectéCount}/${totalProviders}` : null },
@@ -899,13 +1056,13 @@ export default function SettingsView() {
               />
             ))}
 
-            <p className="mt-3 text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--accent-primary)" }}>
-              {t("zernioHeading")}
-            </p>
+            <div className="mt-2" />
             <CarteZernio
               connections={connections}
               pendingZernio={pendingZernio}
               onConnect={handleZernioConnect}
+              onDisconnectPlatform={handleZernioDisconnectPlatform}
+              onDisconnectAccount={handleZernioDisconnectAccount}
               onSaveKey={handleSaveZernioKey}
             />
           </div>

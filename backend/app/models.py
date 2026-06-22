@@ -141,6 +141,7 @@ class Post(BaseModel):
     status: str = "draft"
     scheduledDate: str  # YYYY-MM-DD
     time: str | None = None
+    locale: str | None = None
     # IANA timezone (e.g. "Europe/Paris"). The scheduler interprets
     # scheduledDate + time in this zone — without it "09:00" is ambiguous.
     timezone: str | None = None
@@ -169,6 +170,7 @@ class PostCreate(BaseModel):
     status: str = "draft"
     scheduledDate: str
     time: str | None = None
+    locale: str | None = None
     timezone: str | None = None
     media: list[dict] = []
     ratios: dict[str, str] | None = None
@@ -182,6 +184,7 @@ class PostUpdate(BaseModel):
     status: str | None = None
     scheduledDate: str | None = None
     time: str | None = None
+    locale: str | None = None
     timezone: str | None = None
     media: list[dict] | None = None
     ratios: dict[str, str] | None = None
@@ -261,6 +264,7 @@ class PublishRequest(BaseModel):
     media_url: str | None = None  # public URL — required for IG
     media_urls: list[str] | None = None
     link: str | None = None       # optional FB link share
+    locale: str | None = None
     # Per-platform aspect ratio override ("1:1", "4:5", "9:16", "16:9", ...).
     # When present, the backend center-crops the image to that ratio before
     # sending it to the platform — the editor's ratio picker actually
@@ -301,6 +305,7 @@ class ValidationSubmitRequest(BaseModel):
     platforms: dict[str, bool] = {}
     scheduledDate: str | None = None
     time: str | None = None
+    locale: str | None = None
     timezone: str | None = None
     media: list[dict[str, Any]] = []
     ratios: dict[str, str] | None = None
@@ -593,6 +598,7 @@ class AutomationRule(BaseModel):
     # Validation
     validation_lead_minutes: int = Field(default=30, ge=1, le=24 * 60)
     validation_chat_id: str | None = None
+    locale: str | None = None
 
     # Publication target — same shape as Post.platforms
     platforms: dict[str, bool] = Field(default_factory=dict)

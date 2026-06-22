@@ -12,6 +12,7 @@ import httpx
 import pytest
 
 from app import zernio
+from app import publish as publish_module
 
 
 def _mock_handler(request: httpx.Request, calls: list) -> httpx.Response:
@@ -27,15 +28,57 @@ def _mock_handler(request: httpx.Request, calls: list) -> httpx.Response:
     if method == "GET" and "/connect/" in path:
         return httpx.Response(200, json={"authUrl": "https://zernio.com/oauth/go"})
     if method == "GET" and path.endswith("/accounts"):
+        platform = request.url.params.get("platform")
+        accounts = [
+            {
+                "_id": "acc_ig",
+                "platform": "instagram",
+                "username": "brand",
+                "followersCount": 3210,
+                "profilePicture": "https://cdn.zernio/brand.jpg",
+                "profileId": {"_id": "prof_1", "name": "Workspace Profile"},
+            },
+            {
+                "_id": "acc_tt",
+                "platform": "tiktok",
+                "displayName": "Brand TT",
+                "profileId": {"_id": "prof_else", "name": "Other Profile"},
+            },
+        ]
+        if platform:
+            accounts = [account for account in accounts if account["platform"] == platform]
+        return httpx.Response(
+            200,
+            json={"accounts": accounts},
+        )
+    if method == "GET" and path.endswith("/accounts/health"):
         return httpx.Response(
             200,
             json={
                 "accounts": [
-                    {"_id": "acc_ig", "platform": "instagram", "username": "brand"},
-                    {"_id": "acc_tt", "platform": "tiktok", "displayName": "Brand TT"},
+                    {
+                        "accountId": "acc_ig",
+                        "platform": "instagram",
+                        "status": "connected",
+                        "canPost": True,
+                        "canFetchAnalytics": True,
+                        "needsReconnect": False,
+                        "issues": [],
+                    },
+                    {
+                        "accountId": "acc_tt",
+                        "platform": "tiktok",
+                        "status": "disconnected",
+                        "canPost": False,
+                        "canFetchAnalytics": False,
+                        "needsReconnect": True,
+                        "issues": ["Token expired"],
+                    },
                 ]
             },
         )
+    if method == "DELETE" and "/accounts/" in path:
+        return httpx.Response(200, json={"message": "Disconnected"})
     if method == "POST" and path.endswith("/media/presign"):
         return httpx.Response(
             200,
@@ -105,19 +148,63 @@ def test_profile_created_and_cached(zenv):
 
 
 def test_connections_entry_maps_targets(zenv):
-    zenv["store"][("zernio", 7)] = {"profile_id": "prof_1"}
     entry = asyncio.run(zernio.connections_entry(7))
     assert entry["configured"] and entry["connected"]
     assert {t["kind"] for t in entry["targets"]} == {"zernio_instagram", "zernio_tiktok"}
     assert all(t["provider"] == "zernio" for t in entry["targets"])
     ig = next(t for t in entry["targets"] if t["kind"] == "zernio_instagram")
     assert (ig["id"], ig["platform"], ig["label"]) == ("acc_ig", "instagram", "brand")
+    assert ig["profile_name"] == "Workspace Profile"
+    assert ig["audience"] == 3210
+    assert ig["can_post"] is True
+    tt = next(t for t in entry["targets"] if t["kind"] == "zernio_tiktok")
+    assert tt["needs_reconnect"] is True
+    assert tt["is_workspace_profile"] is False
+
+
+def test_disconnect_platform_only_removes_matching_accounts(zenv):
+    zenv["store"][("zernio", 7)] = {"profile_id": "prof_1"}
+    count = asyncio.run(zernio.disconnect_platform(7, "instagram"))
+    assert count == 1
+    deletes = [
+        (method, path)
+        for method, path, _body in zenv["calls"]
+        if method == "DELETE"
+    ]
+    assert deletes == [("DELETE", "/api/v1/accounts/acc_ig")]
+
+
+def test_disconnect_account_removes_only_requested_account(zenv):
+    removed = asyncio.run(zernio.disconnect_account(7, "acc_tt"))
+    assert removed["displayName"] == "Brand TT"
+    deletes = [
+        (method, path)
+        for method, path, _body in zenv["calls"]
+        if method == "DELETE"
+    ]
+    assert deletes == [("DELETE", "/api/v1/accounts/acc_tt")]
+
+
+def test_workspace_profiles_are_cached_independently(zenv):
+    assert asyncio.run(zernio.get_or_create_profile(7)) == "prof_1"
+    assert asyncio.run(zernio.get_or_create_profile(8)) == "prof_1"
+    assert zenv["store"][("zernio", 7)]["profile_id"] == "prof_1"
+    assert zenv["store"][("zernio", 8)]["profile_id"] == "prof_1"
 
 
 def test_start_connect_returns_auth_url_and_provisions_profile(zenv):
-    url = asyncio.run(zernio.start_connect(7, "instagram"))
+    url = asyncio.run(zernio.start_connect(7, "facebook"))
     assert url == "https://zernio.com/oauth/go"
     assert zenv["store"][("zernio", 7)]["profile_id"] == "prof_1"
+
+
+def test_start_connect_rejects_already_connected_platform(zenv):
+    zenv["store"][("zernio", 7)] = {"profile_id": "prof_1"}
+    with pytest.raises(zernio.ZernioError) as exc:
+        asyncio.run(zernio.start_connect(7, "instagram"))
+    assert exc.value.status == 409
+    assert "already connected" in str(exc.value)
+    assert not any("/connect/" in path for method, path, _ in zenv["calls"] if method == "GET")
 
 
 def test_start_connect_rejects_unknown_platform(zenv):
@@ -274,3 +361,86 @@ def test_publish_maps_upstream_error(zenv, monkeypatch):
     assert len(rows) == 1
     assert rows[0]["ok"] is False
     assert "insufficient credits" in rows[0]["error"]
+
+
+def test_account_limit_error_is_actionable(monkeypatch):
+    def handler(_req):
+        return httpx.Response(
+            402,
+            json={"error": {"message": "Add a payment method to connect more than 2 accounts."}},
+        )
+
+    _zernio_with_handler(monkeypatch, handler)
+    with pytest.raises(zernio.ZernioError) as exc:
+        asyncio.run(zernio.start_connect(7, "instagram"))
+    assert exc.value.status == 402
+    assert "connected-account limit" in str(exc.value)
+    assert "/connect/" not in str(exc.value)
+
+
+def test_scheduler_dispatch_routes_zernio_target(monkeypatch):
+    captured = {}
+
+    async def fake_publish(workspace_id, **kwargs):
+        captured["workspace_id"] = workspace_id
+        captured.update(kwargs)
+        return [{
+            "ok": True,
+            "platform_post_id": "z_post",
+            "permalink_url": None,
+            "error": None,
+        }]
+
+    monkeypatch.setattr(zernio, "publish", fake_publish)
+    rows = asyncio.run(
+        publish_module.publish_to_targets(
+            content="hello team",
+            targets=[{
+                "provider": "zernio",
+                "workspace_id": 7,
+                "platform": "facebook",
+                "id": "acc_fb",
+                "label": "Team Page",
+                "media_urls": [],
+            }],
+        )
+    )
+    assert rows[0]["ok"] is True
+    assert rows[0]["platform_post_id"] == "z_post"
+    assert captured["workspace_id"] == 7
+    assert captured["targets"][0]["id"] == "acc_fb"
+
+
+def test_build_targets_from_post_crops_zernio_fallback(monkeypatch):
+    from app import images, oauth
+
+    monkeypatch.setattr(oauth, "_load_tokens", lambda _user_id: {})
+
+    async def fake_fetch_meta_pages(_token):
+        return []
+
+    async def fake_list_accounts(_workspace_id):
+        return [{"_id": "acc_ig", "platform": "instagram", "username": "brand"}]
+
+    monkeypatch.setattr(oauth, "_fetch_meta_pages", fake_fetch_meta_pages)
+    monkeypatch.setattr(zernio, "is_enabled", lambda _workspace_id: True)
+    monkeypatch.setattr(zernio, "list_accounts", fake_list_accounts)
+    monkeypatch.setattr(
+        images,
+        "crop_for_targets",
+        lambda *, media_url, ratios, platform: f"{platform}:{media_url}",
+    )
+
+    resolved, skipped = asyncio.run(
+        publish_module.build_targets_from_post(
+            platforms={"instagram": True},
+            media_url="https://cdn.example/original.jpg",
+            user_id=7,
+        )
+    )
+
+    assert skipped == []
+    assert len(resolved) == 1
+    assert resolved[0]["provider"] == "zernio"
+    assert resolved[0]["media_url"] == "instagram:https://cdn.example/original.jpg"
+    assert resolved[0]["media_urls"] == ["instagram:https://cdn.example/original.jpg"]

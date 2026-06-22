@@ -28,7 +28,7 @@ import mimetypes
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import httpx
 
@@ -127,6 +127,26 @@ def _error_text(resp: httpx.Response) -> str:
     return text[:240] if text else f"Zernio HTTP {resp.status_code}"
 
 
+def _public_error(status: int, body: str) -> str:
+    """Return an actionable error safe to show in the product UI."""
+    lower = body.lower()
+    if status == 402 and (
+        "payment method" in lower
+        or "connect more than" in lower
+        or "account limit" in lower
+    ):
+        return (
+            "Your Zernio connected-account limit has been reached. "
+            "That limit is shared by every Zernio profile using this API key. "
+            "Disconnect an unused account or upgrade the Zernio plan, then try again."
+        )
+    if status == 401:
+        return "The Zernio API key is invalid or no longer active."
+    if status == 403:
+        return "This Zernio API key does not have permission for that account or profile."
+    return body
+
+
 async def _request(
     method: str,
     path: str,
@@ -151,7 +171,7 @@ async def _request(
         # it reaches the UI notification instead of a bare "API 500".
         print(f"[zernio] {method} {path} -> {resp.status_code}: {body}")
         raise ZernioError(
-            f"{method} {path} -> HTTP {resp.status_code}: {body}", status=resp.status_code
+            _public_error(resp.status_code, body), status=resp.status_code
         )
     try:
         data = resp.json()
@@ -255,6 +275,20 @@ async def start_connect(workspace_id: int | None, platform: str) -> str:
     slug = _PLATFORM_TO_ZERNIO.get((platform or "").lower(), (platform or "").lower())
     if slug not in ZERNIO_PLATFORMS:
         raise ZernioError(f"Unsupported Zernio platform: {platform}", status=400)
+    try:
+        existing_accounts = await list_key_accounts(workspace_id, platform=slug)
+    except ZernioError:
+        # A stale profile id is repaired by the normal connect retry below.
+        existing_accounts = []
+    if any(
+        (account.get("platform") or "").lower() == slug
+        for account in existing_accounts
+    ):
+        raise ZernioError(
+            f"{_ZERNIO_TO_PLATFORM.get(slug, slug).title()} is already connected "
+            "to this Zernio key.",
+            status=409,
+        )
     profile_id = await get_or_create_profile(workspace_id)
     try:
         data = await _request(
@@ -283,17 +317,107 @@ async def start_connect(workspace_id: int | None, platform: str) -> str:
     return str(auth_url)
 
 
-async def list_accounts(workspace_id: int | None) -> list[dict[str, Any]]:
-    """Raw Zernio account objects under this workspace's profile (or [])."""
+def _build_query(**params: Any) -> str:
+    kept = {
+        key: value
+        for key, value in params.items()
+        if value is not None and value != ""
+    }
+    return f"?{urlencode(kept)}" if kept else ""
+
+
+async def list_workspace_accounts(workspace_id: int | None) -> list[dict[str, Any]]:
+    """Raw Zernio accounts in this workspace's dedicated profile (or [])."""
     state = _state(workspace_id)
     profile_id = state.get("profile_id")
     if not profile_id:
         return []
     data = await _request(
-        "GET", f"/accounts?profileId={profile_id}", workspace_id=workspace_id
+        "GET",
+        f"/accounts{_build_query(profileId=profile_id, includeOverLimit='true')}",
+        workspace_id=workspace_id,
     )
     accounts = data.get("accounts")
     return accounts if isinstance(accounts, list) else []
+
+
+async def list_key_accounts(
+    workspace_id: int | None,
+    *,
+    platform: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    """All accounts visible to the current Zernio API key.
+
+    Zernio's account inventory is fundamentally key-scoped: the same key may
+    see accounts attached through multiple profiles. The docs explicitly allow
+    omitting ``profileId`` and say that ``GET /v1/accounts`` then returns all
+    accounts, with ``includeOverLimit=true`` exposing accounts outside the
+    current plan cap as well. We use that key-wide view as the product source of
+    truth so the UI, dashboard, and publish path all reflect the accounts the
+    key can really post through.
+    """
+    data = await _request(
+        "GET",
+        f"/accounts{_build_query(includeOverLimit='true', platform=platform, status=status)}",
+        workspace_id=workspace_id,
+    )
+    accounts = data.get("accounts")
+    return accounts if isinstance(accounts, list) else []
+
+
+async def list_accounts(workspace_id: int | None) -> list[dict[str, Any]]:
+    """Backward-compatible alias for the key-wide account inventory."""
+    return await list_key_accounts(workspace_id)
+
+
+async def list_accounts_health(workspace_id: int | None) -> list[dict[str, Any]]:
+    """Health rows for the accounts visible to the current key.
+
+    The summary endpoint exposes per-account ``canPost`` / ``canFetchAnalytics``
+    / ``needsReconnect`` status, which lets the dashboard and Settings surface
+    whether a connected account is actually publish-ready.
+    """
+    data = await _request("GET", "/accounts/health", workspace_id=workspace_id)
+    rows = data.get("accounts")
+    if isinstance(rows, list):
+        return rows
+    rows = data.get("data")
+    return rows if isinstance(rows, list) else []
+
+
+async def disconnect_account(workspace_id: int | None, account_id: str) -> dict[str, Any]:
+    """Disconnect one specific Zernio account visible to the current key."""
+    accounts = await list_key_accounts(workspace_id)
+    match = next(
+        (
+            account
+            for account in accounts
+            if str(account.get("_id") or account.get("id") or "") == str(account_id)
+        ),
+        None,
+    )
+    if not match:
+        raise ZernioError("No connected Zernio account found for that id.", status=404)
+    await _request("DELETE", f"/accounts/{account_id}", workspace_id=workspace_id)
+    return match
+
+
+async def disconnect_platform(workspace_id: int | None, platform: str) -> int:
+    """Disconnect every account for one platform visible to the current key."""
+    slug = _PLATFORM_TO_ZERNIO.get((platform or "").lower(), (platform or "").lower())
+    if slug not in ZERNIO_PLATFORMS:
+        raise ZernioError(f"Unsupported Zernio platform: {platform}", status=400)
+    matches = await list_key_accounts(workspace_id, platform=slug)
+    for account in matches:
+        account_id = account.get("_id") or account.get("id")
+        if account_id:
+            await _request(
+                "DELETE",
+                f"/accounts/{account_id}",
+                workspace_id=workspace_id,
+            )
+    return len(matches)
 
 
 async def connections_entry(workspace_id: int | None) -> dict[str, Any]:
@@ -317,16 +441,35 @@ async def connections_entry(workspace_id: int | None) -> dict[str, Any]:
     if not key:
         return entry
     try:
-        accounts = await list_accounts(workspace_id)
+        accounts = await list_key_accounts(workspace_id)
     except ZernioError as exc:
         entry["error"] = str(exc)
         return entry
+    try:
+        health_rows = await list_accounts_health(workspace_id)
+    except ZernioError:
+        health_rows = []
+    try:
+        workspace_accounts = await list_workspace_accounts(workspace_id)
+    except ZernioError:
+        workspace_accounts = []
+    workspace_account_ids = {
+        str(account.get("_id") or account.get("id") or "")
+        for account in workspace_accounts
+    }
+    health_by_id = {
+        str(row.get("accountId") or row.get("_id") or row.get("id") or ""): row
+        for row in health_rows
+        if isinstance(row, dict)
+    }
     for acc in accounts:
         zslug = acc.get("platform") or ""
         platform = _ZERNIO_TO_PLATFORM.get(zslug, zslug)
         acc_id = acc.get("_id") or acc.get("id")
         if not acc_id:
             continue
+        health = health_by_id.get(str(acc_id), {})
+        profile = acc.get("profileId") if isinstance(acc.get("profileId"), dict) else {}
         label = (
             acc.get("name")
             or acc.get("username")
@@ -341,10 +484,48 @@ async def connections_entry(workspace_id: int | None) -> dict[str, Any]:
                 "kind": f"zernio_{zslug}",
                 "platform": platform,
                 "provider": "zernio",
-                "profile_picture_url": acc.get("avatarUrl") or acc.get("profilePictureUrl"),
+                "profile_picture_url": (
+                    acc.get("profilePicture")
+                    or acc.get("profilePictureUrl")
+                    or acc.get("avatarUrl")
+                ),
+                "profile_url": acc.get("profileUrl"),
+                "profile_id": profile.get("_id") or profile.get("id") or acc.get("profileId"),
+                "profile_name": profile.get("name"),
+                "audience": (
+                    acc.get("followersCount")
+                    or acc.get("followerCount")
+                    or acc.get("followers_count")
+                    or 0
+                ),
+                "status": health.get("status") or ("connected" if acc.get("isActive", True) else "disconnected"),
+                "can_post": health.get("canPost"),
+                "can_fetch_analytics": health.get("canFetchAnalytics"),
+                "needs_reconnect": bool(health.get("needsReconnect")),
+                "issues": health.get("issues") if isinstance(health.get("issues"), list) else [],
+                "is_active": bool(acc.get("isActive", True)),
+                "is_enabled": acc.get("enabled", True),
+                "is_workspace_profile": str(acc_id) in workspace_account_ids,
+                "account_metadata": acc.get("metadata") if isinstance(acc.get("metadata"), dict) else {},
+                "connected_via_key": True,
+                "follower_last_updated": (
+                    acc.get("followersLastUpdated")
+                    or acc.get("followers_last_updated")
+                ),
+                "has_analytics_access": None,
             }
         )
+    entry["targets"].sort(
+        key=lambda target: (
+            str(target.get("platform") or ""),
+            str(target.get("label") or ""),
+        )
+    )
     entry["connected"] = bool(entry["targets"])
+    entry["key_account_count"] = len(entry["targets"])
+    entry["workspace_account_count"] = sum(
+        1 for target in entry["targets"] if target.get("is_workspace_profile")
+    )
     return entry
 
 

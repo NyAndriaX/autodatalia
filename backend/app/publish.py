@@ -1542,6 +1542,23 @@ async def build_targets_from_post(
     skipped: list[dict[str, Any]] = []
     effective_urls = media_urls or ([media_url] if media_url else [])
 
+    def _apply_platform_media(target: dict[str, Any]) -> dict[str, Any]:
+        target["media_url"] = crop_for_targets(
+            media_url=target.get("media_url"),
+            ratios=ratios,
+            platform=target["platform"],
+        )
+        if target.get("media_urls"):
+            target["media_urls"] = [
+                crop_for_targets(
+                    media_url=url,
+                    ratios=ratios,
+                    platform=target["platform"],
+                )
+                for url in target["media_urls"]
+            ]
+        return target
+
     def _skip(platform: str, reason: str) -> None:
         skipped.append({
             "target_id": platform,
@@ -1673,20 +1690,7 @@ async def build_targets_from_post(
             })
 
     for r in resolved:
-        r["media_url"] = crop_for_targets(
-            media_url=r.get("media_url"),
-            ratios=ratios,
-            platform=r["platform"],
-        )
-        if r.get("media_urls"):
-            r["media_urls"] = [
-                crop_for_targets(
-                    media_url=url,
-                    ratios=ratios,
-                    platform=r["platform"],
-                )
-                for url in r["media_urls"]
-            ]
+        _apply_platform_media(r)
 
     # Zernio fallback (Phase 3): for any enabled platform that got NO direct
     # destination (it was skipped) but the workspace has a connected Zernio
@@ -1713,7 +1717,7 @@ async def build_targets_from_post(
                         still_skipped.append(sk)
                         continue
                     for acc in accs:
-                        resolved.append({
+                        resolved.append(_apply_platform_media({
                             "platform": sk["platform"],
                             "provider": "zernio",
                             "id": acc.get("_id") or acc.get("id"),
@@ -1722,7 +1726,7 @@ async def build_targets_from_post(
                             "media_url": media_url,
                             "media_urls": effective_urls,
                             "media_kind": media_kind,
-                        })
+                        }))
                 skipped = still_skipped
         except Exception as exc:  # noqa: BLE001 — fallback must never break direct resolution
             print(f"[build_targets] zernio fallback error: {exc}")

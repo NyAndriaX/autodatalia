@@ -75,7 +75,7 @@ function buildSeed() {
 }
 
 /* ——— A single scheduled-post chip (draggable + editable + cancellable) ——— */
-function PostChip({ post, onEdit, onCancel, compact }) {
+function PostChip({ post, onOpen, onEdit, onCancel, compact }) {
   const t = useTranslations("calendar");
   const activeIds = activePlatformIds(post.platforms);
   const primary = activeIds[0] ? PLATFORM_MAP[activeIds[0]] : null;
@@ -94,6 +94,10 @@ function PostChip({ post, onEdit, onCancel, compact }) {
       onDragStart={(e) => {
         e.dataTransfer.setData(DND_MIME, post.id);
         e.dataTransfer.effectAllowed = "move";
+      }}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen(post);
       }}
       onDoubleClick={(e) => {
         e.stopPropagation();
@@ -181,7 +185,17 @@ function PostChip({ post, onEdit, onCancel, compact }) {
 }
 
 /* ——— A day cell: drop target + quick-create affordance ——— */
-function DayCell({ day, posts, isWeek, onDropPost, onEdit, onCancel, onQuickCreate, flashToday }) {
+function DayCell({
+  day,
+  posts,
+  isWeek,
+  onDropPost,
+  onOpen,
+  onEdit,
+  onCancel,
+  onQuickCreate,
+  flashToday,
+}) {
   const t = useTranslations("calendar");
   const [isOver, setIsOver] = useState(false);
 
@@ -265,6 +279,7 @@ function DayCell({ day, posts, isWeek, onDropPost, onEdit, onCancel, onQuickCrea
           <PostChip
             key={p.id}
             post={p}
+            onOpen={onOpen}
             onEdit={onEdit}
             onCancel={onCancel}
             compact={!isWeek}
@@ -294,6 +309,7 @@ export default function CalendarView() {
   // remount when it changes, replaying the fade-in animation so the
   // user gets visual confirmation even when they were already on today.
   const [flashToday, setFlashToday] = useState(0);
+  const [selectedPost, setSelectedPost] = useState(null);
   const onTodayClick = useCallback(() => {
     dispatch(goToToday());
     setFlashToday((n) => n + 1);
@@ -356,11 +372,13 @@ export default function CalendarView() {
     (id) => dispatch(cancelScheduleThunk(id)),
     [dispatch]
   );
+  const onOpen = useCallback((post) => setSelectedPost(post), []);
   // Editing a scheduled post loads it into the Create editor (clicking a post's
   // pencil) — no separate heavy modal. saveDraft/schedule then update it in
   // place via its draftId (see editorSlice.loadDraft + schedulePostThunk).
   const onEdit = useCallback(
     (post) => {
+      setSelectedPost(null);
       dispatch(loadDraft(post));
       dispatch(setActiveView("creation"));
     },
@@ -590,12 +608,225 @@ export default function CalendarView() {
             posts={postsByDay[day.key] || []}
             isWeek={view === "week"}
             onDropPost={onDropPost}
+            onOpen={onOpen}
             onEdit={onEdit}
             onCancel={onCancel}
             onQuickCreate={onQuickCreate}
             flashToday={flashToday}
           />
         ))}
+      </div>
+      <CalendarPostDetailsModal
+        post={selectedPost}
+        onClose={() => setSelectedPost(null)}
+        onEdit={onEdit}
+      />
+    </div>
+  );
+}
+
+function CalendarPostDetailsModal({ post, onClose, onEdit }) {
+  const t = useTranslations("calendar");
+
+  if (!post) return null;
+
+  const scheduledAt = (() => {
+    if (!post.scheduledDate) return null;
+    const base = parseDateKey(post.scheduledDate);
+    const [hours, minutes] = String(post.time || "09:00")
+      .split(":")
+      .map((n) => Number(n || 0));
+    base.setHours(hours, minutes, 0, 0);
+    return base;
+  })();
+
+  const scheduledDateLabel = scheduledAt
+    ? new Intl.DateTimeFormat(undefined, {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+      }).format(scheduledAt)
+    : "—";
+
+  const scheduledTimeLabel = scheduledAt
+    ? new Intl.DateTimeFormat(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(scheduledAt)
+    : "—";
+
+  const activeIds = activePlatformIds(post.platforms);
+  const liveLinks = Array.isArray(post.publish_results)
+    ? post.publish_results.filter((r) => r?.ok && r?.permalink_url)
+    : [];
+  const status = STATUS_META[post.status] ?? STATUS_META.draft;
+
+  return (
+    <div
+      className="fixed inset-0 z-[120] flex items-center justify-center p-4"
+      style={{ background: "rgba(8, 12, 24, 0.45)", backdropFilter: "blur(4px)" }}
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("postDetailsTitle")}
+    >
+      <div
+        className="w-full max-w-md rounded-3xl overflow-hidden"
+        style={{
+          background: "var(--bg-card)",
+          border: "1px solid var(--border-default)",
+          boxShadow: "var(--shadow-modal)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          className="flex items-center justify-between gap-3 px-5 py-4"
+          style={{ borderBottom: "1px solid var(--border-default)" }}
+        >
+          <div>
+            <div
+              className="text-lg font-bold"
+              style={{ color: "var(--text-primary)" }}
+            >
+              {t("postDetailsTitle")}
+            </div>
+            <div
+              className="mt-1 inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold"
+              style={{
+                background: "color-mix(in srgb, var(--accent-primary) 10%, transparent)",
+                color: status.colorVar,
+              }}
+            >
+              {status.label}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-full p-2"
+            style={{ color: "var(--text-muted)" }}
+            aria-label={t("close")}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 flex flex-col gap-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div
+              className="rounded-2xl p-3"
+              style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-default)" }}
+            >
+              <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+                {t("scheduledDateLabel")}
+              </div>
+              <div className="mt-1 text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+                {scheduledDateLabel}
+              </div>
+            </div>
+            <div
+              className="rounded-2xl p-3"
+              style={{ background: "var(--bg-secondary)", border: "1px solid var(--border-default)" }}
+            >
+              <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>
+                {t("scheduledTimeLabel")}
+              </div>
+              <div className="mt-1 text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+                {scheduledTimeLabel}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div
+              className="text-xs font-semibold uppercase tracking-wider"
+              style={{ color: "var(--text-muted)" }}
+            >
+              {t("platformsLabel")}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {activeIds.map((id) => {
+                const platform = PLATFORM_MAP[id];
+                const Icon = platform.icon;
+                return (
+                  <span
+                    key={id}
+                    className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium"
+                    style={{
+                      background: "var(--bg-secondary)",
+                      border: "1px solid var(--border-default)",
+                      color: platform.color,
+                    }}
+                  >
+                    <Icon size={14} />
+                    {platform.label}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <div
+              className="text-xs font-semibold uppercase tracking-wider"
+              style={{ color: "var(--text-muted)" }}
+            >
+              {t("contentLabel")}
+            </div>
+            <div
+              className="mt-2 rounded-2xl p-3 text-sm whitespace-pre-wrap break-words"
+              style={{
+                background: "var(--bg-secondary)",
+                border: "1px solid var(--border-default)",
+                color: "var(--text-secondary)",
+              }}
+            >
+              {post.content || t("emptyPost")}
+            </div>
+          </div>
+
+          {liveLinks.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {liveLinks.map((link, index) => {
+                const platform = PLATFORM_MAP[link.platform] || null;
+                const Icon = platform?.icon;
+                return (
+                  <a
+                    key={`${link.platform || "link"}-${index}`}
+                    href={link.permalink_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 rounded-full px-3 py-2 text-sm font-semibold"
+                    style={{
+                      background: platform
+                        ? `color-mix(in srgb, ${platform.color} 14%, transparent)`
+                        : "var(--bg-secondary)",
+                      border: platform
+                        ? `1px solid color-mix(in srgb, ${platform.color} 40%, transparent)`
+                        : "1px solid var(--border-default)",
+                      color: platform?.color || "var(--text-primary)",
+                    }}
+                  >
+                    {Icon ? <Icon size={14} /> : <ExternalLink size={14} />}
+                    {platform?.label || t("openLive")}
+                  </a>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div
+          className="flex items-center justify-end gap-3 px-5 py-4"
+          style={{ borderTop: "1px solid var(--border-default)" }}
+        >
+          <button className="btn-secondary" onClick={onClose}>
+            {t("close")}
+          </button>
+          <button className="btn-primary" onClick={() => onEdit(post)}>
+            {t("editPost")}
+          </button>
+        </div>
       </div>
     </div>
   );

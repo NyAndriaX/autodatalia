@@ -359,6 +359,64 @@ async def zernio_start(platform: str, user_id: int = Depends(require_token)) -> 
     return {"authorize_url": url}
 
 
+@router.delete(
+    "/zernio/{platform}",
+    dependencies=[Depends(require_permission("connections.manage"))],
+)
+async def zernio_disconnect(
+    platform: str,
+    user_id: int = Depends(require_token),
+) -> dict[str, Any]:
+    """Disconnect every account for one platform from the active workspace's Zernio key."""
+    from . import zernio
+
+    workspace_id = get_active_workspace_id(user_id)
+    if not workspace_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to a workspace before disconnecting a Zernio account.",
+        )
+    try:
+        count = await zernio.disconnect_platform(workspace_id, platform)
+    except zernio.ZernioError as exc:
+        status = exc.status if exc.status and exc.status < 500 else 502
+        raise HTTPException(status_code=status, detail=f"Zernio: {exc}")
+    if count == 0:
+        raise HTTPException(status_code=404, detail="No connected Zernio account found for this platform.")
+    return {"status": "disconnected", "provider": "zernio", "platform": platform, "count": count}
+
+
+@router.delete(
+    "/zernio/account/{account_id}",
+    dependencies=[Depends(require_permission("connections.manage"))],
+)
+async def zernio_disconnect_account(
+    account_id: str,
+    user_id: int = Depends(require_token),
+) -> dict[str, Any]:
+    """Disconnect one specific Zernio account visible to the active workspace key."""
+    from . import zernio
+
+    workspace_id = get_active_workspace_id(user_id)
+    if not workspace_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to a workspace before disconnecting a Zernio account.",
+        )
+    try:
+        account = await zernio.disconnect_account(workspace_id, account_id)
+    except zernio.ZernioError as exc:
+        status = exc.status if exc.status and exc.status < 500 else 502
+        raise HTTPException(status_code=status, detail=f"Zernio: {exc}")
+    return {
+        "status": "disconnected",
+        "provider": "zernio",
+        "account_id": account_id,
+        "platform": account.get("platform"),
+        "label": account.get("displayName") or account.get("username") or account.get("name"),
+    }
+
+
 async def _exchange_code(
     provider: ProviderSpec, code: str
 ) -> dict[str, Any]:

@@ -183,7 +183,7 @@ function MediaTile({
             e.stopPropagation();
             onDelete(item);
           }}
-          className="absolute top-2 right-2 inline-flex items-center justify-center w-7 h-7 rounded-lg opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all hover:scale-105"
+          className="absolute top-2 right-2 z-20 inline-flex items-center justify-center w-7 h-7 rounded-lg opacity-100 transition-all hover:scale-105"
           style={{
             background: "rgba(17,19,26,0.65)",
             color: "#fff",

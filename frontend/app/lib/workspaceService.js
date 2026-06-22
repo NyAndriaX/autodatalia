@@ -48,13 +48,6 @@ export async function removeMember(userId) {
   });
 }
 
-// Destructive: fully delete a member's ACCOUNT (not just their membership).
-export async function deleteMemberAccount(userId) {
-  return apiFetch(`/workspace/members/${encodeURIComponent(userId)}/account`, {
-    method: "DELETE",
-  });
-}
-
 // ── Roles ───────────────────────────────────────────────────────────────
 export async function fetchRoles() {
   if (offline()) return [];

@@ -24,6 +24,7 @@ import { submitValidation } from "../lib/validationService";
 import { loadSettings } from "../lib/settingsStorage";
 import { getScheduleTimezone } from "../lib/timezone";
 import { isoDateKey, startOfToday } from "../lib/dateUtils";
+import { loadMessagesThunk } from "./searchThunks";
 
 // Frontend-side cooldown after a publish — locks the button so a fast
 // second click can't double-post (the backend has the same guard).
@@ -142,6 +143,7 @@ export function applyQuickActionThunk(action) {
 export function saveDraftThunk() {
   return async (dispatch, getState) => {
     const { currentPost } = getState().editor;
+    const locale = getState().ui.locale === "fr" ? "fr" : "en";
     dispatch(setStatus("draft"));
     // Persist the draft so it shows up in the Library's Drafts tab (not just a
     // local status flip). Only keep media that actually uploaded — local-only
@@ -153,8 +155,10 @@ export function saveDraftThunk() {
       platforms: currentPost.platforms || {},
       status: "draft",
       scheduledDate: currentPost.scheduledDate || isoDateKey(startOfToday()),
+      time: currentPost.time || undefined,
       timezone: getScheduleTimezone(),
       media: uploaded,
+      locale,
       ratios:
         currentPost.ratios && Object.keys(currentPost.ratios).length
           ? currentPost.ratios
@@ -162,45 +166,62 @@ export function saveDraftThunk() {
     };
     // Editing an existing draft → update it in place; otherwise create one and
     // remember its id so the NEXT save updates the same draft (not a new one).
-    let saved;
-    if (currentPost.draftId) {
-      saved = await patchPost(currentPost.draftId, payload);
-    } else {
-      saved = await createPost(payload);
+    try {
+      let saved;
+      if (currentPost.draftId) {
+        try {
+          saved = await patchPost(currentPost.draftId, payload);
+        } catch (err) {
+          if (err?.status !== 404) throw err;
+        }
+        if (!saved) {
+          saved = await createPost(payload);
+        }
+      } else {
+        saved = await createPost(payload);
+      }
       if (saved?.id) dispatch(setDraftId(saved.id));
+      dispatch(
+        addNotification({
+          messageKey: saved ? "draftSaved" : "draftSavedLocally",
+          type: saved ? "success" : "info",
+        })
+      );
+    } catch (err) {
+      dispatch(
+        addNotification({
+          message: err?.message || "Couldn't save draft.",
+          type: "error",
+        })
+      );
     }
-    dispatch(
-      addNotification({
-        messageKey: saved ? "draftSaved" : "draftSavedLocally",
-        type: saved ? "success" : "info",
-      })
-    );
   };
 }
 
 export function submitForValidationThunk() {
   return async (dispatch, getState) => {
     const { currentPost } = getState().editor;
+    const locale = getState().ui.locale === "fr" ? "fr" : "en";
     try {
       const localSettings = loadSettings();
       const resp = await submitValidation({
+        post_id: currentPost.draftId || undefined,
         content: currentPost.content,
         platforms: currentPost.platforms,
         scheduledDate: currentPost.scheduledDate || undefined,
+        time: currentPost.time || undefined,
         timezone: getScheduleTimezone(),
         media: currentPost.media || [],
+        locale,
         ratios: currentPost.ratios || undefined,
         tiktok: currentPost.tiktok || undefined,
         chat_id: localSettings.telegramChatId || undefined,
       });
       dispatch(setStatus(resp?.status || "pending"));
-      dispatch(
-        addNotification({
-          messageKey: "validationSubmitted",
-          messageParams: { chat: resp?.chat_id ? ` (${resp.chat_id})` : "" },
-          type: "success",
-        })
-      );
+      // The backend writes the authoritative workspace-scoped validation
+      // event into /messages. Refresh it immediately instead of adding a
+      // second local bell item for the same submit action.
+      dispatch(loadMessagesThunk());
     } catch (err) {
       dispatch(setStatus("error"));
       dispatch(
@@ -265,6 +286,7 @@ export function publishNowThunk() {
     // Re-read currentPost AFTER the upload-wait so we pick up the now-
     // populated remoteUrl on each uploaded media item.
     const { currentPost } = getState().editor;
+    const locale = getState().ui.locale === "fr" ? "fr" : "en";
 
     // Build the list of (platform, target_id) pairs from currentPost.platforms
     // crossed with the live connections list. The user's `platforms` toggle
@@ -401,6 +423,7 @@ export function publishNowThunk() {
         mediaUrl,
         mediaUrls,
         targets,
+        locale,
         ratios: currentPost.ratios,
         tiktok: tiktokOpts,
       });

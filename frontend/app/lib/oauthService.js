@@ -242,10 +242,27 @@ export function connectZernio(platform, { timeoutMs = 5 * 60 * 1000 } = {}) {
     let popup = null;
     let timer = null;
     let pollHandle = null;
+    let settled = false;
+    let popupClosedAt = null;
 
     const cleanup = () => {
       if (timer) clearTimeout(timer);
       if (pollHandle) clearInterval(pollHandle);
+      if (popup && !popup.closed) popup.close();
+    };
+
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      invalidateConnectionsCache();
+      callback(value);
+    };
+
+    const platformIsConnected = async () => {
+      const data = await apiFetch("/oauth/connections");
+      const targets = data?.providers?.zernio?.targets || [];
+      return targets.some((target) => target.platform === platform);
     };
 
     try {
@@ -254,35 +271,62 @@ export function connectZernio(platform, { timeoutMs = 5 * 60 * 1000 } = {}) {
       );
       popup = window.open(url, `zernio_${platform}`, POPUP_FEATURES);
       if (!popup) {
-        reject(new Error("Popup blocked. Allow popups for this site."));
+        finish(reject, new Error("Popup blocked. Allow popups for this site."));
         return;
       }
       timer = setTimeout(() => {
-        cleanup();
-        if (popup && !popup.closed) popup.close();
-        reject(new Error("Zernio connect timed out"));
+        finish(reject, new Error("Zernio connect timed out"));
       }, timeoutMs);
-      pollHandle = setInterval(() => {
-        if (popup.closed) {
-          cleanup();
-          // Zernio's domain can't postMessage us; the caller refetches
-          // connections to confirm the link landed.
-          invalidateConnectionsCache();
-          resolve({ ok: true });
+      pollHandle = setInterval(async () => {
+        if (settled) return;
+        if (popup.closed && popupClosedAt === null) popupClosedAt = Date.now();
+        try {
+          if (await platformIsConnected()) {
+            finish(resolve, { ok: true, connected: true });
+            return;
+          }
+        } catch {
+          // Keep waiting through a transient refresh failure.
         }
-      }, 600);
+        if (popupClosedAt && Date.now() - popupClosedAt > 8000) {
+          finish(
+            reject,
+            new Error("The Zernio window closed before the account was connected."),
+          );
+        }
+      }, 1200);
     } catch (e) {
-      cleanup();
       if (e.status === 503) {
-        reject(new Error("Zernio is not configured — add a Zernio API key first."));
+        finish(reject, new Error("Zernio is not configured — add a Zernio API key first."));
       } else {
-        reject(e);
+        finish(reject, e);
       }
     }
   });
 }
 
 /** DELETE /oauth/{provider} — forget the stored token. */
+/** Disconnect all Zernio accounts for one platform in the active workspace. */
+export async function disconnectZernio(platform) {
+  if (!config.apiBaseUrl) return { ok: false };
+  const result = await apiFetch(
+    `/oauth/zernio/${encodeURIComponent(platform)}`,
+    { method: "DELETE" },
+  );
+  invalidateConnectionsCache();
+  return result;
+}
+
+export async function disconnectZernioAccount(accountId) {
+  if (!config.apiBaseUrl) return { ok: false };
+  const result = await apiFetch(
+    `/oauth/zernio/account/${encodeURIComponent(accountId)}`,
+    { method: "DELETE" },
+  );
+  invalidateConnectionsCache();
+  return result;
+}
+
 export async function disconnect(providerId) {
   if (!config.apiBaseUrl) return { ok: false };
   const result = await apiFetch(`/oauth/${providerId}`, { method: "DELETE" });
@@ -305,6 +349,7 @@ export async function publishToTargets({
   mediaUrls = null,
   link = null,
   targets,
+  locale = null,
   ratios = null,
   tiktok = null,
 }) {
@@ -317,6 +362,7 @@ export async function publishToTargets({
       media_urls: mediaUrls,
       link,
       targets,
+      locale: locale || undefined,
       ratios: ratios || undefined,
       // TikTok compose flags (visibility, branded toggles, music
       // consent). Only sent when TikTok is in the publish set;

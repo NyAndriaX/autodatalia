@@ -27,6 +27,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .config import settings
+from .i18n_backend import normalize_locale, t as t_backend
 from .db import (
     get_only_user_id,
     list_scoped_blob_user_ids,
@@ -307,6 +308,7 @@ async def generate_candidate(rule: dict[str, Any], fire_epoch: float) -> dict[st
         "status": "awaiting_validation",
         "scheduledDate": scheduled_date,
         "time": scheduled_time,
+        "locale": normalize_locale(rule.get("locale")),
         "timezone": (rule.get("schedule") or {}).get("timezone") or DEFAULT_TZ_NAME,
         "media": media,
         "ratios": rule.get("ratios"),
@@ -344,9 +346,10 @@ async def generate_candidate(rule: dict[str, Any], fire_epoch: float) -> dict[st
             messages_append({
                 "kind": "automation",
                 "post_id": post["id"],
-                "message": (
-                    f"Auto-generated post for rule '{rule.get('name')}' "
-                    f"submitted to Telegram for validation."
+                "message": t_backend(
+                    normalize_locale(rule.get("locale")),
+                    "auto_submitted",
+                    rule_name=rule.get("name"),
                 ),
             })
         except Exception as exc:
@@ -354,7 +357,12 @@ async def generate_candidate(rule: dict[str, Any], fire_epoch: float) -> dict[st
             messages_append({
                 "kind": "automation_error",
                 "post_id": post["id"],
-                "message": f"Auto-generated post {post['id']} created but Telegram submission failed: {exc}",
+                "message": t_backend(
+                    normalize_locale(rule.get("locale")),
+                    "auto_submit_failed",
+                    post_id=post["id"],
+                    error=str(exc),
+                ),
             })
     else:
         messages_append({
@@ -438,7 +446,11 @@ async def regenerate_for_post(post: dict[str, Any]) -> dict[str, Any]:
     messages_append({
         "kind": "automation",
         "post_id": post["id"],
-        "message": f"Auto-generated post {post['id']} regenerated after timeout.",
+        "message": t_backend(
+            normalize_locale(updated.get("locale")),
+            "auto_regenerated",
+            post_id=post["id"],
+        ),
     })
     return updated
 
@@ -489,9 +501,10 @@ async def _scan_timeouts(now: float) -> list[str]:
         messages_append({
             "kind": "automation",
             "post_id": post["id"],
-            "message": (
-                f"Auto-generated post {post['id']} hit its publish time without "
-                "validation — sent timeout prompt to Telegram."
+            "message": t_backend(
+                normalize_locale(post.get("locale")),
+                "auto_timeout_prompt",
+                post_id=post["id"],
             ),
         })
         prompted.append(post["id"])
@@ -534,9 +547,10 @@ def _reconcile_open_posts() -> list[str]:
             {
                 "kind": "automation",
                 "post_id": post["id"],
-                "message": (
-                    f"Auto-generated post {post['id']} was cancelled because "
-                    "its source rule changed or no longer exists."
+                "message": t_backend(
+                    normalize_locale(post.get("locale")),
+                    "auto_cancelled_rule_changed",
+                    post_id=post["id"],
                 ),
             }
         )

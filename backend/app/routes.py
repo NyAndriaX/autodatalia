@@ -36,6 +36,7 @@ from .models import (
     UploadResponse,
 )
 from .config import settings
+from .i18n_backend import normalize_locale, t as t_backend
 from .images import crop_for_targets
 from .oauth import _load_tokens, _fetch_meta_pages
 from .publish import publish_to_targets
@@ -277,11 +278,48 @@ async def dashboard_summary(user_id: int = Depends(require_token)) -> dict[str, 
     recent_activity = messages_list(user_id=ws)[:10]
 
     token_data = _load_tokens(ws)
-    connected_providers = [
+    connected_providers: list[str] = [
         provider
         for provider, data in token_data.items()
         if data.get("access_token")
     ]
+    connected_platforms: set[str] = set()
+    meta_record = token_data.get("meta") or {}
+    user_meta_token = meta_record.get("access_token")
+    if user_meta_token:
+        try:
+            pages = await _fetch_meta_pages(user_meta_token)
+        except Exception:
+            pages = []
+        if pages:
+            connected_platforms.add("facebook")
+        if any(page.get("instagram") for page in pages):
+            connected_platforms.add("instagram")
+    tiktok_record = token_data.get("tiktok") or {}
+    if tiktok_record.get("access_token") and (
+        tiktok_record.get("open_id") or (tiktok_record.get("raw") or {}).get("open_id")
+    ):
+        connected_platforms.add("tiktok")
+    linkedin_record = token_data.get("linkedin") or {}
+    if linkedin_record.get("access_token") and (
+        linkedin_record.get("urn") or (linkedin_record.get("raw") or {}).get("urn")
+    ):
+        connected_platforms.add("linkedin")
+    try:
+        from . import zernio
+
+        zernio_entry = await zernio.connections_entry(ws)
+        if zernio_entry.get("connected"):
+            connected_providers.append("zernio")
+            connected_platforms.update(
+                str(target.get("platform") or "").lower()
+                for target in zernio_entry.get("targets", [])
+                if target.get("platform")
+            )
+    except Exception:
+        # Dashboard summary must remain available if an optional provider is
+        # temporarily unavailable. /oauth/connections carries its exact error.
+        pass
 
     media_count = sum(
         1
@@ -296,7 +334,8 @@ async def dashboard_summary(user_id: int = Depends(require_token)) -> dict[str, 
         },
         "connections": {
             "connected_providers": connected_providers,
-            "total_connected": len(connected_providers),
+            "connected_platforms": sorted(connected_platforms),
+            "total_connected": len(connected_platforms),
         },
         "media": {
             "total_assets": media_count,
@@ -818,6 +857,36 @@ async def publish(
             for r in ordered
         ])
     )
+    locale = normalize_locale(body.locale)
+    for result in ordered:
+        label = result.get("target_label") or result.get("target_id") or result.get("platform")
+        messages_append(
+            {
+                "kind": "publish" if result.get("ok") else "publish_error",
+                "post_id": None,
+                "target_id": result.get("target_id"),
+                "target_label": label,
+                "platform": result.get("platform"),
+                "url": result.get("permalink_url"),
+                "message": (
+                    t_backend(
+                        locale,
+                        "scheduler_published",
+                        target=label,
+                        platform=result.get("platform") or "?",
+                    )
+                    if result.get("ok")
+                    else t_backend(
+                        locale,
+                        "scheduler_failed",
+                        target=label,
+                        platform=result.get("platform") or "?",
+                        error=result.get("error") or "unknown error",
+                    )
+                ),
+                "workspace_id": scoped_user_id,
+            }
+        )
 
     return PublishResponse(
         results=[PublishResultModel(**r) for r in ordered]

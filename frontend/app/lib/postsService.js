@@ -9,13 +9,18 @@ function offline() {
   return !config.apiBaseUrl;
 }
 
+function isHttpError(err) {
+  return !!err && typeof err === "object" && "status" in err && !!err.status;
+}
+
 /** GET /posts → array (or null on failure / no backend configured). */
 export async function fetchPosts() {
   if (offline()) return null;
   try {
     const data = await apiFetch("/posts");
     return Array.isArray(data?.posts) ? data.posts : null;
-  } catch {
+  } catch (err) {
+    if (isHttpError(err)) throw err;
     return null;
   }
 }
@@ -28,7 +33,8 @@ export async function createPost(post) {
       method: "POST",
       body: JSON.stringify(post),
     });
-  } catch {
+  } catch (err) {
+    if (isHttpError(err)) throw err;
     return null;
   }
 }
@@ -41,7 +47,8 @@ export async function patchPost(id, patch) {
       method: "PATCH",
       body: JSON.stringify(patch),
     });
-  } catch {
+  } catch (err) {
+    if (isHttpError(err)) throw err;
     return null;
   }
 }
@@ -52,7 +59,8 @@ export async function deletePost(id) {
   try {
     await apiFetch(`/posts/${encodeURIComponent(id)}`, { method: "DELETE" });
     return true;
-  } catch {
+  } catch (err) {
+    if (isHttpError(err)) throw err;
     return false;
   }
 }
