@@ -1,37 +1,32 @@
-# LinkedIn setup
+# LinkedIn Setup
 
-AutoDatalia supports LinkedIn member posting through the REST Posts API.
+LinkedIn is supported in the current branch.
 
-Required LinkedIn products/scopes:
-- `Share on LinkedIn` with `w_member_social`
-- One identity path so the app can discover the member URN:
-  - preferred: OpenID Connect scopes `openid profile email`
-  - fallback: legacy `r_liteprofile`
+## Direct LinkedIn mode
+
+Required env:
+
+```env
+LINKEDIN_CLIENT_ID=
+LINKEDIN_CLIENT_SECRET=
+```
 
 Redirect URI:
-- `${OAUTH_REDIRECT_BASE}/oauth/linkedin/callback`
 
-Environment variables:
-- `LINKEDIN_CLIENT_ID`
-- `LINKEDIN_CLIENT_SECRET`
-- optional `LINKEDIN_SCOPES`
-
-Recommended `LINKEDIN_SCOPES`:
-```env
-LINKEDIN_SCOPES=openid,profile,email,w_member_social
+```text
+https://api.yourdomain.com/oauth/linkedin/callback
 ```
 
-Fallback if your LinkedIn app only has legacy profile access:
-```env
-LINKEDIN_SCOPES=r_liteprofile,w_member_social
-```
+## Current app model
 
-Notes:
-- Each signed-in AutoDatalia user must connect LinkedIn from Settings for their own account.
-- Tokens are stored server-side per user.
-- LinkedIn posting supports member text posts, single-image posts, and video
-  posts (chunked Videos API: initializeUpload → upload parts → finalizeUpload).
-- Access tokens auto-refresh (~60-day lifetime) when the app is approved for
-  programmatic refresh tokens; otherwise the user reconnects on expiry.
-- Video posting is implemented but **not yet verified end-to-end** against the
-  live API — pending a connected token.
+- LinkedIn connections are workspace-scoped.
+- In a shared workspace, the workspace shares the connected account set.
+- LinkedIn can also be reached through Zernio if that workspace uses Zernio instead of direct provider OAuth.
+
+## Verify
+
+1. Open the target workspace.
+2. Go to Settings.
+3. Connect LinkedIn.
+4. Confirm the connection appears in the workspace.
+5. Publish a test post from that workspace.
