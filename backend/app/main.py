@@ -108,10 +108,12 @@ settings.content_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/content", StaticFiles(directory=settings.content_dir), name="content")
 
 from .auth import router as auth_router
+from .workspaces_routes import router as workspaces_router
 
 # ── Routes ─────────────────────────────────────────────────────────────
 app.include_router(router)
 app.include_router(auth_router)
+app.include_router(workspaces_router)
 app.include_router(oauth_router)
 app.include_router(telegram_validation_router)
 app.include_router(media_generation_router)

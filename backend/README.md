@@ -1,121 +1,103 @@
-# DATALIA Backend — FastAPI Service
+# Backend
 
-Python **FastAPI** service that backs the Datalia dashboard. Handles AI
-generation, media uploads, calendar persistence, social OAuth, and
-publishing fan-out to Meta (Facebook + Instagram), TikTok and LinkedIn.
+FastAPI backend for Datalia.
 
-Run via Docker Compose from [`../infra/`](../infra/) (recommended), or standalone.
+It handles:
 
-## Project structure
+- auth
+- workspaces and roles
+- AI text/media generation
+- media upload and serving
+- social OAuth
+- publishing
+- scheduling
+- automation
+- Telegram validation
+- notifications
 
-```
-backend/
-├── Dockerfile
-├── requirements.txt
-├── content/                  # Uploaded media + JSON state (volume-mounted)
-└── app/
-    ├── main.py               # FastAPI entrypoint, CORS, /content mount, TikTok verify
-    ├── config.py             # Env-loaded settings
-    ├── auth.py               # /auth/* routes + bearer-token dependency
-    ├── db.py                 # MariaDB app store (auth + app state, see DATABASE_URL)
-    ├── models.py             # Pydantic request/response schemas
-    ├── routes.py             # Core REST endpoints
-    ├── services.py           # AI generation + image-desc cache + posts CRUD
-    ├── scheduler.py          # In-process async loop firing scheduled posts
-    ├── oauth.py              # OAuth providers (meta/tiktok/linkedin/google)
-    ├── publish.py            # Per-platform publish + spam guard
-    ├── images.py             # Pillow center-crop per aspect ratio
-    ├── media_generation.py   # /media/generate/{image,video}
-    ├── telegram_validation.py # Telegram bot webhook + approval flow
-    ├── legal.py              # /privacy + /terms HTML pages
-    └── tunnel.py             # Cloudflare quick-tunnel helper (opt-in)
-```
+## Stack
 
-## API surface
+- FastAPI
+- PyMySQL / MariaDB
+- Docker
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/health` | Health check |
-| GET | `/tunnel-status` | Cloudflare quick-tunnel URL (if `TUNNEL_ENABLED=true`) |
-| POST | `/generate` | AI content generation |
-| POST | `/transform` | AI quick actions (rewrite, shorten, hashtags…) |
-| POST | `/captions/generate` | Batch caption generation over content items |
-| GET | `/content-items` | Enumerate media in the content dir with descriptions |
-| POST | `/upload` | Upload media to `content/`, returns public URL |
-| DELETE | `/media/{path}` | Remove a previously-uploaded media file |
-| GET | `/search` | Search media in the content directory |
-| GET | `/messages` | Notification feed for the bell menu |
-| GET / POST / PATCH / DELETE | `/posts` | Calendar post CRUD |
-| POST | `/publish` | Fan-out to selected social targets |
-| POST | `/media/generate/image` | AI image generation (external provider, auto-fallback to local poster on provider/quota failure) |
-| POST | `/media/generate/video` | AI video generation (Ken Burns clip from generated image) |
-| POST | `/auth/register`, `/auth/login` | Local user accounts (sets HttpOnly session cookie) |
-| POST | `/auth/logout` | Clear the session cookie |
-| GET | `/auth/me` | Current authenticated user |
-| GET | `/oauth/status` | Per-provider connection state |
-| GET | `/oauth/{provider}/start` | Begin OAuth flow (returns authorize URL) |
-| GET | `/oauth/{provider}/callback` | OAuth callback (posts message to opener) |
-| DELETE | `/oauth/{provider}` | Disconnect a provider |
-| GET | `/oauth/connections` | List connected providers + postable targets |
-| GET | `/oauth/meta/accounts` | Pages + IG accounts behind the current Meta token |
-| GET | `/telegram/status` | Telegram bot connectivity + chat-id presence |
-| POST | `/telegram/webhook` | Inline-button callbacks from the validation bot |
-| POST | `/validation/submit` | Push a draft to the Telegram approval queue |
-| GET | `/privacy`, `/terms` | HTML pages required by Meta/TikTok/LinkedIn portals |
-| GET | `/tiktok{token}.txt` | TikTok domain-verification file |
-| - | `/content/*` | Static-mounted uploaded media |
+## Current behavior
 
-Authenticated browser flows should use `/auth/login`; the backend sets an
-HttpOnly session cookie and `/auth/me` restores the user. `BACKEND_AUTH_TOKEN`
-is reserved for optional server-to-server access. Anonymous access is
-controlled by `ALLOW_OPEN_AUTH` and should stay disabled in production.
+- Users sign in with email + password.
+- Each user gets a personal workspace at registration.
+- Users can join shared workspaces through invites.
+- Posts, tokens, settings, notifications, and automation state are scoped by active workspace.
+- Social connections are workspace-scoped.
+- Zernio is optional and can be used as a workspace-level social connection layer.
 
-## Environment variables
+## Main modules
 
-Loaded from `infra/.env` when running under Docker Compose.
+- `app/main.py` — app startup and router registration
+- `app/auth.py` — register, login, logout, account actions, invite accept
+- `app/authz.py` — workspace and permission resolution
+- `app/workspaces.py` — workspace, role, member, invitation logic
+- `app/workspaces_routes.py` — Team & Access endpoints
+- `app/routes.py` — posts, media, messages, settings-related API
+- `app/oauth.py` — direct provider OAuth routes
+- `app/publish.py` — publish fan-out
+- `app/zernio.py` — Zernio integration
+- `app/scheduler.py` — scheduled publishing loop
+- `app/automation_worker.py` — automation generation and approval flow
+- `app/telegram_validation.py` — Telegram webhook and approval actions
+- `app/services.py` — AI text generation and related helpers
+- `app/media_generation.py` — AI image/video generation
+- `app/db.py` — MariaDB connection and document storage helpers
 
-| Variable | Required | Purpose |
-|---|---|---|
-| `AI_API_BASE_URL` | yes | OpenAI-compatible endpoint (default OpenRouter) |
-| `AI_API_KEY` | yes | Provider API key |
-| `AI_MODEL` / `AI_MODEL_FAST` / `AI_MODEL_PREMIUM` | partial | Three-tier model routing |
-| `AI_INCLUDE_IMAGES` | no | Send images for vision captioning |
-| `AI_DAILY_LIMIT` | no | Per-client daily AI call cap |
-| `CORS_ALLOW_ORIGINS` | no | Comma-separated allowed origins |
-| `BACKEND_AUTH_TOKEN` | no | Optional shared bearer token for non-browser/server-to-server clients |
-| `ALLOW_OPEN_AUTH` | no | Dev-only anonymous access switch; defaults off in production |
-| `AUTH_RATE_LIMIT_ATTEMPTS` / `AUTH_RATE_LIMIT_WINDOW_SECONDS` | no | Login/register throttling; defaults to `10` attempts per `300` seconds |
-| `OAUTH_REDIRECT_BASE` | for OAuth | Public HTTPS host receiving callbacks |
-| `PUBLIC_BASE_URL` | no | Overrides URL used by `/upload` for media; must publicly serve `/content/*` for Instagram/TikTok pulls |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_DEFAULT_CHAT_ID` / `TELEGRAM_WEBHOOK_SECRET` | for Telegram validation | `TELEGRAM_WEBHOOK_SECRET` is required whenever the bot is enabled |
-| `META_APP_ID` / `META_APP_SECRET` | for Meta | Facebook + Instagram |
-| `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET` / `TIKTOK_DOMAIN_VERIFY` | for TikTok | |
-| `LINKEDIN_CLIENT_ID` / `LINKEDIN_CLIENT_SECRET` | for LinkedIn | |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | for Google sign-in | |
-| `CONTENT_DIR` | no | Defaults to `/home/app/content` in the container |
-| `TUNNEL_ENABLED` | no | Opt-in Cloudflare quick-tunnel at boot |
+## Main endpoints
 
-## Run standalone (without Docker)
+- `GET /health`
+- `POST /auth/register`
+- `POST /auth/login`
+- `POST /auth/logout`
+- `GET /auth/me`
+- `GET /workspace`
+- `GET /workspaces`
+- `POST /workspaces`
+- `POST /workspace/switch`
+- `GET /workspace/members`
+- `GET /workspace/roles`
+- `GET /oauth/connections`
+- `POST /generate`
+- `POST /upload`
+- `GET/POST/PATCH/DELETE /posts`
+- `GET/POST/PATCH/DELETE /automation-rules`
+- `POST /publish`
+- `POST /telegram/webhook`
+- `GET /messages`
+
+## Local run
+
+From repo root:
 
 ```bash
-cd backend
-pip install -r requirements.txt
-export AI_API_KEY=sk-or-v1-...
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+docker compose -f infra/docker-compose.yml up -d --build caption-api
 ```
+
+Backend URL:
+
+- `http://localhost:8000`
 
 ## Tests
 
 ```bash
-docker compose -f infra/docker-compose.yml up -d --build caption-api
-docker compose -f infra/docker-compose.yml exec -T caption-api python -m pytest /home/app/tests -q
+docker compose -f infra/docker-compose.yml exec -T caption-api python -m pytest tests -q
 ```
 
-For Windows operators there is also a helper:
+## Production notes
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\backend\run-tests.ps1
-```
+- production compose is `infra/docker-compose.prod.yml`
+- production runtime is Dokploy + Traefik
+- keep one backend replica only
+- MariaDB is the source of truth for structured state
+- media files stay on the content volume
 
-The frontend handles CORS via `CORS_ALLOW_ORIGINS` (defaults include
-`http://localhost:3000`), so no Next.js rewrite proxy is required.
+See:
+
+- [../README.md](../README.md)
+- [../DEPLOY.md](../DEPLOY.md)
+- [../PROJECT_STATE.md](../PROJECT_STATE.md)

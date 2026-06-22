@@ -18,8 +18,13 @@ import {
   MenuUnfoldOutlined,
   ThunderboltOutlined,
   VideoCameraOutlined,
+  FileImageOutlined,
   PlusOutlined,
+  TeamOutlined,
+  SafetyCertificateOutlined,
 } from "@ant-design/icons";
+import { hasPermission } from "../../lib/permissions";
+import { resetEditor } from "../../store/editorSlice";
 
 export default function Sidebar() {
   const dispatch = useDispatch();
@@ -32,22 +37,28 @@ export default function Sidebar() {
   const tSidebar = useTranslations("sidebar");
   const tCommon = useTranslations("common");
   const tCreation = useTranslations("creation");
+  const tTeam = useTranslations("team");
 
-  const NAV_SECTIONS = [
+  // Items may carry a `perm`; the section is shown only with the items the
+  // caller's workspace role grants. "Équipe & Accès" labels are literal (the
+  // i18n bundles can adopt them later) so a missing key never breaks the nav.
+  const RAW_NAV_SECTIONS = [
     {
       title: t("sectionContent"),
       items: [
-        { key: "dashboard", icon: <DashboardOutlined />, label: tSidebar("dashboard") },
-        { key: "creation",  icon: <EditOutlined />,      label: tCreation("title")    },
-        { key: "calendar",  icon: <CalendarOutlined />,  label: tSidebar("calendar")  },
-        { key: "library",   icon: <PictureOutlined />,   label: tSidebar("library")   },
+        { key: "dashboard", icon: <DashboardOutlined />,   label: tSidebar("dashboard")   },
+        { key: "creation",  icon: <EditOutlined />,        label: tCreation("title")      },
+        // AI Image + AI Video creation, grouped right under "Create a post".
+        { key: "image",     icon: <FileImageOutlined />,   label: tSidebar("imageStudio") },
+        { key: "videos",    icon: <VideoCameraOutlined />, label: tSidebar("videos")      },
+        { key: "calendar",  icon: <CalendarOutlined />,    label: tSidebar("calendar")    },
+        { key: "library",   icon: <PictureOutlined />,     label: tSidebar("library")     },
       ],
     },
     {
       title: t("sectionAutomation"),
       items: [
-        { key: "automation", icon: <RobotOutlined />,       label: tSidebar("automation"), badge: "NEW" },
-        { key: "videos",     icon: <VideoCameraOutlined />, label: tSidebar("videos"),     badge: "NEW" },
+        { key: "automation", icon: <RobotOutlined />, label: tSidebar("automation") },
       ],
     },
     {
@@ -58,12 +69,27 @@ export default function Sidebar() {
       ],
     },
     {
+      title: t("sectionTeam"),
+      items: [
+        { key: "members", icon: <TeamOutlined />,              label: tTeam("membersTitle"), perm: "members.read" },
+        { key: "roles",   icon: <SafetyCertificateOutlined />, label: tTeam("rolesTitle"),   perm: "roles.read"   },
+      ],
+    },
+    {
       title: t("sectionAccount"),
       items: [
         { key: "settings", icon: <SettingOutlined />, label: tCommon("settings") },
       ],
     },
   ];
+
+  // Drop items the role doesn't grant, then drop now-empty sections.
+  const NAV_SECTIONS = RAW_NAV_SECTIONS
+    .map((s) => ({
+      ...s,
+      items: s.items.filter((it) => !it.perm || hasPermission(user, it.perm)),
+    }))
+    .filter((s) => s.items.length > 0);
 
   const NAV_ITEMS_FLAT = NAV_SECTIONS.flatMap((s) => s.items);
 
@@ -143,6 +169,7 @@ export default function Sidebar() {
         <button
           type="button"
           onClick={() => {
+            dispatch(resetEditor()); // a fresh post — never inherit a draft id/content
             dispatch(setActiveView("creation"));
             if (isMobile) dispatch(setMobileNav(false));
           }}

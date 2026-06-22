@@ -75,7 +75,7 @@ def atomic_write_text(path, content: str, *, encoding: str = "utf-8") -> None:
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".jfif", ".png", ".webp", ".gif"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".m4v"}
 DESCRIPTION_EXTENSIONS = (".txt", ".md")
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+MAX_UPLOAD_BYTES = 500 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/gif",
@@ -92,11 +92,43 @@ ALLOWED_VIDEO_CONTENT_TYPES = {
 }
 
 
-def _upstream_error_detail(message: str, upstream_status: int) -> dict[str, Any]:
-    return {
+def _extract_upstream_error(response: httpx.Response) -> str:
+    """Best-effort extraction of a concise upstream provider error string."""
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            text = (
+                error.get("message")
+                or error.get("detail")
+                or error.get("type")
+                or ""
+            )
+            if text:
+                return str(text).strip()[:240]
+        for key in ("message", "detail", "error"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:240]
+    text = (response.text or "").strip()
+    return text[:240] if text else ""
+
+
+def _upstream_error_detail(
+    message: str,
+    upstream_status: int,
+    upstream_error: str = "",
+) -> dict[str, Any]:
+    detail = {
         "message": message,
         "upstream_status": upstream_status,
     }
+    if upstream_error:
+        detail["upstream_error"] = upstream_error
+    return detail
 
 
 def _upload_kind_for(file: UploadFile, suffix: str) -> str:
@@ -125,15 +157,82 @@ def read_description(image_path: Path) -> str:
     return ""
 
 
-def iter_content_items() -> list[dict[str, Any]]:
-    """Scan the content directory and return metadata for every image found.
+def _media_root(workspace_id: int | str | None = None) -> Path:
+    """Resolve the media directory for a workspace.
+
+    Media is isolated per workspace under ``content_dir/ws/{id}`` so members of
+    one workspace never see another's uploads. A missing/non-positive id falls
+    back to ``content_dir`` itself (the bounded global scope). The returned path
+    is always inside ``content_dir`` and is served by the public /content mount
+    as ``/content/ws/{id}/<file>``.
+    """
+    root = settings.content_dir
+    if workspace_id in (None, "", 0, "0"):
+        return root
+    try:
+        wid = int(workspace_id)
+    except (TypeError, ValueError):
+        return root
+    return root / "ws" / str(wid) if wid > 0 else root
+
+
+def _resolve_uploaded_image_path(
+    image_filename: str | None,
+    *,
+    workspace_id: int | str | None = None,
+) -> Path | None:
+    """Resolve an uploaded image inside the caller's workspace media tree.
+
+    Older code only checked ``content_dir/<filename>``, which broke once media
+    moved under ``content_dir/ws/{workspace_id}/...``. The frontend still sends
+    just the filename, so we resolve it against the workspace root first and
+    then fall back to a bounded recursive search inside that root. A final
+    legacy fallback keeps pre-workspace flat files working during migration.
+    """
+    if not image_filename:
+        return None
+    safe_image_name = _safe_filename(image_filename)
+    if not safe_image_name:
+        return None
+
+    media_root = _media_root(workspace_id)
+    direct = media_root / safe_image_name
+    candidates: list[Path] = [direct]
+
+    legacy = settings.content_dir / safe_image_name
+    if legacy != direct:
+        candidates.append(legacy)
+
+    for candidate in candidates:
+        if (
+            candidate.exists()
+            and candidate.is_file()
+            and candidate.suffix.lower() in IMAGE_EXTENSIONS
+        ):
+            return candidate
+
+    if media_root.exists():
+        for candidate in media_root.rglob(safe_image_name):
+            if (
+                candidate.is_file()
+                and candidate.suffix.lower() in IMAGE_EXTENSIONS
+            ):
+                return candidate
+    return None
+
+
+def iter_content_items(*, workspace_id: int | str | None = None) -> list[dict[str, Any]]:
+    """Scan a workspace's content directory and return metadata for every image.
 
     Skips pipeline derivatives so caption generation doesn't redo the same
     image once per crop variant (4 calls for one upload would be billed
     individually otherwise).
     """
     items: list[dict[str, Any]] = []
-    for image_path in sorted(settings.content_dir.rglob("*")):
+    media_root = _media_root(workspace_id)
+    if not media_root.exists():
+        return items
+    for image_path in sorted(media_root.rglob("*")):
         if not image_path.is_file():
             continue
         if image_path.suffix.lower() not in IMAGE_EXTENSIONS:
@@ -239,6 +338,7 @@ async def generate_captions(
             detail=_upstream_error_detail(
                 "AI API request failed.",
                 response.status_code,
+                _extract_upstream_error(response),
             ),
         )
 
@@ -488,6 +588,7 @@ async def _post_chat(
             detail=_upstream_error_detail(
                 "AI API request failed.",
                 response.status_code,
+                _extract_upstream_error(response),
             ),
         )
 
@@ -742,16 +843,10 @@ async def generate_post_variants(
     # Resolve the optional uploaded image. We accept just the filename so the
     # frontend never has to re-upload bytes — the file is already in our
     # content dir. Anything outside the content dir is silently ignored.
-    image_path = None
-    if image_filename:
-        safe_image_name = _safe_filename(image_filename)
-        candidate = settings.content_dir / safe_image_name
-        if (
-            candidate.exists()
-            and candidate.is_file()
-            and candidate.suffix.lower() in IMAGE_EXTENSIONS
-        ):
-            image_path = candidate
+    image_path = _resolve_uploaded_image_path(
+        image_filename,
+        workspace_id=user_id,
+    )
 
     # Convert the image (if any) to a short cached description so the vision
     # model is hit at most once per file. Repeat generations on the same
@@ -939,21 +1034,29 @@ def _unique_path(directory: Path, filename: str) -> Path:
         i += 1
 
 
-def delete_media(relative_path: str) -> bool:
-    """Delete a previously-uploaded media file by its content-dir-relative path.
+def delete_media(
+    relative_path: str, *, workspace_id: int | str | None = None
+) -> bool:
+    """Delete a media file by its content-dir-relative path.
 
-    Returns True if removed, False if not found. Raises ValueError if the
-    path tries to escape the content directory (defense in depth — we never
-    want a `../etc/passwd` deletion).
+    Returns True if removed, False if not found. Raises ValueError if the path
+    escapes the workspace's media directory — the guard is pinned to
+    ``_media_root(workspace_id)`` so a workspace can only delete its OWN media
+    (a crafted ``ws/<other>/...`` path resolves outside the caller's root and
+    is rejected), as well as blocking classic ``../`` traversal.
     """
     if not relative_path:
         raise ValueError("Empty path.")
-    root = settings.content_dir.resolve()
-    target = (root / relative_path).resolve()
+    content_root = settings.content_dir.resolve()
+    media_root = _media_root(workspace_id).resolve()
+    # The public id/relative_path is content-dir-relative (e.g. "ws/3/a.jpg");
+    # resolve it from the content root, then require it to live under the
+    # caller's own media root.
+    target = (content_root / relative_path).resolve()
     try:
-        target.relative_to(root)
+        target.relative_to(media_root)
     except ValueError as exc:
-        raise ValueError("Path escapes content directory.") from exc
+        raise ValueError("Path escapes the workspace media directory.") from exc
     if not target.is_file():
         return False
     target.unlink()
@@ -1123,8 +1226,10 @@ async def _normalize_video_for_publishing(src: Path) -> Path:
     return final
 
 
-async def save_upload(file: UploadFile) -> dict[str, str]:
-    """Persist an uploaded file to the content dir; return its metadata.
+async def save_upload(
+    file: UploadFile, *, workspace_id: int | str | None = None
+) -> dict[str, str]:
+    """Persist an uploaded file to the workspace's content dir; return metadata.
 
     For videos, also normalise the codec to H.264 + AAC MP4 so the publish
     path doesn't trip over TikTok's `file_format_check_failed` later.
@@ -1132,9 +1237,10 @@ async def save_upload(file: UploadFile) -> dict[str, str]:
     spinner, and we'd rather the upload take 5-30s extra than return a
     file that fails at publish time.
     """
-    settings.content_dir.mkdir(parents=True, exist_ok=True)
+    media_root = _media_root(workspace_id)
+    media_root.mkdir(parents=True, exist_ok=True)
     safe = _safe_filename(file.filename or "upload")
-    dest = _unique_path(settings.content_dir, safe)
+    dest = _unique_path(media_root, safe)
     suffix = dest.suffix.lower()
     kind = _upload_kind_for(file, suffix)
 
@@ -1195,8 +1301,10 @@ def _is_derivative_filename(name: str) -> bool:
     return bool(_DERIVATIVE_PATTERN.search(stem))
 
 
-def search_media(query: str, limit: int = 50) -> list[dict[str, str]]:
-    """Search the content directory for media matching `query`.
+def search_media(
+    query: str, limit: int = 50, *, workspace_id: int | str | None = None
+) -> list[dict[str, str]]:
+    """Search a workspace's content directory for media matching `query`.
 
     Empty query returns up to `limit` items (acts as a listing endpoint for
     the Media Library). Posts/templates live in Airtable (not wired yet) so
@@ -1209,7 +1317,10 @@ def search_media(query: str, limit: int = 50) -> list[dict[str, str]]:
     """
     q = query.strip().lower()
     hits: list[dict[str, str]] = []
-    for path in sorted(settings.content_dir.rglob("*")):
+    media_root = _media_root(workspace_id)
+    if not media_root.exists():
+        return hits
+    for path in sorted(media_root.rglob("*")):
         if not path.is_file():
             continue
         suffix = path.suffix.lower()
@@ -1291,7 +1402,7 @@ def posts_create(payload: dict[str, Any]) -> dict[str, Any]:
             "posts",
             post["id"],
             post,
-            user_id=post.get("user_id"),
+            user_id=post.get("workspace_id"),
             sort_ts=post.get("published_at") or post.get("scheduled_for"),
         )
         return post
@@ -1347,7 +1458,7 @@ def posts_update(
             "posts",
             post_id,
             post,
-            user_id=post.get("user_id"),
+            user_id=post.get("workspace_id"),
             sort_ts=post.get("published_at") or post.get("scheduled_for"),
         )
         return post
@@ -1374,7 +1485,7 @@ def posts_delete(
         return delete_collection_document(
             "posts",
             post_id,
-            user_id=post.get("user_id"),
+            user_id=post.get("workspace_id"),
         )
 
 
@@ -1447,7 +1558,7 @@ def automation_create(payload: dict[str, Any]) -> dict[str, Any]:
             "automation_rules",
             rule["id"],
             rule,
-            user_id=rule.get("user_id"),
+            user_id=rule.get("workspace_id"),
             sort_ts=rule["updated_at"],
         )
         return rule
@@ -1486,7 +1597,7 @@ def automation_update(
             "automation_rules",
             rule_id,
             rule,
-            user_id=rule.get("user_id"),
+            user_id=rule.get("workspace_id"),
             sort_ts=rule["updated_at"],
         )
         return rule
@@ -1513,7 +1624,7 @@ def automation_delete(
         return delete_collection_document(
             "automation_rules",
             rule_id,
-            user_id=rule.get("user_id"),
+            user_id=rule.get("workspace_id"),
         )
 
 
@@ -1569,15 +1680,18 @@ def messages_append(message: dict[str, Any]) -> dict[str, Any]:
         record.setdefault("id", f"msg-{_uuid.uuid4().hex[:12]}")
         record.setdefault("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
         record.setdefault("read", False)
-        if not record.get("user_id") and record.get("post_id"):
+        # Messages (activity feed) are workspace-scoped. Resolve the owning
+        # workspace from the related post when not supplied; user_id stays the
+        # author for display.
+        if not record.get("workspace_id") and record.get("post_id"):
             post = get_collection_document("posts", str(record["post_id"]), all_scopes=True)
-            if post and post.get("user_id"):
-                record["user_id"] = post.get("user_id")
+            if post and post.get("workspace_id"):
+                record["workspace_id"] = post.get("workspace_id")
         upsert_collection_document(
             "messages",
             record["id"],
             record,
-            user_id=record.get("user_id"),
+            user_id=record.get("workspace_id"),
             sort_ts=time.time(),
         )
         return record

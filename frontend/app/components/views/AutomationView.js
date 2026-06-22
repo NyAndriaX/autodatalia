@@ -2,7 +2,7 @@
 
 import { btnPrimary, btnSecondary, inputField } from "../../lib/uiClasses";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useDispatch } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { useTranslations } from "next-intl";
 import {
   Bot, Plus, Trash2, Save, Loader2, Power, PowerOff, Clock,
@@ -204,6 +204,7 @@ export default function AutomationView() {
   const dispatch = useDispatch();
   const t = useTranslations("automation");
   const tCommon = useTranslations("common");
+  const locale = useSelector((s) => (s.ui.locale === "fr" ? "fr" : "en"));
   const { CONTENT_TYPES, OBJECTIVES, FREQUENCIES, WEEKDAY_LABELS } = useStaticData();
   const [rules,      setRules]      = useState([]);
   const [loading,    setLoading]    = useState(true);
@@ -270,11 +271,11 @@ export default function AutomationView() {
     setSaving(true);
     try {
       if (selectedId === "new") {
-        const created = await createAutomationRule(draft);
+        const created = await createAutomationRule({ ...draft, locale });
         await refresh();
         dispatch(addNotification({ message: t("ruleCreated", { name: created.name }), type:"success" }));
       } else if (selected) {
-        await updateAutomationRule(selected.id, draft);
+        await updateAutomationRule(selected.id, { ...draft, locale });
         await refresh();
         dispatch(addNotification({ message: t("ruleUpdated"), type:"success" }));
       }
@@ -288,7 +289,7 @@ export default function AutomationView() {
 
   const handleToggleActif = async (rule) => {
     try {
-      await updateAutomationRule(rule.id, { ...rule, active: !rule.active });
+      await updateAutomationRule(rule.id, { ...rule, active: !rule.active, locale });
       refresh();
     } catch (err) {
       dispatch(addNotification({ message: t("errorPrefix", { error: err.message }), type:"error" }));

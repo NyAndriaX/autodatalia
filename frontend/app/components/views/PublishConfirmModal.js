@@ -85,10 +85,15 @@ export default function PublishConfirmModal({
   const targetsByPlatform = enabledPlatforms.map((id) => {
     const provider = providers?.[PLATFORM_TO_PROVIDER[id]];
     const wantKind = PLATFORM_TARGET_KIND[id];
-    const ts = (provider?.targets || []).filter(
+    const direct = (provider?.targets || []).filter(
       (t) => !wantKind || t.kind === wantKind
     );
-    return { platformId: id, targets: ts };
+    // Zernio targets for this platform (provider:"zernio"), shown alongside the
+    // direct accounts with a badge so the count + list match what gets posted.
+    const zern = (providers?.zernio?.targets || [])
+      .filter((t) => t.platform === id)
+      .map((t) => ({ ...t, via: "zernio" }));
+    return { platformId: id, targets: [...direct, ...zern] };
   });
 
   const totalTargets = targetsByPlatform.reduce((n, p) => n + p.targets.length, 0);
@@ -180,20 +185,38 @@ export default function PublishConfirmModal({
                 {targetsByPlatform.flatMap(({ platformId, targets }) =>
                   targets.map((t) => {
                     const platform = PLATFORMS.find((p) => p.id === platformId);
+                    const PlatIcon = platform?.icon;
                     return (
                       <li
                         key={`${platformId}-${t.id}`}
                         className="flex items-center gap-2 flex-wrap text-xs px-2 py-1.5 rounded-md"
                         style={{ background: "var(--bg-secondary)" }}
                       >
-                        <span
-                          className="w-1.5 h-1.5 rounded-full shrink-0"
-                          style={{ background: platform?.color || "var(--accent-primary)" }}
-                          aria-hidden="true"
-                        />
+                        {PlatIcon ? (
+                          <PlatIcon
+                            size={14}
+                            className="shrink-0"
+                            style={{ color: platform?.color || "var(--accent-primary)" }}
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <span
+                            className="w-1.5 h-1.5 rounded-full shrink-0"
+                            style={{ background: platform?.color || "var(--accent-primary)" }}
+                            aria-hidden="true"
+                          />
+                        )}
                         <span style={{ color: "var(--text-secondary)" }}>{platform?.label || platformId}</span>
                         <span style={{ color: "var(--text-muted)" }}>·</span>
                         <span className="break-words min-w-0" style={{ color: "var(--text-primary)" }}>{t.label}</span>
+                        {t.via === "zernio" && (
+                          <span
+                            className="ml-auto rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide shrink-0"
+                            style={{ background: "rgba(29,63,190,0.12)", color: "var(--accent-primary)" }}
+                          >
+                            Zernio
+                          </span>
+                        )}
                       </li>
                     );
                   })

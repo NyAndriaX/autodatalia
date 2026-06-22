@@ -20,8 +20,12 @@ import {
   Grid3X3,
   HardDrive,
   Loader2,
+  FileText,
+  Pencil,
 } from "lucide-react";
 import { listMedia } from "../../lib/searchService";
+import { config } from "../../lib/config";
+import { fetchPosts, deletePost } from "../../lib/postsService";
 import {
   ACCEPTED_TYPES,
   MAX_SIZE_BYTES,
@@ -29,13 +33,13 @@ import {
   uploadToBackend,
   validateFile,
 } from "../../lib/uploadService";
-import { addMedia } from "../../store/editorSlice";
+import { addMedia, loadDraft } from "../../store/editorSlice";
 import { addNotification, setActiveView } from "../../store/uiSlice";
 
 const TABS = [
   { id: "uploads", labelKey: "tabFiles", icon: ImageIcon, descKey: "tabFilesDesc" },
   { id: "ai", labelKey: "tabAi", icon: Sparkles, descKey: "tabAiDesc" },
-  { id: "brand", labelKey: "tabBrand", icon: Palette, descKey: "tabBrandDesc" },
+  { id: "drafts", labelKey: "tabDrafts", icon: FileText, descKey: "tabDraftsDesc" },
 ];
 
 const TYPE_FILTERS = [
@@ -45,6 +49,14 @@ const TYPE_FILTERS = [
 ];
 
 const MAX_MB = Math.round(MAX_SIZE_BYTES / 1024 / 1024);
+
+// Search hits carry a content-dir-relative id (e.g. "ws/3/generated/x.png"),
+// not a URL — build the absolute URL to the backend /content mount.
+const contentUrl = (id) =>
+  config.apiBaseUrl ? `${config.apiBaseUrl}/content/${id}` : `/content/${id}`;
+
+// AI-generated media lives under content/ws/{id}/generated/ — identify by path.
+const isGenerated = (it) => (it?.id || "").includes("generated/");
 
 /* ─── Tuile média ────────────────────────────────────────────────────── */
 function MediaTile({
@@ -171,7 +183,7 @@ function MediaTile({
             e.stopPropagation();
             onDelete(item);
           }}
-          className="absolute top-2 right-2 inline-flex items-center justify-center w-7 h-7 rounded-lg opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all hover:scale-105"
+          className="absolute top-2 right-2 z-20 inline-flex items-center justify-center w-7 h-7 rounded-lg opacity-100 transition-all hover:scale-105"
           style={{
             background: "rgba(17,19,26,0.65)",
             color: "#fff",
@@ -347,6 +359,29 @@ export default function MediaLibraryView() {
   const [searching, setSearching] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [dragging, setDragging] = useState(false);
+  const [drafts, setDrafts] = useState(null); // null = loading
+
+  const loadDrafts = useCallback(async () => {
+    const posts = await fetchPosts();
+    setDrafts(Array.isArray(posts) ? posts.filter((p) => p.status === "draft") : []);
+  }, []);
+
+  useEffect(() => {
+    if (tab === "drafts") loadDrafts();
+  }, [tab, loadDrafts]);
+
+  const onEditDraft = (d) => {
+    dispatch(loadDraft(d));
+    dispatch(setActiveView("creation"));
+  };
+
+  const onDeleteDraft = async (id) => {
+    const ok = await deletePost(id);
+    if (ok) {
+      setDrafts((list) => (list || []).filter((p) => p.id !== id));
+      dispatch(addNotification({ message: t("draftDeleted"), type: "info" }));
+    }
+  };
   const fileInputRef = useRef(null);
   const seq = useRef(0);
   const useSeq = useRef(0);
@@ -362,14 +397,28 @@ export default function MediaLibraryView() {
           kind: h.kind || (h.subtitle?.toLowerCase().includes("video") ? "video" : "image"),
           name: h.title,
           status: "uploaded",
-          remoteUrl: h.url || null,
+          remoteUrl: h.url || (h.id ? contentUrl(h.id) : null),
           previewUrl: null,
         })),
     ];
   }, [uploads, remoteHits]);
 
   const filteredItems = useMemo(() => {
-    let list = normalizedItems;
+    // "Fichiers" shows uploads + non-generated remote media; generated media
+    // gets its own "Générés par IA" tab below.
+    let list = normalizedItems.filter((it) => !isGenerated(it));
+    if (typeFilter !== "all") list = list.filter((it) => it.kind === typeFilter);
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      list = list.filter((it) => it.name?.toLowerCase().includes(q));
+    }
+    return list;
+  }, [normalizedItems, typeFilter, query]);
+
+  // Generated (AI) media for the "Générés par IA" tab — same content dir, just
+  // the generated/ subtree, surfaced per-workspace by the backend search.
+  const aiFilteredItems = useMemo(() => {
+    let list = normalizedItems.filter(isGenerated);
     if (typeFilter !== "all") list = list.filter((it) => it.kind === typeFilter);
     if (query.trim()) {
       const q = query.trim().toLowerCase();
@@ -550,33 +599,28 @@ export default function MediaLibraryView() {
   const handleDelete = useCallback(async (item) => {
     if (!window.confirm(t("deleteConfirm", { name: item.name }))) return;
 
+    // A purely-local item (failed/too-large upload, never persisted) just drops
+    // from local state — there's nothing on the server to delete.
     const isRemote = !!item.remoteUrl || /^[^_].*\.[a-z0-9]+$/i.test(item.id || "");
-    if (!isRemote) {
-      setUploads((prev) => prev.filter((u) => u.id !== item.id));
-      return;
-    }
-
-    setUploads((prev) => prev.map((u) => (u.id === item.id ? { ...u, status: "deleting" } : u)));
-    setRemoteHits((prev) => prev.map((h) => (h.id === item.id ? { ...h, status: "deleting" } : h)));
-
-    const backendPath = item.id?.includes("/") || /\.[a-z0-9]+$/i.test(item.id || "") ? item.id : item.name;
-    const { ok, status } = await deleteFromBackend(backendPath);
-
-    if (!ok && status !== 404) {
-      setUploads((prev) => prev.map((u) => (u.id === item.id ? { ...u, status: "uploaded" } : u)));
-      setRemoteHits((prev) => prev.map((h) => (h.id === item.id ? { ...h, status: "uploaded" } : h)));
-      window.alert(t("deleteFailed", { name: item.name, status: status || "?" }));
-      return;
+    if (isRemote) {
+      // Best-effort backend delete, then remove from the UI regardless — same
+      // as bulk delete, so a path mismatch / already-gone file never leaves a
+      // stuck tile (the listMedia refresh below reconciles if it truly failed).
+      const backendPath =
+        item.id?.includes("/") || /\.[a-z0-9]+$/i.test(item.id || "") ? item.id : item.name;
+      try { await deleteFromBackend(backendPath); } catch { /* best-effort */ }
     }
 
     setUploads((prev) => prev.filter((u) => u.id !== item.id));
     setRemoteHits((prev) => prev.filter((h) => h.id !== item.id));
     setSelectedIds((prev) => { const next = new Set(prev); next.delete(item.id); return next; });
 
-    try {
-      const hits = await listMedia(query.trim());
-      setRemoteHits(hits);
-    } catch { /* best-effort */ }
+    if (isRemote) {
+      try {
+        const hits = await listMedia(query.trim());
+        setRemoteHits(hits);
+      } catch { /* best-effort */ }
+    }
   }, [query, t]);
 
   const handleBulkDelete = useCallback(async () => {
@@ -853,40 +897,89 @@ export default function MediaLibraryView() {
       )}
 
       {/* ── Onglet IA ────────────────────────────────────────────── */}
-      {tab === "ai" && (
-        <EmptyPanel
-          icon={Sparkles}
-          title={t("noAi")}
-          subtitle={t("noAiSubtitle")}
-          action={
-            <button
-              type="button"
-              onClick={() => dispatch(setActiveView("videos"))}
-              className={`${btnSecondary} inline-flex items-center gap-2 text-sm`}
-            >
-              <Sparkles size={15} /> {t("generateAiVideo")}
-            </button>
-          }
-        />
-      )}
+      {tab === "ai" &&
+        (aiFilteredItems.length > 0 ? (
+          <div
+            className="grid gap-3"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(140px, 100%), 1fr))" }}
+          >
+            {aiFilteredItems.map((it) => (
+              <MediaTile
+                key={it.id}
+                item={it}
+                onDelete={handleDelete}
+                onUse={onUseInPost}
+                usageCount={usageCountFor(it)}
+                selected={selectedIds.has(it.id)}
+                onToggleSelect={handleToggleSelect}
+                selectionMode={selectedIds.size > 0}
+              />
+            ))}
+          </div>
+        ) : (
+          <EmptyPanel
+            icon={Sparkles}
+            title={t("noAi")}
+            subtitle={t("noAiSubtitle")}
+            action={
+              <button
+                type="button"
+                onClick={() => dispatch(setActiveView("videos"))}
+                className={`${btnSecondary} inline-flex items-center gap-2 text-sm`}
+              >
+                <Sparkles size={15} /> {t("generateAiVideo")}
+              </button>
+            }
+          />
+        ))}
 
-      {/* ── Onglet Brand Kit ─────────────────────────────────────── */}
-      {tab === "brand" && (
-        <EmptyPanel
-          icon={Palette}
-          title={t("brandKitTitle")}
-          subtitle={t("brandKitSubtitle")}
-          action={
-            <button
-              type="button"
-              onClick={() => dispatch(setActiveView("settings"))}
-              className={`${btnSecondary} inline-flex items-center gap-2 text-sm`}
-            >
-              <Palette size={15} /> {t("openSettings")}
-            </button>
-          }
-        />
-      )}
+      {/* ── Onglet Brouillons (drafts) ───────────────────────────── */}
+      {tab === "drafts" &&
+        (drafts === null ? (
+          <div className="flex justify-center py-8">
+            <Loader2 size={20} className="animate-spin" style={{ color: "var(--text-muted)" }} />
+          </div>
+        ) : drafts.length === 0 ? (
+          <EmptyPanel icon={FileText} title={t("noDrafts")} subtitle={t("noDraftsSubtitle")} />
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {drafts.map((d) => (
+              <li
+                key={d.id}
+                className="flex items-center gap-3 rounded-xl p-3"
+                style={{ background: "var(--bg-card)", border: "1px solid var(--border-default)" }}
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm" style={{ color: "var(--text-primary)" }}>
+                    {d.content?.trim() ? d.content : <em style={{ color: "var(--text-muted)" }}>—</em>}
+                  </p>
+                  <p className="mt-0.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
+                    {Object.keys(d.platforms || {}).filter((k) => d.platforms[k]).join(", ")}
+                    {d.scheduledDate ? ` · ${d.scheduledDate}` : ""}
+                    {d.media?.length ? ` · ${d.media.length} media` : ""}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onEditDraft(d)}
+                  className={`${btnSecondary} inline-flex shrink-0 items-center gap-1.5 text-xs`}
+                >
+                  <Pencil size={13} /> {t("draftEdit")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDeleteDraft(d.id)}
+                  className="shrink-0 rounded-lg p-2"
+                  title={t("draftDelete")}
+                  aria-label={t("draftDelete")}
+                  style={{ background: "rgba(239,68,68,.1)", color: "var(--status-error)", border: "none", cursor: "pointer" }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ))}
     </div>
   );
 }

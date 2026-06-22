@@ -46,8 +46,8 @@ def test_tunnel_status_is_open_and_reports_disabled(client):
 
 # ── /transform action validation ─────────────────────────────────────
 
-def test_transform_unknown_action_returns_422(client):
-    r = client.post("/transform", json={"content": "x", "action": "professional"})
+def test_transform_unknown_action_returns_422(workspace_client):
+    r = workspace_client.post("/transform", json={"content": "x", "action": "professional"})
     assert r.status_code == 422
     body = r.json()
     assert body["detail"]["message"] == "Unknown action."
@@ -57,18 +57,20 @@ def test_transform_unknown_action_returns_422(client):
 
 # ── /search behaviour ────────────────────────────────────────────────
 
-def test_search_empty_dir_returns_empty_array(client):
-    r = client.get("/search?q=anything")
+def test_search_empty_dir_returns_empty_array(workspace_client):
+    r = workspace_client.get("/search?q=anything")
     assert r.status_code == 200
     assert r.json() == {"results": []}
 
 
-def test_search_empty_query_returns_listing(client):
-    # Drop a fake image into the content dir so the listing has something.
-    fake = settings.content_dir / "hello.png"
+def test_search_empty_query_returns_listing(workspace_client):
+    # Drop a fake image into THIS workspace's media dir so the listing has something.
+    ws_id = workspace_client.get("/workspace").json()["id"]
+    fake = settings.content_dir / "ws" / str(ws_id) / "hello.png"
+    fake.parent.mkdir(parents=True, exist_ok=True)
     fake.write_bytes(b"fake png bytes")
     try:
-        r = client.get("/search?q=")
+        r = workspace_client.get("/search?q=")
         assert r.status_code == 200
         titles = [h["title"] for h in r.json()["results"]]
         assert "hello.png" in titles
@@ -78,12 +80,12 @@ def test_search_empty_query_returns_listing(client):
 
 # ── /posts CRUD ──────────────────────────────────────────────────────
 
-def test_posts_crud_lifecycle(client):
+def test_posts_crud_lifecycle(workspace_client):
     # Initial state.
-    assert client.get("/posts").json() == {"posts": []}
+    assert workspace_client.get("/posts").json() == {"posts": []}
 
     # Create.
-    r = client.post(
+    r = workspace_client.post(
         "/posts",
         json={
             "scheduledDate": "2026-06-01",
@@ -99,12 +101,12 @@ def test_posts_crud_lifecycle(client):
     assert post["platforms"]["facebook"] is True
 
     # List sees the new post.
-    listed = client.get("/posts").json()["posts"]
+    listed = workspace_client.get("/posts").json()["posts"]
     assert len(listed) == 1
     assert listed[0]["id"] == pid
 
     # Partial update — other fields are preserved.
-    r = client.patch(f"/posts/{pid}", json={"status": "approved", "time": "10:00"})
+    r = workspace_client.patch(f"/posts/{pid}", json={"status": "approved", "time": "10:00"})
     assert r.status_code == 200
     updated = r.json()
     assert updated["status"] == "approved"
@@ -113,20 +115,20 @@ def test_posts_crud_lifecycle(client):
     assert updated["scheduledDate"] == "2026-06-01"  # untouched
 
     # PATCH with all-None values should not destroy existing data.
-    r = client.patch(f"/posts/{pid}", json={})
+    r = workspace_client.patch(f"/posts/{pid}", json={})
     assert r.status_code == 200
     assert r.json()["status"] == "approved"
 
     # Delete.
-    assert client.delete(f"/posts/{pid}").status_code == 200
+    assert workspace_client.delete(f"/posts/{pid}").status_code == 200
     # Second delete → 404.
-    assert client.delete(f"/posts/{pid}").status_code == 404
+    assert workspace_client.delete(f"/posts/{pid}").status_code == 404
     # PATCH on missing → 404.
-    assert client.patch(f"/posts/{pid}", json={"status": "x"}).status_code == 404
+    assert workspace_client.patch(f"/posts/{pid}", json={"status": "x"}).status_code == 404
 
 
-def test_posts_create_with_explicit_id(client):
-    r = client.post(
+def test_posts_create_with_explicit_id(workspace_client):
+    r = workspace_client.post(
         "/posts",
         json={"id": "cal-frontend-123", "scheduledDate": "2026-06-02"},
     )
@@ -134,10 +136,10 @@ def test_posts_create_with_explicit_id(client):
     assert r.json()["id"] == "cal-frontend-123"
 
 
-def test_posts_persist_across_requests(client):
-    client.post("/posts", json={"scheduledDate": "2026-06-01", "content": "A"})
-    client.post("/posts", json={"scheduledDate": "2026-06-02", "content": "B"})
-    listed = client.get("/posts").json()["posts"]
+def test_posts_persist_across_requests(workspace_client):
+    workspace_client.post("/posts", json={"scheduledDate": "2026-06-01", "content": "A"})
+    workspace_client.post("/posts", json={"scheduledDate": "2026-06-02", "content": "B"})
+    listed = workspace_client.get("/posts").json()["posts"]
     contents = sorted(p["content"] for p in listed)
     assert contents == ["A", "B"]
 
@@ -145,9 +147,9 @@ def test_posts_persist_across_requests(client):
 # ── Auth gate ────────────────────────────────────────────────────────
 
 def test_auth_open_mode_allows_everything(client):
-    # No BACKEND_AUTH_TOKEN configured → mutating routes are reachable.
+    # Open auth no longer implies a workspace-scoped session.
     r = client.post("/posts", json={"scheduledDate": "2026-06-01"})
-    assert r.status_code == 200
+    assert r.status_code == 401
 
 
 def test_auth_required_when_token_set(client):
@@ -166,13 +168,13 @@ def test_auth_required_when_token_set(client):
     )
     assert r.status_code == 401
 
-    # Correct token → 200.
+    # Correct shared token still does NOT grant workspace-scoped access.
     r = client.post(
         "/posts",
         json={"scheduledDate": "2026-06-01"},
         headers={"Authorization": "Bearer secret-day3"},
     )
-    assert r.status_code == 200
+    assert r.status_code == 401
 
 
 def test_auth_closed_when_open_mode_disabled(client):
@@ -196,7 +198,7 @@ def test_auth_login_sets_cookie_and_me_uses_it(client):
     me = client.get("/auth/me")
     assert me.status_code == 200
     assert me.json()["email"] == "owner@example.com"
-    assert me.json()["role"] == "admin"
+    assert me.json()["role"] == "member"
 
 
 def test_auth_logout_clears_cookie(client):
@@ -256,11 +258,11 @@ def test_second_created_user_defaults_to_member_role(monkeypatch):
     first = get_user_by_id(first_id)
     second = get_user_by_id(second_id)
 
-    assert first is not None and first["role"] == "admin"
+    assert first is not None and first["role"] == "member"
     assert second is not None and second["role"] == "member"
 
 
-def test_business_read_routes_require_auth_with_token_set(client):
+def test_business_read_routes_require_auth_with_token_set(client, workspace_client):
     settings.backend_auth_token = "secret-day3"
     # Health and tunnel probes stay public.
     assert client.get("/health").status_code == 200
@@ -273,10 +275,11 @@ def test_business_read_routes_require_auth_with_token_set(client):
     assert client.get(
         "/posts",
         headers={"Authorization": "Bearer secret-day3"},
-    ).status_code == 200
+    ).status_code == 401
+    assert workspace_client.get("/posts").status_code == 200
 
 
-def test_auth_query_token_is_rejected(client):
+def test_auth_query_token_is_rejected(client, workspace_client):
     """A JWT/shared token in the ?token= query string must NOT authenticate.
 
     Query strings leak into access logs, browser history and Referer headers,
@@ -297,22 +300,24 @@ def test_auth_query_token_is_rejected(client):
     )
     assert r.status_code == 401
 
-    # The same token in the Authorization header works.
+    # The same shared token in the Authorization header still lacks a workspace.
     r = client.post(
         "/posts",
         json={"scheduledDate": "2026-06-01"},
         headers={"Authorization": "Bearer qtok"},
     )
-    assert r.status_code == 200
+    assert r.status_code == 401
+
+    # A real signed-in user session still works.
+    assert workspace_client.post("/posts", json={"scheduledDate": "2026-06-01"}).status_code == 200
 
 
-def test_settings_keys_are_isolated_per_jwt_user(client):
-    user_a = _auth_headers_for_user(7)
-    user_b = _auth_headers_for_user(8)
+def test_settings_keys_are_isolated_per_workspace(workspace_client_factory):
+    user_a = workspace_client_factory(email="a@example.com", name="A")
+    user_b = workspace_client_factory(email="b@example.com", name="B")
 
-    patch_a = client.patch(
+    patch_a = user_a.patch(
         "/settings/keys",
-        headers=user_a,
         json={
             "updates": {
                 "FAL_API_KEY": "fal-user-a-secret",
@@ -326,47 +331,41 @@ def test_settings_keys_are_isolated_per_jwt_user(client):
     assert keys_a["TELEGRAM_DEFAULT_CHAT_ID"]["value"] == "111222333"
     assert keys_a["AI_MODEL_FAST"]["value"] == "user-a-fast-model"
 
-    get_b = client.get("/settings/keys", headers=user_b)
+    get_b = user_b.get("/settings/keys")
     assert get_b.status_code == 200
     keys_b = get_b.json()["keys"]
     assert keys_b["TELEGRAM_DEFAULT_CHAT_ID"]["value"] != "111222333"
     assert keys_b["AI_MODEL_FAST"]["value"] != "user-a-fast-model"
 
 
-def test_settings_keys_user_override_falls_back_to_global_defaults(client):
-    shared = client.patch(
+def test_settings_keys_are_not_inherited_from_another_workspace(workspace_client_factory):
+    owner = workspace_client_factory(email="owner@example.com", name="Owner")
+    teammate = workspace_client_factory(email="teammate@example.com", name="Teammate")
+
+    shared = owner.patch(
         "/settings/keys",
-        json={"updates": {"TELEGRAM_DEFAULT_CHAT_ID": "shared-chat"}},
+        json={"updates": {"TELEGRAM_DEFAULT_CHAT_ID": "owner-chat"}},
     )
     assert shared.status_code == 200
+    assert shared.json()["keys"]["TELEGRAM_DEFAULT_CHAT_ID"]["value"] == "owner-chat"
 
-    user_headers = _auth_headers_for_user(9)
-    inherited = client.get("/settings/keys", headers=user_headers)
+    inherited = teammate.get("/settings/keys")
     assert inherited.status_code == 200
-    assert inherited.json()["keys"]["TELEGRAM_DEFAULT_CHAT_ID"]["value"] == "shared-chat"
-
-    override = client.patch(
-        "/settings/keys",
-        headers=user_headers,
-        json={"updates": {"TELEGRAM_DEFAULT_CHAT_ID": "private-chat"}},
-    )
-    assert override.status_code == 200
-    assert override.json()["keys"]["TELEGRAM_DEFAULT_CHAT_ID"]["value"] == "private-chat"
-
-    shared_after = client.get("/settings/keys")
-    assert shared_after.status_code == 200
-    assert shared_after.json()["keys"]["TELEGRAM_DEFAULT_CHAT_ID"]["value"] == "shared-chat"
+    assert inherited.json()["keys"]["TELEGRAM_DEFAULT_CHAT_ID"]["value"] != "owner-chat"
 
 
-def test_create_automation_rule_assigns_authenticated_user(client):
-    headers = _auth_headers_for_user(12)
-
-    r = client.post("/automation-rules", headers=headers, json={"name": "Owned rule"})
+def test_create_automation_rule_assigns_authenticated_user(workspace_client):
+    me = workspace_client.get("/auth/me").json()
+    ws = workspace_client.get("/workspace").json()
+    r = workspace_client.post("/automation-rules", json={"name": "Owned rule"})
 
     assert r.status_code == 200
     body = r.json()
     assert body["name"] == "Owned rule"
-    assert body["user_id"] == "12"
+    assert body["user_id"] == str(me["id"])
+    stored = automation_get(body["id"], user_id=ws["id"], scoped=True)
+    assert stored is not None
+    assert stored["workspace_id"] == ws["id"]
 
 
 # ── Multi-tenant isolation ───────────────────────────────────────────
@@ -376,97 +375,90 @@ def test_create_automation_rule_assigns_authenticated_user(client):
 # own bounded tenant (not "owns everything").
 
 
-def test_posts_are_isolated_between_tenants(client):
-    alice = _auth_headers_for_user(101)
-    bob = _auth_headers_for_user(202)
+def test_posts_are_isolated_between_workspaces(workspace_client_factory):
+    alice = workspace_client_factory(email="alice@example.com", name="Alice")
+    bob = workspace_client_factory(email="bob@example.com", name="Bob")
 
-    created = client.post(
+    created = alice.post(
         "/posts",
-        headers=alice,
         json={"scheduledDate": "2026-06-01", "content": "alice-secret"},
     )
     assert created.status_code == 200
     pid = created.json()["id"]
 
     # Bob's list never sees Alice's post.
-    bob_list = client.get("/posts", headers=bob).json()["posts"]
+    bob_list = bob.get("/posts").json()["posts"]
     assert all(p["id"] != pid for p in bob_list)
 
     # Alice's list does.
-    alice_list = client.get("/posts", headers=alice).json()["posts"]
+    alice_list = alice.get("/posts").json()["posts"]
     assert any(p["id"] == pid for p in alice_list)
 
 
-def test_tenant_cannot_patch_or_delete_other_tenants_post(client):
-    alice = _auth_headers_for_user(101)
-    bob = _auth_headers_for_user(202)
+def test_workspace_member_cannot_patch_or_delete_other_workspaces_post(workspace_client_factory):
+    alice = workspace_client_factory(email="alice@example.com", name="Alice")
+    bob = workspace_client_factory(email="bob@example.com", name="Bob")
 
-    pid = client.post(
+    pid = alice.post(
         "/posts",
-        headers=alice,
         json={"scheduledDate": "2026-06-01", "content": "alice-only"},
     ).json()["id"]
 
     # Bob cannot patch Alice's post → 404 (not found in his scope).
-    patched = client.patch(
-        f"/posts/{pid}", headers=bob, json={"content": "hacked"}
+    patched = bob.patch(
+        f"/posts/{pid}", json={"content": "hacked"}
     )
     assert patched.status_code == 404
 
     # Bob cannot delete Alice's post either.
-    deleted = client.delete(f"/posts/{pid}", headers=bob)
+    deleted = bob.delete(f"/posts/{pid}")
     assert deleted.status_code == 404
 
     # Alice's post is untouched.
-    alice_list = client.get("/posts", headers=alice).json()["posts"]
+    alice_list = alice.get("/posts").json()["posts"]
     mine = next(p for p in alice_list if p["id"] == pid)
     assert mine["content"] == "alice-only"
 
     # Alice herself can patch + delete it.
-    assert client.patch(
-        f"/posts/{pid}", headers=alice, json={"content": "edited"}
+    assert alice.patch(
+        f"/posts/{pid}", json={"content": "edited"}
     ).status_code == 200
-    assert client.delete(f"/posts/{pid}", headers=alice).status_code == 200
+    assert alice.delete(f"/posts/{pid}").status_code == 200
 
 
-def test_global_scope_does_not_see_user_posts(client):
-    """The shared/global scope is its OWN tenant — it must not read user rows."""
-    alice = _auth_headers_for_user(101)
-    client.post(
+def test_global_scope_cannot_access_workspace_posts(client, workspace_client):
+    workspace_client.post(
         "/posts",
-        headers=alice,
         json={"scheduledDate": "2026-06-01", "content": "alice-private"},
     )
 
-    # Open-mode request (no JWT) resolves to the global scope and must only
-    # see global-scoped rows — never Alice's.
-    global_list = client.get("/posts").json()["posts"]
-    assert all(p.get("content") != "alice-private" for p in global_list)
+    # Anonymous/shared scope is non-interactive under workspace auth.
+    assert client.get("/posts").status_code == 401
 
 
-def test_tenant_cannot_read_patch_or_delete_other_tenants_rule(client):
-    alice = _auth_headers_for_user(101)
-    bob = _auth_headers_for_user(202)
+def test_workspace_cannot_read_patch_or_delete_other_workspaces_rule(workspace_client_factory):
+    alice = workspace_client_factory(email="alice@example.com", name="Alice")
+    bob = workspace_client_factory(email="bob@example.com", name="Bob")
 
-    rule = client.post(
-        "/automation-rules", headers=alice, json={"name": "Alice rule"}
+    rule = alice.post(
+        "/automation-rules", json={"name": "Alice rule"}
     ).json()
     rid = rule["id"]
 
     # Bob can't GET it.
-    assert client.get(f"/automation-rules/{rid}", headers=bob).status_code == 404
+    assert bob.get(f"/automation-rules/{rid}").status_code == 404
     # Bob can't PATCH it.
-    assert client.patch(
-        f"/automation-rules/{rid}", headers=bob, json={"name": "stolen"}
+    assert bob.patch(
+        f"/automation-rules/{rid}", json={"name": "stolen"}
     ).status_code == 404
     # Bob can't DELETE it.
-    assert client.delete(f"/automation-rules/{rid}", headers=bob).status_code == 404
+    assert bob.delete(f"/automation-rules/{rid}").status_code == 404
     # Bob's list doesn't include it.
-    bob_rules = client.get("/automation-rules", headers=bob).json()["rules"]
+    bob_rules = bob.get("/automation-rules").json()["rules"]
     assert all(r["id"] != rid for r in bob_rules)
 
     # Alice retains full access.
-    assert client.get(f"/automation-rules/{rid}", headers=alice).status_code == 200
+    assert alice.get(f"/automation-rules/{rid}").status_code == 200
 
 
 def test_me_does_not_mint_synthetic_admin_for_shared_token(client):
@@ -479,7 +471,7 @@ def test_me_does_not_mint_synthetic_admin_for_shared_token(client):
     assert me.status_code == 401
 
 
-def test_oauth_start_requires_real_user_for_social_providers(client):
+def test_oauth_start_requires_real_user_for_social_providers(client, workspace_client):
     """Per-user social tokens cannot be started from the shared/global scope."""
     settings.backend_auth_token = ""
     settings.allow_open_auth = True
@@ -494,9 +486,7 @@ def test_oauth_start_requires_real_user_for_social_providers(client):
         assert anon.status_code == 401
 
         # A real authenticated user can start it.
-        authed = client.get(
-            "/oauth/tiktok/start", headers=_auth_headers_for_user(55)
-        )
+        authed = workspace_client.get("/oauth/tiktok/start")
         assert authed.status_code == 200
         assert "authorize_url" in authed.json()
     finally:
@@ -504,7 +494,7 @@ def test_oauth_start_requires_real_user_for_social_providers(client):
         os.environ.pop("TIKTOK_CLIENT_SECRET", None)
 
 
-def test_oauth_start_stamps_real_user_in_pending_state(client):
+def test_oauth_start_stamps_real_user_in_pending_state(workspace_client):
     """The pending-state row records the authenticated user so the callback
     can refuse connections not tied to a real account."""
     import os
@@ -514,11 +504,12 @@ def test_oauth_start_stamps_real_user_in_pending_state(client):
     os.environ["TIKTOK_CLIENT_KEY"] = "ck"
     os.environ["TIKTOK_CLIENT_SECRET"] = "cs"
     try:
-        r = client.get("/oauth/tiktok/start", headers=_auth_headers_for_user(77))
+        me = workspace_client.get("/auth/me").json()
+        r = workspace_client.get("/oauth/tiktok/start")
         assert r.status_code == 200
         pending = _load_tokens(None).get("_pending_state") or {}
         assert pending, "expected a pending-state entry"
-        assert all(v.get("user_id") == 77 for v in pending.values())
+        assert all(v.get("user_id") == int(me["id"]) for v in pending.values())
     finally:
         os.environ.pop("TIKTOK_CLIENT_KEY", None)
         os.environ.pop("TIKTOK_CLIENT_SECRET", None)
@@ -537,16 +528,19 @@ def test_long_password_rejected_to_avoid_bcrypt_truncation(client):
     assert r.status_code == 422
 
 
-def test_automation_rules_api_exposes_last_error_and_last_fire_at(client):
-    rule = automation_create(
-        {
-            "name": "Broken rule",
-            "last_fire_at": 1234567890.0,
-            "last_error": "boom",
-        }
+def test_automation_rules_api_exposes_last_error_and_last_fire_at(workspace_client):
+    created = workspace_client.post("/automation-rules", json={"name": "Broken rule"})
+    assert created.status_code == 200
+    rule = created.json()
+    ws_id = workspace_client.get("/workspace").json()["id"]
+    automation_update(
+        rule["id"],
+        {"last_fire_at": 1234567890.0, "last_error": "boom"},
+        user_id=ws_id,
+        scoped=True,
     )
 
-    r = client.get("/automation-rules")
+    r = workspace_client.get("/automation-rules")
 
     assert r.status_code == 200
     listed = next(item for item in r.json()["rules"] if item["id"] == rule["id"])
@@ -597,8 +591,9 @@ def test_create_job_infers_openrouter_provider_from_model_id(monkeypatch):
     assert job["model_id"] == "google/veo-3.1-lite"
 
 
-def test_registration_closes_after_first_admin(client, monkeypatch):
+def test_registration_closes_when_open_registration_disabled(client, monkeypatch):
     monkeypatch.setattr("app.auth.count_users", lambda: 1)
+    settings.allow_open_registration = False
 
     r = client.post(
         "/auth/register",
@@ -632,7 +627,7 @@ class _FakeChatResponse:
         }
 
 
-def test_transform_cache_returns_zero_tokens_on_repeat(client, monkeypatch):
+def test_transform_cache_returns_zero_tokens_on_repeat(workspace_client, monkeypatch):
     call_count = {"n": 0}
 
     async def fake_post(self, url, **kwargs):
@@ -642,25 +637,23 @@ def test_transform_cache_returns_zero_tokens_on_repeat(client, monkeypatch):
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
 
     body = {"content": "a long-ish original post that we want to shorten", "action": "shorten"}
-    r1 = client.post("/transform", json=body)
+    r1 = workspace_client.post("/transform", json=body)
     assert r1.status_code == 200
     assert r1.json()["usage"]["total_tokens"] == 98
     assert r1.json()["text"] == "short post"
     assert call_count["n"] == 1
 
     # Identical second call: cached, no upstream call, zero usage.
-    r2 = client.post("/transform", json=body)
+    r2 = workspace_client.post("/transform", json=body)
     assert r2.status_code == 200
     assert r2.json()["usage"]["total_tokens"] == 0
     assert r2.json()["text"] == "short post"
     assert call_count["n"] == 1  # the AI was NOT called a second time
 
 
-def test_transform_uses_saved_model_for_authenticated_user(client, monkeypatch):
-    headers = _auth_headers_for_user(11)
-    save = client.patch(
+def test_transform_uses_saved_model_for_authenticated_user(workspace_client, monkeypatch):
+    save = workspace_client.patch(
         "/settings/keys",
-        headers=headers,
         json={"updates": {"AI_MODEL_FAST": "per-user-fast-model"}},
     )
     assert save.status_code == 200
@@ -671,16 +664,15 @@ def test_transform_uses_saved_model_for_authenticated_user(client, monkeypatch):
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
 
-    r = client.post(
+    r = workspace_client.post(
         "/transform",
-        headers=headers,
         json={"content": "Need a shorter version", "action": "shorten"},
     )
     assert r.status_code == 200
     assert r.json()["text"] == "user scoped rewrite"
 
 
-def test_generate_returns_cached_variants(client, monkeypatch):
+def test_generate_returns_cached_variants(workspace_client, monkeypatch):
     payload_text = '{"variants":[{"text":"variant one","tone":"casual"}]}'
     call_count = {"n": 0}
 
@@ -691,18 +683,18 @@ def test_generate_returns_cached_variants(client, monkeypatch):
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
 
     body = {"prompt": "test prompt for caching", "platforms": {"facebook": True}, "variants": 1}
-    r1 = client.post("/generate", json=body)
+    r1 = workspace_client.post("/generate", json=body)
     assert r1.status_code == 200
     assert r1.json()["usage"]["total_tokens"] == 120
     assert r1.json()["variants"][0]["text"] == "variant one"
 
-    r2 = client.post("/generate", json=body)
+    r2 = workspace_client.post("/generate", json=body)
     assert r2.status_code == 200
     assert r2.json()["usage"]["total_tokens"] == 0  # cache hit
     assert call_count["n"] == 1
 
 
-def test_generate_forwards_tone_hint(client, monkeypatch):
+def test_generate_forwards_tone_hint(workspace_client, monkeypatch):
     seen: dict[str, object] = {}
 
     async def fake_generate_post_variants(**kwargs):
@@ -711,7 +703,7 @@ def test_generate_forwards_tone_hint(client, monkeypatch):
 
     monkeypatch.setattr(routes_module, "generate_post_variants", fake_generate_post_variants)
 
-    response = client.post(
+    response = workspace_client.post(
         "/generate",
         json={
             "prompt": "launch post",
@@ -726,19 +718,20 @@ def test_generate_forwards_tone_hint(client, monkeypatch):
     assert seen["tone"] == "playful and witty"
 
 
-def test_validation_submit_creates_pending_post_and_message(client, monkeypatch):
+def test_validation_submit_creates_awaiting_validation_post_and_message(workspace_client, monkeypatch):
     settings.telegram_bot_token = "telegram-test"
     settings.telegram_default_chat_id = "12345"
     settings.telegram_webhook_secret = _TG_SECRET
+    ws_id = workspace_client.get("/workspace").json()["id"]
 
     async def fake_send_validation_card(post, chat_id, *, user_id=None):
         assert chat_id == "12345"
-        assert post["status"] == "pending"
+        assert post["status"] == "awaiting_validation"
         return 321
 
     monkeypatch.setattr(tg, "_send_validation_card", fake_send_validation_card)
 
-    r = client.post(
+    r = workspace_client.post(
         "/validation/submit",
         json={
             "content": "Need approval",
@@ -747,24 +740,23 @@ def test_validation_submit_creates_pending_post_and_message(client, monkeypatch)
     )
     assert r.status_code == 200
     body = r.json()
-    assert body["status"] == "pending"
+    assert body["status"] == "awaiting_validation"
     assert body["message_id"] == 321
-    posts = posts_list()
+    posts = posts_list(user_id=ws_id)
     assert len(posts) == 1
-    assert posts[0]["status"] == "pending"
-    feed = messages_list()
+    assert posts[0]["status"] == "awaiting_validation"
+    feed = messages_list(user_id=ws_id)
     assert any("Telegram validation" in m["message"] or "Submitted post" in m["message"] for m in feed)
 
 
-def test_validation_submit_uses_saved_user_telegram_settings(client, monkeypatch):
+def test_validation_submit_uses_saved_user_telegram_settings(workspace_client, monkeypatch):
+    settings.telegram_bot_token = "telegram-test"
     settings.telegram_webhook_secret = _TG_SECRET
-    headers = _auth_headers_for_user(12)
-    save = client.patch(
+    me = workspace_client.get("/auth/me").json()
+    save = workspace_client.patch(
         "/settings/keys",
-        headers=headers,
         json={
             "updates": {
-                "TELEGRAM_BOT_TOKEN": "telegram-user-12-token",
                 "TELEGRAM_DEFAULT_CHAT_ID": "424242",
             }
         },
@@ -773,14 +765,13 @@ def test_validation_submit_uses_saved_user_telegram_settings(client, monkeypatch
 
     async def fake_send_validation_card(post, chat_id, *, user_id=None):
         assert chat_id == "424242"
-        assert post["user_id"] == "12"
+        assert post["user_id"] == str(me["id"])
         return 654
 
     monkeypatch.setattr(tg, "_send_validation_card", fake_send_validation_card)
 
-    r = client.post(
+    r = workspace_client.post(
         "/validation/submit",
-        headers=headers,
         json={
             "content": "Need approval",
             "platforms": {"linkedin": True},
@@ -792,12 +783,12 @@ def test_validation_submit_uses_saved_user_telegram_settings(client, monkeypatch
     assert body["message_id"] == 654
 
 
-def test_validation_submit_requires_webhook_secret_when_telegram_enabled(client):
+def test_validation_submit_requires_webhook_secret_when_telegram_enabled(workspace_client):
     settings.telegram_bot_token = "telegram-test"
     settings.telegram_default_chat_id = "12345"
     settings.telegram_webhook_secret = ""
 
-    r = client.post(
+    r = workspace_client.post(
         "/validation/submit",
         json={
             "content": "Need approval",
@@ -808,9 +799,10 @@ def test_validation_submit_requires_webhook_secret_when_telegram_enabled(client)
     assert "webhook secret" in r.json()["detail"].lower()
 
 
-def test_telegram_webhook_approve_schedules_automation_post(client, monkeypatch):
+def test_telegram_webhook_approve_schedules_automation_post(workspace_client, monkeypatch):
     settings.telegram_bot_token = "telegram-test"
     settings.telegram_webhook_secret = _TG_SECRET
+    ws_id = workspace_client.get("/workspace").json()["id"]
     rule = automation_create(
         {
             "id": "rule-1",
@@ -836,6 +828,7 @@ def test_telegram_webhook_approve_schedules_automation_post(client, monkeypatch)
             "platforms": {"facebook": True},
             "ratios": None,
             "tiktok": None,
+            "workspace_id": ws_id,
         }
     )
     post = tg.posts_create(
@@ -843,10 +836,11 @@ def test_telegram_webhook_approve_schedules_automation_post(client, monkeypatch)
             "id": "post-1",
             "content": "approve me",
             "platforms": {"facebook": True},
-            "status": "pending",
+            "status": "awaiting_validation",
             "scheduledDate": "2026-06-01",
             "source_rule_id": "rule-1",
             "source_rule_updated_at": rule["updated_at"],
+            "workspace_id": ws_id,
         }
     )
 
@@ -855,7 +849,7 @@ def test_telegram_webhook_approve_schedules_automation_post(client, monkeypatch)
 
     monkeypatch.setattr(tg, "_answer_callback", fake_answer_callback)
 
-    r = client.post(
+    r = workspace_client.post(
         "/telegram/webhook",
         headers={"X-Telegram-Bot-Api-Secret-Token": _TG_SECRET},
         json={
@@ -867,7 +861,46 @@ def test_telegram_webhook_approve_schedules_automation_post(client, monkeypatch)
         },
     )
     assert r.status_code == 200
-    refreshed = next(p for p in posts_list() if p["id"] == post["id"])
+    refreshed = next(p for p in posts_list(user_id=ws_id) if p["id"] == post["id"])
+    assert refreshed["status"] == "scheduled"
+
+
+def test_telegram_webhook_approve_manual_future_post_stays_scheduled(workspace_client, monkeypatch):
+    settings.telegram_bot_token = "telegram-test"
+    settings.telegram_webhook_secret = _TG_SECRET
+    ws_id = workspace_client.get("/workspace").json()["id"]
+    post = tg.posts_create(
+        {
+            "id": "post-manual-future",
+            "content": "approve later",
+            "platforms": {"facebook": True},
+            "status": "awaiting_validation",
+            "scheduledDate": "2099-06-01",
+            "time": "10:00",
+            "timezone": "UTC",
+            "workspace_id": ws_id,
+        }
+    )
+
+    async def fake_answer_callback(callback_query_id, text="", *, user_id=None):
+        assert callback_query_id == "cb_future"
+        assert "scheduled" in text.lower()
+
+    monkeypatch.setattr(tg, "_answer_callback", fake_answer_callback)
+
+    r = workspace_client.post(
+        "/telegram/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": _TG_SECRET},
+        json={
+            "callback_query": {
+                "id": "cb_future",
+                "data": "va|a|post-manual-future",
+                "message": {"chat": {"id": 123}},
+            }
+        },
+    )
+    assert r.status_code == 200
+    refreshed = next(p for p in posts_list(user_id=ws_id) if p["id"] == post["id"])
     assert refreshed["status"] == "scheduled"
 
 
@@ -880,8 +913,9 @@ def test_telegram_webhook_requires_secret_when_bot_enabled(client):
     assert "webhook secret" in r.json()["detail"].lower()
 
 
-def test_patch_automation_rule_cancels_open_generated_posts_and_resets_fire_cursor(client):
-    create = client.post(
+def test_patch_automation_rule_cancels_open_generated_posts_and_resets_fire_cursor(workspace_client):
+    ws_id = workspace_client.get("/workspace").json()["id"]
+    create = workspace_client.post(
         "/automation-rules",
         json={
             "name": "Morning posts",
@@ -924,27 +958,29 @@ def test_patch_automation_rule_cancels_open_generated_posts_and_resets_fire_curs
             "source_rule_name": rule["name"],
             "source_rule_updated_at": rule["updated_at"],
             "scheduled_for": 1780650000.0,
+            "workspace_id": ws_id,
         }
     )
 
     rule["schedule"]["times"] = ["11:30"]
-    patch = client.patch(f"/automation-rules/{rule['id']}", json=rule)
+    patch = workspace_client.patch(f"/automation-rules/{rule['id']}", json=rule)
     assert patch.status_code == 200
 
-    post = next(p for p in posts_list() if p["id"] == "auto-post-1")
+    post = next(p for p in posts_list(user_id=ws_id) if p["id"] == "auto-post-1")
     assert post["status"] == "cancelled"
     assert post["error"] == "rule_changed_after_generation"
 
-    stored_rule = automation_get(rule["id"])
+    stored_rule = automation_get(rule["id"], user_id=ws_id, scoped=True)
     assert stored_rule is not None
     assert stored_rule["last_fire_at"] == 0
 
 
-def test_telegram_webhook_rejects_stale_automation_approval(client, monkeypatch):
+def test_telegram_webhook_rejects_stale_automation_approval(workspace_client, monkeypatch):
     settings.telegram_bot_token = "telegram-test"
     settings.telegram_webhook_secret = _TG_SECRET
+    ws_id = workspace_client.get("/workspace").json()["id"]
 
-    create = client.post(
+    create = workspace_client.post(
         "/automation-rules",
         json={
             "name": "Evening posts",
@@ -987,6 +1023,7 @@ def test_telegram_webhook_rejects_stale_automation_approval(client, monkeypatch)
             "source_rule_name": rule["name"],
             "source_rule_updated_at": rule["updated_at"] - 1,
             "scheduled_for": 1780682400.0,
+            "workspace_id": ws_id,
         }
     )
 
@@ -998,7 +1035,7 @@ def test_telegram_webhook_rejects_stale_automation_approval(client, monkeypatch)
 
     monkeypatch.setattr(tg, "_answer_callback", fake_answer_callback)
 
-    r = client.post(
+    r = workspace_client.post(
         "/telegram/webhook",
         headers={"X-Telegram-Bot-Api-Secret-Token": _TG_SECRET},
         json={
@@ -1011,14 +1048,15 @@ def test_telegram_webhook_rejects_stale_automation_approval(client, monkeypatch)
     )
     assert r.status_code == 200
 
-    refreshed = next(p for p in posts_list() if p["id"] == "auto-post-2")
+    refreshed = next(p for p in posts_list(user_id=ws_id) if p["id"] == "auto-post-2")
     assert refreshed["status"] == "cancelled"
     assert refreshed["error"] == "rule_changed_after_generation"
     assert "Rule changed" in (answered["text"] or "")
 
 
-def test_automation_worker_bookkeeping_does_not_stale_rule_revision(client, monkeypatch):
-    create = client.post(
+def test_automation_worker_bookkeeping_does_not_stale_rule_revision(workspace_client, monkeypatch):
+    ws_id = workspace_client.get("/workspace").json()["id"]
+    create = workspace_client.post(
         "/automation-rules",
         json={
             "name": "Stable automation rule",
@@ -1052,6 +1090,8 @@ def test_automation_worker_bookkeeping_does_not_stale_rule_revision(client, monk
     refreshed = automation_update(
         rule["id"],
         {"last_fire_at": 1780682400.0, "last_error": ""},
+        user_id=ws_id,
+        scoped=True,
     )
 
     assert refreshed is not None
@@ -1059,10 +1099,11 @@ def test_automation_worker_bookkeeping_does_not_stale_rule_revision(client, monk
 
 
 def test_telegram_feedback_resubmit_keeps_automation_post_awaiting_validation(
-    client, monkeypatch
+    workspace_client, monkeypatch
 ):
     settings.telegram_bot_token = "telegram-test"
     settings.telegram_webhook_secret = _TG_SECRET
+    ws_id = workspace_client.get("/workspace").json()["id"]
 
     post = tg.posts_create(
         {
@@ -1076,6 +1117,7 @@ def test_telegram_feedback_resubmit_keeps_automation_post_awaiting_validation(
             "source_rule_id": "rule-feedback-1",
             "telegram_chat_id": "12345",
             "telegram_feedback_prompt_message_id": 777,
+            "workspace_id": ws_id,
         }
     )
 
@@ -1093,7 +1135,7 @@ def test_telegram_feedback_resubmit_keeps_automation_post_awaiting_validation(
     monkeypatch.setattr(tg, "_regenerate_from_feedback", fake_regenerate_from_feedback)
     monkeypatch.setattr(tg, "_send_validation_card", fake_send_validation_card)
 
-    r = client.post(
+    r = workspace_client.post(
         "/telegram/webhook",
         headers={"X-Telegram-Bot-Api-Secret-Token": _TG_SECRET},
         json={
@@ -1106,15 +1148,16 @@ def test_telegram_feedback_resubmit_keeps_automation_post_awaiting_validation(
     )
     assert r.status_code == 200
 
-    refreshed = next(p for p in posts_list() if p["id"] == post["id"])
+    refreshed = next(p for p in posts_list(user_id=ws_id) if p["id"] == post["id"])
     assert refreshed["content"] == "rewritten automation draft"
     assert refreshed["status"] == "awaiting_validation"
     assert refreshed["telegram_message_id"] == 888
 
 
-def test_media_generate_image_uses_fallback_and_persists_asset(client):
+def test_media_generate_image_uses_fallback_and_persists_asset(workspace_client):
+    ws_id = workspace_client.get("/workspace").json()["id"]
     settings.ai_image_model = ""
-    r = client.post(
+    r = workspace_client.post(
         "/media/generate/image",
         json={"prompt": "Blue launch poster", "ratio": "1:1"},
     )
@@ -1122,7 +1165,9 @@ def test_media_generate_image_uses_fallback_and_persists_asset(client):
     body = r.json()
     assert body["kind"] == "image"
     assert body["provider"] == "fallback-poster"
-    assert (settings.content_dir / "generated" / body["filename"]).exists()
+    assert (
+        settings.content_dir / "ws" / str(ws_id) / "generated" / body["filename"]
+    ).exists()
 
 
 def test_generate_image_file_falls_back_when_provider_errors(monkeypatch):
@@ -1147,29 +1192,35 @@ def test_generate_image_file_falls_back_when_provider_errors(monkeypatch):
     assert path.suffix == ".png"
 
 
-def test_media_generate_video_persists_motion_asset(client, monkeypatch):
+def test_media_generate_video_persists_motion_asset(workspace_client, monkeypatch):
+    ws_id = workspace_client.get("/workspace").json()["id"]
+
     async def fake_render_motion_video(source, dest, width, height, duration_seconds):
         dest.write_bytes(b"fake-mp4")
 
     monkeypatch.setattr(mg, "_render_motion_video", fake_render_motion_video)
     settings.ai_image_model = ""
-    r = client.post(
+    r = workspace_client.post(
         "/media/generate/video",
         json={
             "prompt": "Motion teaser",
             "ratio": "9:16",
             "duration_seconds": 6,
             "async_mode": False,
+            "provider": "fallback",
         },
     )
     assert r.status_code == 200
     body = r.json()
     assert body["kind"] == "video"
     assert body["provider"] == "fallback"
-    assert (settings.content_dir / "generated" / body["filename"]).exists()
+    assert (
+        settings.content_dir / "ws" / str(ws_id) / "generated" / body["filename"]
+    ).exists()
 
 
-def test_oauth_connections_surfaces_linkedin_target(client):
+def test_oauth_connections_surfaces_linkedin_target(workspace_client):
+    ws_id = workspace_client.get("/workspace").json()["id"]
     _save_tokens(
         {
             "linkedin": {
@@ -1179,13 +1230,106 @@ def test_oauth_connections_surfaces_linkedin_target(client):
                 "avatar_url": "https://example.com/alice.jpg",
                 "raw": {"urn": "urn:li:person:abc123"},
             }
-        }
+        },
+        user_id=ws_id,
     )
-    r = client.get("/oauth/connections")
+    r = workspace_client.get("/oauth/connections")
     assert r.status_code == 200
     targets = r.json()["providers"]["linkedin"]["targets"]
     assert targets[0]["id"] == "urn:li:person:abc123"
     assert targets[0]["kind"] == "linkedin_member"
+
+
+def test_oauth_connections_surfaces_zernio_target(workspace_client, monkeypatch):
+    async def fake_entry(_workspace_id):
+        return {
+            "id": "zernio",
+            "label": "Zernio",
+            "configured": True,
+            "connected": True,
+            "targets": [
+                {
+                    "id": "acc_fb",
+                    "label": "Binatna",
+                    "kind": "zernio_facebook",
+                    "platform": "facebook",
+                    "provider": "zernio",
+                    "profile_picture_url": "https://example.com/binatna.jpg",
+                    "audience": 1234,
+                }
+            ],
+        }
+
+    monkeypatch.setattr("app.zernio.connections_entry", fake_entry)
+    r = workspace_client.get("/oauth/connections")
+    assert r.status_code == 200
+    target = r.json()["providers"]["zernio"]["targets"][0]
+    assert target["provider"] == "zernio"
+    assert target["platform"] == "facebook"
+    assert target["label"] == "Binatna"
+
+
+def test_dashboard_summary_counts_zernio_platforms(workspace_client, monkeypatch):
+    async def fake_entry(_workspace_id):
+        return {
+            "id": "zernio",
+            "label": "Zernio",
+            "configured": True,
+            "connected": True,
+            "targets": [
+                {"id": "acc_fb", "label": "Binatna", "kind": "zernio_facebook", "platform": "facebook", "provider": "zernio"},
+                {"id": "acc_ig", "label": "@binatna", "kind": "zernio_instagram", "platform": "instagram", "provider": "zernio"},
+            ],
+        }
+
+    monkeypatch.setattr("app.zernio.connections_entry", fake_entry)
+    r = workspace_client.get("/dashboard-summary")
+    assert r.status_code == 200
+    body = r.json()["connections"]
+    assert body["total_connected"] == 2
+    assert body["connected_platforms"] == ["facebook", "instagram"]
+    assert "zernio" in body["connected_providers"]
+
+
+def test_publish_zernio_appends_workspace_notifications(workspace_client, monkeypatch):
+    ws_id = workspace_client.get("/workspace").json()["id"]
+
+    async def fake_publish(workspace_id, **kwargs):
+        assert workspace_id == ws_id
+        return [
+            {
+                "platform": "facebook",
+                "target_id": "acc_fb",
+                "target_label": "Binatna",
+                "ok": True,
+                "platform_post_id": "post_1",
+                "permalink_url": "https://example.com/post/1",
+                "error": None,
+            }
+        ]
+
+    monkeypatch.setattr("app.zernio.publish", fake_publish)
+    r = workspace_client.post(
+        "/publish",
+        json={
+            "content": "hello from zernio",
+            "targets": [
+                {
+                    "platform": "facebook",
+                    "id": "acc_fb",
+                    "label": "Binatna",
+                    "provider": "zernio",
+                }
+            ],
+        },
+    )
+    assert r.status_code == 200
+    messages = messages_list(user_id=ws_id)
+    assert any(msg.get("workspace_id") == ws_id for msg in messages)
+    assert any(
+        msg.get("message") == "Scheduled post published to Binatna (facebook)."
+        for msg in messages
+    )
 
 
 def test_publish_linkedin_text_success(monkeypatch):

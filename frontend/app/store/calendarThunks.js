@@ -37,11 +37,11 @@ export function loadScheduledPostsThunk({ refresh = false } = {}) {
 }
 
 /**
- * Schedule a new post on `date` (YYYY-MM-DD).
+ * Save/update a post with a chosen `date` (YYYY-MM-DD).
  *
- * Sets `status: "scheduled"` so the backend scheduler picks it up at fire
- * time — without this it would persist as a "draft" and never auto-publish.
- * Tags the post with the *team's* configured scheduling timezone (or the
+ * Drafts stay drafts until the user explicitly submits them for Telegram
+ * validation or publishes them. Existing scheduled posts keep their current
+ * status when re-dated. Tags the post with the *team's* configured timezone (or the
  * browser's if no override is set) so the server interprets `time`
  * ("09:00") consistently regardless of which device fired the call. See
  * lib/timezone.getScheduleTimezone for the resolution order.
@@ -50,35 +50,89 @@ export function loadScheduledPostsThunk({ refresh = false } = {}) {
  * stays in the local store but won't actually be fired by anything.
  */
 export function schedulePostThunk({ post, date }) {
-  return async (dispatch) => {
+  return async (dispatch, getState) => {
     // Dynamic import: timezone.js calls getSetting() (from settingsStorage)
     // which touches window.localStorage; a top-level import would break SSR / Jest.
     const { getScheduleTimezone } = await import("../lib/timezone");
+    const locale = getState().ui.locale === "fr" ? "fr" : "en";
+    // A real (server) id means we're editing an existing post — a scheduled post
+    // or a draft being scheduled — so we UPDATE it in place instead of creating
+    // a duplicate. `cal-` ids are our own optimistic placeholders, not real.
+    const hasRealId = !!post.id && !String(post.id).startsWith("cal-");
+    const nextStatus =
+      post.status === "scheduled" || post.status === "awaiting_validation"
+        ? post.status
+        : post.status || "draft";
     const scheduled = {
       ...post,
-      // Stamp an optimistic id up front so we can find and reconcile this
-      // exact entry once the server returns a persisted id below (without
-      // it, the slice would assign its own id we couldn't reference back).
       id: post.id ?? `cal-${Date.now()}`,
       scheduledDate: date,
-      status: post.status === "draft" ? "scheduled" : post.status ?? "scheduled",
+      status: nextStatus,
       timezone: post.timezone || getScheduleTimezone(),
+      locale,
     };
-    dispatch(addScheduledPost(scheduled));
-    const persisted = await createPost(scheduled);
-    if (persisted) {
-      // Reconcile the optimistic entry with the server row: swap our
-      // client-generated `cal-` id for the persisted id so reschedule/cancel
-      // during the optimistic window hit the backend with an id it knows.
-      dispatch(removeScheduledPost(scheduled.id));
-      dispatch(addScheduledPost(persisted));
+
+    try {
+      if (hasRealId) {
+        // Replace-or-insert the calendar entry (a draft being scheduled isn't in
+        // the calendar yet), then PATCH the existing row.
+        dispatch(removeScheduledPost(scheduled.id));
+        dispatch(addScheduledPost(scheduled));
+        let updated = null;
+        try {
+          updated = await patchPost(scheduled.id, scheduled);
+        } catch (err) {
+          if (err?.status !== 404) throw err;
+        }
+        if (!updated) {
+          updated = await createPost(scheduled);
+          if (updated?.id && updated.id !== scheduled.id) {
+            dispatch(removeScheduledPost(scheduled.id));
+            dispatch(addScheduledPost(updated));
+          }
+        }
+        dispatch(
+          addNotification({
+            messageKey:
+              nextStatus === "draft" ? "draftSaved" : "postScheduled",
+            type: "success",
+          })
+        );
+        return updated || scheduled;
+      }
+
+      dispatch(addScheduledPost(scheduled));
+      const persisted = await createPost(scheduled);
+      if (persisted) {
+        // Reconcile the optimistic entry with the server row: swap our
+        // client-generated `cal-` id for the persisted id so reschedule/cancel
+        // during the optimistic window hit the backend with an id it knows.
+        dispatch(removeScheduledPost(scheduled.id));
+        dispatch(addScheduledPost(persisted));
+      }
+      dispatch(
+        addNotification({
+          messageKey:
+            nextStatus === "draft"
+              ? persisted
+                ? "draftSaved"
+                : "draftSavedLocally"
+              : persisted
+                ? "postScheduled"
+                : "scheduledLocally",
+          type: persisted ? "success" : "info",
+        })
+      );
+      return persisted || scheduled;
+    } catch (err) {
+      dispatch(
+        addNotification({
+          message: err?.message || "Couldn't save this post.",
+          type: "error",
+        })
+      );
+      return null;
     }
-    dispatch(
-      addNotification({
-        message: persisted ? "Post scheduled." : "Scheduled locally (backend offline).",
-        type: persisted ? "success" : "info",
-      })
-    );
   };
 }
 
@@ -86,13 +140,22 @@ export function schedulePostThunk({ post, date }) {
 export function reschedulePostThunk({ id, date }) {
   return async (dispatch) => {
     dispatch(reschedulePost({ id, date }));
-    const updated = await patchPost(id, { scheduledDate: date });
-    dispatch(
-      addNotification({
-        message: updated ? "Post rescheduled." : "Rescheduled locally (backend offline).",
-        type: updated ? "success" : "info",
-      })
-    );
+    try {
+      const updated = await patchPost(id, { scheduledDate: date });
+      dispatch(
+        addNotification({
+          messageKey: updated ? "postRescheduled" : "rescheduledLocally",
+          type: updated ? "success" : "info",
+        })
+      );
+    } catch (err) {
+      dispatch(
+        addNotification({
+          message: err?.message || "Couldn't reschedule this post.",
+          type: "error",
+        })
+      );
+    }
   };
 }
 
@@ -103,13 +166,22 @@ export function reschedulePostThunk({ id, date }) {
 export function updatePostThunk({ id, patch }) {
   return async (dispatch) => {
     dispatch(updateScheduledPost({ id, patch }));
-    const updated = await patchPost(id, patch);
-    dispatch(
-      addNotification({
-        message: updated ? "Post updated." : "Updated locally (backend offline).",
-        type: updated ? "success" : "info",
-      })
-    );
+    try {
+      const updated = await patchPost(id, patch);
+      dispatch(
+        addNotification({
+          messageKey: updated ? "postUpdated" : "updatedLocally",
+          type: updated ? "success" : "info",
+        })
+      );
+    } catch (err) {
+      dispatch(
+        addNotification({
+          message: err?.message || "Couldn't update this post.",
+          type: "error",
+        })
+      );
+    }
   };
 }
 
@@ -117,12 +189,21 @@ export function updatePostThunk({ id, patch }) {
 export function cancelScheduleThunk(id) {
   return async (dispatch) => {
     dispatch(removeScheduledPost(id));
-    const ok = await deletePost(id);
-    dispatch(
-      addNotification({
-        message: ok ? "Schedule cancelled." : "Cancelled locally (backend offline).",
-        type: "info",
-      })
-    );
+    try {
+      const ok = await deletePost(id);
+      dispatch(
+        addNotification({
+          messageKey: ok ? "scheduleCancelled" : "cancelledLocally",
+          type: "info",
+        })
+      );
+    } catch (err) {
+      dispatch(
+        addNotification({
+          message: err?.message || "Couldn't cancel this schedule.",
+          type: "error",
+        })
+      );
+    }
   };
 }

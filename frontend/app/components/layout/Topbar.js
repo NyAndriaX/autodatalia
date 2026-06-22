@@ -23,10 +23,10 @@ import {
 import { logoutThunk } from "../../store/authThunks";
 import { apiHealthCheck } from "../../lib/apiClient";
 import { useIsMobile } from "../../lib/useIsMobile";
+import WorkspaceControls from "./WorkspaceControls";
 import {
   Search,
   Bell,
-  MessageSquare,
   ChevronDown,
   X,
   LogOut,
@@ -41,7 +41,9 @@ import {
   Coins,
   ExternalLink,
   Globe,
+  ArrowRight,
 } from "lucide-react";
+import { hasPermission } from "../../lib/permissions";
 
 const buildViewMeta = (t) => ({
   dashboard: {
@@ -91,11 +93,6 @@ const buildViewMeta = (t) => ({
   },
 });
 
-const CONNECTIVITY_DOT = {
-  online: "var(--status-approved)",
-  offline: "var(--status-error)",
-  unknown: "var(--text-muted)",
-};
 
 const RESULT_ICON = { post: FileText, template: FileText, media: ImageIcon };
 
@@ -117,8 +114,11 @@ export default function Topbar() {
   const t = useTranslations("topbar");
   const tCommon = useTranslations("common");
   const tLang = useTranslations("languages");
+  const tSidebar = useTranslations("sidebar");
+  const tCreation = useTranslations("creation");
+  const tNotif = useTranslations("notifications");
   const VIEW_META = useMemo(() => buildViewMeta(t), [t]);
-  const { activeView, notifications, searchQuery, sidebarCollapsed, connectivity, theme, search, messages, aiUsage, locale } =
+  const { activeView, notifications, searchQuery, sidebarCollapsed, theme, search, messages, aiUsage, locale } =
     useSelector((state) => state.ui);
   const authUser = useSelector((state) => state.auth.user);
   const isMobile = useIsMobile();
@@ -181,7 +181,6 @@ export default function Topbar() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  const backendStatus = connectivity?.backend ?? "unknown";
   const initials = authUser?.initials || "DT";
   const resultsVisible = showResults && searchQuery.trim() && searchView === activeView;
 
@@ -212,6 +211,37 @@ export default function Topbar() {
   // Clicking a search result navigates to the owning view, then resets search.
   const onResultClick = (r) => {
     dispatch(setActiveView(RESULT_VIEW[r.type] || "creation"));
+    dispatch(clearSearch());
+    setShowResults(false);
+    setMobileSearchOpen(false);
+  };
+
+  // Navigable destinations (sidebar views + admin screens) surfaced in the
+  // search dropdown so typing e.g. "create" jumps to the right page.
+  const navTargets = [
+    { key: "dashboard", label: tSidebar("dashboard") },
+    { key: "creation", label: tCreation("title") },
+    { key: "calendar", label: tSidebar("calendar") },
+    { key: "library", label: tSidebar("library") },
+    { key: "automation", label: tSidebar("automation") },
+    { key: "videos", label: tSidebar("videos") },
+    { key: "analytics", label: tSidebar("analytics") },
+    { key: "credits", label: tSidebar("credits") },
+    { key: "settings", label: tCommon("settings") },
+    { key: "members", label: "Utilisateurs", perm: "members.read" },
+    { key: "roles", label: "Rôles & permissions", perm: "roles.read" },
+  ];
+  const navQuery = searchQuery.trim().toLowerCase();
+  const navMatches = navQuery
+    ? navTargets.filter(
+        (n) =>
+          (!n.perm || hasPermission(authUser, n.perm)) &&
+          n.label.toLowerCase().includes(navQuery),
+      )
+    : [];
+
+  const onNavClick = (key) => {
+    dispatch(setActiveView(key));
     dispatch(clearSearch());
     setShowResults(false);
     setMobileSearchOpen(false);
@@ -300,46 +330,81 @@ export default function Topbar() {
             boxShadow: "var(--shadow-dropdown)",
           }}
         >
-          <div
-            className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]"
-            style={{
-              color: "var(--text-tertiary)",
-              borderBottom: "1px solid var(--border-default)",
-              background: "var(--bg-elevated)",
-            }}
-          >
-            {t("searchResults")}
-          </div>
-          {search.status === "loading" ? (
-            <div className="flex items-center gap-2 px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
-              <Loader2 size={14} className="animate-spin" /> {t("searchInProgress")}
-            </div>
-          ) : search.results.length === 0 ? (
-            <div className="px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
-              {t("noResultsFor", { query: searchQuery })}
-            </div>
-          ) : (
-            <ul className="max-h-72 overflow-y-auto py-1">
-              {search.results.map((r) => {
-                const Icon = RESULT_ICON[r.type] || FileText;
-                return (
-                  <li key={r.id}>
+          {navMatches.length > 0 && (
+            <>
+              <div
+                className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]"
+                style={{
+                  color: "var(--text-tertiary)",
+                  borderBottom: "1px solid var(--border-default)",
+                  background: "var(--bg-elevated)",
+                }}
+              >
+                {t("navigation")}
+              </div>
+              <ul className="max-h-72 overflow-y-auto py-1">
+                {navMatches.map((n) => (
+                  <li key={`nav-${n.key}`}>
                     <button
                       className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-200 hover:bg-[var(--bg-card-hover)]"
-                      onClick={() => onResultClick(r)}
+                      onClick={() => onNavClick(n.key)}
                       onMouseDown={(e) => e.preventDefault()}
                     >
-                      <Icon size={15} style={{ color: "var(--text-muted)" }} aria-hidden="true" />
+                      <ArrowRight size={15} style={{ color: "var(--text-muted)" }} aria-hidden="true" />
                       <span className="flex-1 min-w-0">
-                        <span className="block text-sm truncate" style={{ color: "var(--text-primary)" }}>{r.title}</span>
-                        <span className="block text-[11px] truncate" style={{ color: "var(--text-muted)" }}>{r.subtitle}</span>
+                        <span className="block text-sm truncate" style={{ color: "var(--text-primary)" }}>{n.label}</span>
                       </span>
-                      <span className={`${badgeDraft} capitalize`}>{r.type}</span>
+                      <span className={`${badgeDraft} capitalize`}>{t("pageResult")}</span>
                     </button>
                   </li>
-                );
-              })}
-            </ul>
+                ))}
+              </ul>
+            </>
+          )}
+          {(search.status === "loading" || search.results.length > 0 || navMatches.length === 0) && (
+            <>
+              <div
+                className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.18em]"
+                style={{
+                  color: "var(--text-tertiary)",
+                  borderBottom: "1px solid var(--border-default)",
+                  background: "var(--bg-elevated)",
+                }}
+              >
+                {t("searchResults")}
+              </div>
+              {search.status === "loading" ? (
+                <div className="flex items-center gap-2 px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
+                  <Loader2 size={14} className="animate-spin" /> {t("searchInProgress")}
+                </div>
+              ) : search.results.length === 0 ? (
+                <div className="px-4 py-4 text-sm" style={{ color: "var(--text-muted)" }}>
+                  {t("noResultsFor", { query: searchQuery })}
+                </div>
+              ) : (
+                <ul className="max-h-72 overflow-y-auto py-1">
+                  {search.results.map((r) => {
+                    const Icon = RESULT_ICON[r.type] || FileText;
+                    return (
+                      <li key={r.id}>
+                        <button
+                          className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-200 hover:bg-[var(--bg-card-hover)]"
+                          onClick={() => onResultClick(r)}
+                          onMouseDown={(e) => e.preventDefault()}
+                        >
+                          <Icon size={15} style={{ color: "var(--text-muted)" }} aria-hidden="true" />
+                          <span className="flex-1 min-w-0">
+                            <span className="block text-sm truncate" style={{ color: "var(--text-primary)" }}>{r.title}</span>
+                            <span className="block text-[11px] truncate" style={{ color: "var(--text-muted)" }}>{r.subtitle}</span>
+                          </span>
+                          <span className={`${badgeDraft} capitalize`}>{r.type}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </>
           )}
         </div>
       )}
@@ -481,20 +546,8 @@ export default function Topbar() {
           {resolved === "dark" ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
         </button>
 
-        {/* Backend / Telegram status */}
-        <button
-          id="telegram-status"
-          className={`${btnGhost} flex items-center gap-2`}
-          title={t("backendStatus", { status: backendStatus })}
-          aria-label={t("backendStatus", { status: backendStatus })}
-        >
-          <MessageSquare size={18} aria-hidden="true" />
-          <span
-            className="w-2 h-2 rounded-full transition-colors duration-500"
-            style={{ background: CONNECTIVITY_DOT[backendStatus] }}
-            aria-hidden="true"
-          />
-        </button>
+        {/* Workspace switcher + invitations inbox (compact on mobile) */}
+        <WorkspaceControls />
 
         {/* Notifications / messages */}
         <div className="relative" ref={notifRef}>
@@ -576,7 +629,15 @@ export default function Topbar() {
                       />
                       <div className="min-w-0 flex-1">
                         <p className="text-xs flex items-center gap-1" style={{ color: "var(--text-primary)" }}>
-                          <span className="flex-1">{item.message}</span>
+                          {/* Thunk-dispatched notifications carry a messageKey
+                              (+ params) translated here so they're localized like
+                              the rest of the app; the service message feed and
+                              already-translated component toasts use raw message. */}
+                          <span className="flex-1">
+                            {item.messageKey
+                              ? tNotif(item.messageKey, item.messageParams || {})
+                              : item.message}
+                          </span>
                           {item.url && (
                             <a
                               href={item.url}

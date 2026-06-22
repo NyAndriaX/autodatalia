@@ -7,7 +7,18 @@
  * now (consolidating it is a tracked follow-up).
  */
 
-import { Facebook, Instagram, Linkedin, Video } from "lucide-react";
+// Real brand glyphs (via react-icons) — lucide ships only generic outline
+// marks and has no TikTok icon at all, so platform branding previously fell
+// back to a generic `Video` play icon for TikTok. These are the actual
+// FB/IG/TikTok/LinkedIn logos and inherit `currentColor` like the old lucide
+// icons, so existing color styling keeps working.
+//
+// LinkedIn comes from Font Awesome (fa6): Simple Icons dropped the LinkedIn
+// mark over trademark concerns, so the `Si` set still ships FB/IG/TikTok in
+// this version but no longer exports `SiLinkedin` (importing it breaks the
+// build). FaLinkedin is the real filled LinkedIn logo.
+import { SiFacebook, SiInstagram, SiTiktok } from "react-icons/si";
+import { FaLinkedin } from "react-icons/fa6";
 import {
   platformFacebook,
   platformInstagram,
@@ -29,7 +40,7 @@ export const PLATFORMS = [
   {
     id: "facebook",
     label: "Facebook",
-    icon: Facebook,
+    icon: SiFacebook,
     color: "#1877F2",
     className: platformFacebook,
     maxChars: 63206,
@@ -38,7 +49,7 @@ export const PLATFORMS = [
   {
     id: "instagram",
     label: "Instagram",
-    icon: Instagram,
+    icon: SiInstagram,
     color: "#E1306C",
     className: platformInstagram,
     maxChars: 2200,
@@ -47,7 +58,7 @@ export const PLATFORMS = [
   {
     id: "tiktok",
     label: "TikTok",
-    icon: Video,
+    icon: SiTiktok,
     // Hex (not the CSS var) so callers that build alpha shades via
     // string concat — e.g. `${p.color}40` for a translucent border —
     // produce valid CSS. Using `var(--…)` here breaks every such use
@@ -60,7 +71,7 @@ export const PLATFORMS = [
   {
     id: "linkedin",
     label: "LinkedIn",
-    icon: Linkedin,
+    icon: FaLinkedin,
     color: "#0A66C2",
     className: platformLinkedin,
     maxChars: 3000,

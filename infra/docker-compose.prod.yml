@@ -1,19 +1,45 @@
-# Production compose for the VM.
+# Production compose for Datalia — Dokploy / Traefik.
 #
-# Usage:
+# This is the single production compose. It has NO Caddy service and NO host
+# ports (80/443): Dokploy's built-in proxy (Traefik) is the only edge — it
+# terminates HTTPS and routes your domains to these containers. (A self-hosted
+# Caddy would fight Traefik for 80/443, so it's intentionally gone.)
+#
+# Deploy via Dokploy (recommended): create a "Compose" service, point it at this
+# file, set env in the Environment panel, then add two Domains. Full click-by-
+# click steps: DEPLOY.md → "Deploying on Dokploy (simple UI guide)".
+#
+# Manual / debugging on the host (the Dokploy server, where `dokploy-network`
+# already exists):
 #   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 #   docker compose -f docker-compose.prod.yml --env-file .env.production logs -f
+#
+# Traefik reaches these containers over the shared `dokploy-network`; that's why
+# the web-facing services join it below and expose (not publish) their ports.
 
-# Pin the project name so volumes/networks are deterministically `datalia_*`
-# regardless of the host directory name — DEPLOY.md's backup/restore commands
-# reference `datalia_mariadb-data` etc.
+# Pin the project name so the data volumes below keep the SAME `datalia_*` names
+# across every redeploy. This is what protects users/data from "disappearing"
+# when a manager recreates the stack — do NOT change it.
 name: datalia
+
+networks:
+  # Created by Dokploy; Traefik lives here. Declared external so we attach to it
+  # rather than making a new one. If a deploy errors with "network
+  # dokploy-network not found", Dokploy isn't installed/initialised on the host.
+  dokploy-network:
+    external: true
+  # Private network for app <-> database traffic. The DB is NOT on
+  # dokploy-network, so it is never reachable from the public edge.
+  internal:
+    driver: bridge
 
 services:
   mariadb:
     image: mariadb:11.4
     container_name: datalia-mariadb
     restart: always
+    networks:
+      - internal
     environment:
       MARIADB_DATABASE: ${MARIADB_DATABASE:-datalia}
       MARIADB_USER: ${MARIADB_USER:-datalia}
@@ -33,41 +59,6 @@ services:
       retries: 5
       start_period: 15s
 
-  caddy:
-    image: caddy:2-alpine
-    container_name: caddy
-    restart: always
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    environment:
-      API_DOMAIN: ${API_DOMAIN}
-      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN}
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "5"
-    # Only wait for upstreams to *start*, not pass their healthcheck. A
-    # backend/DB misconfig must not block Caddy from coming up: we still want
-    # it to provision/renew TLS certs and serve a 502 for the broken upstream
-    # rather than taking down HTTPS for every host.
-    depends_on:
-      caption-api:
-        condition: service_started
-      frontend:
-        condition: service_started
-    healthcheck:
-      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
   caption-api:
     build:
       context: ../backend
@@ -75,6 +66,12 @@ services:
         INSTALL_DEV_DEPS: "false"
     container_name: caption-api
     restart: always
+    # KEEP THIS AT ONE INSTANCE. The scheduler + automation + video workers run
+    # in-process; a second replica would double-publish. Do NOT enable Dokploy
+    # replicas / rolling-overlap deploys for this service.
+    networks:
+      - internal          # talk to mariadb
+      - dokploy-network   # be reachable by Traefik for the api.* domain
     expose:
       - "8000"
     depends_on:
@@ -86,15 +83,12 @@ services:
         max-size: "20m"
         max-file: "5"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import sys, urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3); sys.exit(0)"]
       interval: 30s
       timeout: 5s
       start_period: 30s
       retries: 3
     environment:
-      # AI provider KEYS are per-user — each account sets its own in the app's
-      # Settings (stored per-tenant in MariaDB). Intentionally NOT global env
-      # vars. Only non-secret defaults (base URL / model / limits) live here.
       AI_API_BASE_URL: ${AI_API_BASE_URL:-https://openrouter.ai/api/v1}
       AI_MODEL: ${AI_MODEL:-google/gemini-2.5-flash}
       AI_MODEL_FAST: ${AI_MODEL_FAST:-google/gemini-2.5-flash}
@@ -108,6 +102,8 @@ services:
       AUTH_RATE_LIMIT_ATTEMPTS: ${AUTH_RATE_LIMIT_ATTEMPTS:-10}
       AUTH_RATE_LIMIT_WINDOW_SECONDS: ${AUTH_RATE_LIMIT_WINDOW_SECONDS:-300}
       TUNNEL_ENABLED: "false"
+      # OAuth callbacks + generated-media URLs must resolve on the public API
+      # domain, so these derive from API_DOMAIN (set it in the env panel).
       OAUTH_REDIRECT_BASE: https://${API_DOMAIN}
       PUBLIC_BASE_URL: https://${API_DOMAIN}
       META_APP_ID: ${META_APP_ID}
@@ -122,9 +118,6 @@ services:
       LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
       LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
       LINKEDIN_API_VERSION: ${LINKEDIN_API_VERSION:-202603}
-      # Password-reset email (optional). With no SMTP_HOST set, the reset link is
-      # logged instead of emailed. PUBLIC_APP_URL is the frontend origin used to
-      # build the reset link (e.g. https://app.yourdomain).
       PUBLIC_APP_URL: ${PUBLIC_APP_URL:-}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
@@ -143,8 +136,6 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_DEFAULT_CHAT_ID: ${TELEGRAM_DEFAULT_CHAT_ID:-}
       TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET:-}
-      # Image/video provider keys are also per-user (Settings UI). Only the
-      # non-secret model/base-url defaults stay here.
       AI_IMAGE_API_BASE_URL: ${AI_IMAGE_API_BASE_URL:-}
       AI_IMAGE_MODEL: ${AI_IMAGE_MODEL:-}
       AI_VIDEO_API_BASE_URL: ${AI_VIDEO_API_BASE_URL:-}
@@ -157,6 +148,8 @@ services:
       LTX_API_KEY: ${LTX_API_KEY:-}
       LTX_API_BASE_URL: ${LTX_API_BASE_URL:-https://api.ltx.video/v1}
       LTX_VIDEO_MODEL: ${LTX_VIDEO_MODEL:-ltx-2-3-pro}
+      ZERNIO_API_KEY: ${ZERNIO_API_KEY:-}
+      ZERNIO_API_BASE_URL: ${ZERNIO_API_BASE_URL:-https://zernio.com/api/v1}
       VIDEO_COST_PER_SECOND_USD: ${VIDEO_COST_PER_SECOND_USD:-0.04}
       CONTENT_DIR: /home/app/content
       DATALIA_DEFAULT_TZ: ${DATALIA_DEFAULT_TZ:-Europe/Paris}
@@ -167,15 +160,16 @@ services:
     build:
       context: ../frontend
       args:
+        # Baked into the static bundle at BUILD time — changing API_DOMAIN means
+        # you must Redeploy (rebuild), not just restart. Set API_DOMAIN in the
+        # env panel before the first deploy.
         - NEXT_PUBLIC_API_BASE_URL=https://${API_DOMAIN}
-    # Container name matches the service name Caddy's `reverse_proxy
-    # frontend:3000` resolves, keeping prod symmetric with that hostname.
     container_name: frontend
     restart: always
+    networks:
+      - dokploy-network   # be reachable by Traefik for the app.* domain
     expose:
       - "3000"
-    # Start once the API container is up; don't gate on its healthcheck so a
-    # backend issue doesn't keep the frontend (and Caddy) from coming up.
     depends_on:
       caption-api:
         condition: service_started
@@ -186,8 +180,12 @@ services:
       start_period: 30s
       retries: 5
 
+# Pinned, project-independent names so EVERY redeploy attaches the SAME volume —
+# this is the no-data-loss guarantee. If Dokploy ever recreates the stack, the
+# data re-attaches by these names instead of silently starting empty. Never
+# rename these and never `down -v` / prune them.
 volumes:
   caption-content:
-  caddy-data:
-  caddy-config:
+    name: datalia_caption-content
   mariadb-data:
+    name: datalia_mariadb-data

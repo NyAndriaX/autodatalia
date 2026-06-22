@@ -37,6 +37,8 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from .config import settings
 from .db import load_scoped_blob, save_scoped_blob
 from .auth import require_token
+from .authz import require_permission
+from .workspaces import get_active_workspace_id
 
 # ── Provider registry ──────────────────────────────────────────────────
 
@@ -199,14 +201,14 @@ def _save_tokens(data: dict[str, Any], user_id: int | None = None) -> None:
 router = APIRouter(prefix="/oauth", tags=["oauth"])
 
 
-@router.get("/status")
+@router.get("/status", dependencies=[Depends(require_permission("connections.read"))])
 async def oauth_status(user_id: int = Depends(require_token)) -> dict[str, Any]:
     """Per-provider configuration + connection state.
 
     The frontend uses this to show real "Configured"/"Connected" badges in
     Settings, so the Connect buttons don't lie about being wireable.
     """
-    tokens = _load_tokens(user_id)
+    tokens = _load_tokens(get_active_workspace_id(user_id))
     return {
         "providers": [
             {
@@ -225,7 +227,10 @@ async def oauth_status(user_id: int = Depends(require_token)) -> dict[str, Any]:
 _PER_USER_TOKEN_PROVIDERS = {"meta", "tiktok", "linkedin"}
 
 
-@router.get("/{provider_id}/start")
+@router.get(
+    "/{provider_id}/start",
+    dependencies=[Depends(require_permission("connections.manage"))],
+)
 async def oauth_start(provider_id: str, user_id: int = Depends(require_token)) -> dict[str, str]:
     """Return the authorize URL to redirect the browser to.
 
@@ -234,16 +239,16 @@ async def oauth_start(provider_id: str, user_id: int = Depends(require_token)) -
     """
     if provider_id not in PROVIDERS:
         raise HTTPException(404, f"Unknown provider: {provider_id}")
-    # Per-user social connections require a real authenticated tenant. In
-    # open/shared-token mode require_token returns 0 — refuse to start so we
-    # never write posting tokens into the shared 'global' scope (which every
-    # tenant can read). Google sign-in is exempt (it IS the auth flow).
-    if provider_id in _PER_USER_TOKEN_PROVIDERS and user_id <= 0:
+    # Social connections belong to a WORKSPACE: the token is shared by every
+    # member so they can all publish to the same pages. Refuse to start if the
+    # caller has no workspace, so a posting token never lands in the global scope.
+    workspace_id = get_active_workspace_id(user_id)
+    if provider_id in _PER_USER_TOKEN_PROVIDERS and not workspace_id:
         raise HTTPException(
             status_code=401,
             detail=(
-                "Sign in with a real account before connecting a social "
-                "provider — per-user tokens cannot be stored in the shared scope."
+                "Sign in to a workspace before connecting a social provider — "
+                "posting tokens cannot be stored in the shared scope."
             ),
         )
     p = PROVIDERS[provider_id]
@@ -272,6 +277,8 @@ async def oauth_start(provider_id: str, user_id: int = Depends(require_token)) -
         "provider": provider_id,
         "created_at": time.time(),
         "user_id": user_id,
+        # The callback has no session, so it binds the token to THIS workspace.
+        "workspace_id": workspace_id,
     }
     _save_tokens(tokens, None)
 
@@ -304,6 +311,110 @@ async def oauth_start(provider_id: str, user_id: int = Depends(require_token)) -
         params[k] = v
 
     return {"authorize_url": f"{p.authorize_url}?{urlencode(params)}"}
+
+
+@router.get(
+    "/zernio/{platform}/start",
+    dependencies=[Depends(require_permission("connections.manage"))],
+)
+async def zernio_start(platform: str, user_id: int = Depends(require_token)) -> dict[str, str]:
+    """Hosted Zernio authorize URL for linking ``platform`` to this workspace's
+    Zernio profile. Mirrors /oauth/{provider}/start but for the unified
+    provider; the frontend pops it like any other connect popup.
+
+    Unlike the direct providers there is no callback to us — Zernio handles the
+    OAuth and links the account to the profile, so the frontend just refetches
+    /oauth/connections after the popup closes to see the new account.
+    """
+    from . import zernio
+
+    workspace_id = get_active_workspace_id(user_id)
+    if not workspace_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to a workspace before connecting a Zernio account.",
+        )
+    if not zernio.is_enabled(workspace_id):
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "zernio_not_configured", "missing": ["ZERNIO_API_KEY"]},
+        )
+    try:
+        url = await zernio.start_connect(workspace_id, platform)
+    except zernio.ZernioError as exc:
+        # Upstream Zernio failure. A 5xx from Zernio is a bad gateway from our
+        # side (not our server erroring), so report 502 with Zernio's own
+        # message; pass 4xx (bad key / profile / platform) through with its
+        # status. Either way the message reaches the UI notification.
+        status = exc.status if exc.status and exc.status < 500 else 502
+        raise HTTPException(status_code=status, detail=f"Zernio: {exc}")
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — never leak a bare 500; log + report
+        import traceback
+
+        print(f"[zernio_start] {platform} connect failed: {exc!r}")
+        traceback.print_exc()
+        raise HTTPException(status_code=502, detail=f"Zernio connect failed: {exc}")
+    return {"authorize_url": url}
+
+
+@router.delete(
+    "/zernio/{platform}",
+    dependencies=[Depends(require_permission("connections.manage"))],
+)
+async def zernio_disconnect(
+    platform: str,
+    user_id: int = Depends(require_token),
+) -> dict[str, Any]:
+    """Disconnect every account for one platform from the active workspace's Zernio key."""
+    from . import zernio
+
+    workspace_id = get_active_workspace_id(user_id)
+    if not workspace_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to a workspace before disconnecting a Zernio account.",
+        )
+    try:
+        count = await zernio.disconnect_platform(workspace_id, platform)
+    except zernio.ZernioError as exc:
+        status = exc.status if exc.status and exc.status < 500 else 502
+        raise HTTPException(status_code=status, detail=f"Zernio: {exc}")
+    if count == 0:
+        raise HTTPException(status_code=404, detail="No connected Zernio account found for this platform.")
+    return {"status": "disconnected", "provider": "zernio", "platform": platform, "count": count}
+
+
+@router.delete(
+    "/zernio/account/{account_id}",
+    dependencies=[Depends(require_permission("connections.manage"))],
+)
+async def zernio_disconnect_account(
+    account_id: str,
+    user_id: int = Depends(require_token),
+) -> dict[str, Any]:
+    """Disconnect one specific Zernio account visible to the active workspace key."""
+    from . import zernio
+
+    workspace_id = get_active_workspace_id(user_id)
+    if not workspace_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to a workspace before disconnecting a Zernio account.",
+        )
+    try:
+        account = await zernio.disconnect_account(workspace_id, account_id)
+    except zernio.ZernioError as exc:
+        status = exc.status if exc.status and exc.status < 500 else 502
+        raise HTTPException(status_code=status, detail=f"Zernio: {exc}")
+    return {
+        "status": "disconnected",
+        "provider": "zernio",
+        "account_id": account_id,
+        "platform": account.get("platform"),
+        "label": account.get("displayName") or account.get("username") or account.get("name"),
+    }
 
 
 async def _exchange_code(
@@ -785,31 +896,30 @@ async def oauth_callback(
                     ).strip(),
                 }
 
-    # For posting providers we must know WHICH real tenant is connecting and
-    # persist the token ONLY to that tenant's scope. The pending-state row was
-    # stamped with the authenticated user_id at /start time. If it lacks a real
-    # user (<= 0), refuse — we never store per-user OAuth tokens in the shared
-    # global scope, because every tenant can read the global scope and would
-    # then be able to publish with another tenant's credentials.
-    raw_pending_user = pending_data.get("user_id")
+    # For posting providers we must know WHICH workspace is connecting and
+    # persist the token ONLY to that workspace's scope. The pending-state row was
+    # stamped with the connecting workspace_id at /start time. If it lacks one,
+    # refuse — we never store posting tokens in the shared global scope, which
+    # every workspace can read.
+    raw_pending_ws = pending_data.get("workspace_id")
     try:
-        connected_user_id = int(raw_pending_user) if raw_pending_user is not None else None
+        connected_workspace_id = int(raw_pending_ws) if raw_pending_ws is not None else None
     except (TypeError, ValueError):
-        connected_user_id = None
-    if connected_user_id is not None and connected_user_id <= 0:
-        connected_user_id = None
-    if provider_id in _PER_USER_TOKEN_PROVIDERS and not connected_user_id:
+        connected_workspace_id = None
+    if connected_workspace_id is not None and connected_workspace_id <= 0:
+        connected_workspace_id = None
+    if provider_id in _PER_USER_TOKEN_PROVIDERS and not connected_workspace_id:
         return HTMLResponse(
             _popup_close_html(
                 provider_id,
                 False,
                 (
-                    "This connection was not tied to a signed-in account and "
-                    "was refused. Sign in, then connect the provider again."
+                    "This connection was not tied to a workspace and was "
+                    "refused. Sign in, then connect the provider again."
                 ),
             )
         )
-    tokens = _load_tokens(connected_user_id)
+    tokens = _load_tokens(connected_workspace_id)
 
     expires_in = data.get("expires_in")
     record = {
@@ -860,21 +970,24 @@ async def oauth_callback(
             )
         )
     tokens[provider_id] = record
-    _save_tokens(tokens, connected_user_id)
+    _save_tokens(tokens, connected_workspace_id)
 
     return HTMLResponse(
         _popup_close_html(provider_id, True, f"{provider.label} connected.")
     )
 
 
-@router.delete("/{provider_id}")
+@router.delete(
+    "/{provider_id}",
+    dependencies=[Depends(require_permission("connections.manage"))],
+)
 async def oauth_disconnect(provider_id: str, user_id: int = Depends(require_token)) -> dict[str, str]:
     """Forget the stored token for this provider."""
     if provider_id not in PROVIDERS:
         raise HTTPException(404, f"Unknown provider: {provider_id}")
-    tokens = _load_tokens(user_id if user_id > 0 else None)
+    tokens = _load_tokens(get_active_workspace_id(user_id))
     tokens.pop(provider_id, None)
-    _save_tokens(tokens, user_id if user_id > 0 else None)
+    _save_tokens(tokens, get_active_workspace_id(user_id))
     return {"status": "disconnected", "provider": provider_id}
 
 
@@ -932,12 +1045,12 @@ async def _fetch_meta_pages(user_token: str) -> list[dict[str, Any]]:
     return pages
 
 
-@router.get("/meta/accounts")
+@router.get("/meta/accounts", dependencies=[Depends(require_permission("connections.read"))])
 async def meta_accounts(user_id: int = Depends(require_token)) -> dict[str, Any]:
     """Return every FB Page the connected user admins, plus any IG Business
     account linked to each Page. Each entry includes the Page access token
     so callers can publish without another round-trip."""
-    tokens = _load_tokens(user_id if user_id > 0 else None)
+    tokens = _load_tokens(get_active_workspace_id(user_id))
     meta_record = tokens.get("meta") or {}
     user_token = meta_record.get("access_token")
     if not user_token:
@@ -946,7 +1059,7 @@ async def meta_accounts(user_id: int = Depends(require_token)) -> dict[str, Any]
     return {"pages": pages}
 
 
-@router.get("/connections")
+@router.get("/connections", dependencies=[Depends(require_permission("connections.read"))])
 async def connections(user_id: int = Depends(require_token)) -> dict[str, Any]:
     """Frontend-friendly view of all OAuth connections.
 
@@ -960,7 +1073,7 @@ async def connections(user_id: int = Depends(require_token)) -> dict[str, Any]:
     Callers that need a token go through /oauth/meta/accounts (or future
     per-provider equivalents) so we can audit token egress separately.
     """
-    tokens = _load_tokens(user_id if user_id > 0 else None)
+    tokens = _load_tokens(get_active_workspace_id(user_id))
     out: dict[str, Any] = {"providers": {}}
 
     for p in PROVIDERS.values():
@@ -1048,5 +1161,27 @@ async def connections(user_id: int = Depends(require_token)) -> dict[str, Any]:
                 )
 
         out["providers"][p.id] = entry
+
+    # Zernio (optional unified provider) folded in alongside the direct
+    # providers so Settings + the publish path treat it uniformly. Inert
+    # (configured=False) when no ZERNIO_API_KEY is set for the workspace, and
+    # never allowed to break the whole connections view.
+    from . import zernio
+
+    try:
+        out["providers"]["zernio"] = await zernio.connections_entry(
+            get_active_workspace_id(user_id)
+        )
+    except Exception as exc:  # noqa: BLE001
+        out["providers"]["zernio"] = {
+            "id": "zernio",
+            "label": zernio.LABEL,
+            "configured": True,
+            "connected": False,
+            "missing_env": [],
+            "targets": [],
+            "is_aggregator": True,
+            "error": str(exc),
+        }
 
     return out

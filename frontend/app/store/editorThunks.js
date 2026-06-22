@@ -1,6 +1,7 @@
 import {
   setContent,
   setStatus,
+  setDraftId,
   startGeneration,
   setVariants,
   setGenerationError,
@@ -17,10 +18,13 @@ import {
 } from "./uiSlice";
 import { generateContent, applyQuickAction, isGenerationCached } from "../lib/aiService";
 import { fetchConnections, publishToTargets } from "../lib/oauthService";
+import { createPost, patchPost } from "../lib/postsService";
 import { publishHashKey } from "../lib/publishHash";
 import { submitValidation } from "../lib/validationService";
 import { loadSettings } from "../lib/settingsStorage";
 import { getScheduleTimezone } from "../lib/timezone";
+import { isoDateKey, startOfToday } from "../lib/dateUtils";
+import { loadMessagesThunk } from "./searchThunks";
 
 // Frontend-side cooldown after a publish — locks the button so a fast
 // second click can't double-post (the backend has the same guard).
@@ -68,9 +72,10 @@ export function generateContentThunk(force = false, count = 1) {
     );
 
     const args = {
+      // The post content doubles as the brief for the AI (an empty content is
+      // fine — the backend supplies a default brief).
       prompt: currentPostRefreshed.content,
       platforms: currentPostRefreshed.platforms,
-      template: currentPostRefreshed.template,
       tone: currentPostRefreshed.tone || null,
       variants: count,
       image: firstImage?.filename ?? null,
@@ -82,7 +87,7 @@ export function generateContentThunk(force = false, count = 1) {
       dispatch(recordCacheHit());
       dispatch(
         addNotification({
-          message: "Reusing last generation — no tokens spent.",
+          messageKey: "reusingCache",
           type: "info",
         })
       );
@@ -136,39 +141,93 @@ export function applyQuickActionThunk(action) {
 }
 
 export function saveDraftThunk() {
-  return async (dispatch) => {
+  return async (dispatch, getState) => {
+    const { currentPost } = getState().editor;
+    const locale = getState().ui.locale === "fr" ? "fr" : "en";
     dispatch(setStatus("draft"));
-    dispatch(addNotification({ message: "Draft saved.", type: "success" }));
+    // Persist the draft so it shows up in the Library's Drafts tab (not just a
+    // local status flip). Only keep media that actually uploaded — local-only
+    // blobs are meaningless server-side. scheduledDate is required by the API,
+    // so a date-less draft defaults to today.
+    const uploaded = (currentPost.media || []).filter((m) => m.status === "uploaded");
+    const payload = {
+      content: currentPost.content || "",
+      platforms: currentPost.platforms || {},
+      status: "draft",
+      scheduledDate: currentPost.scheduledDate || isoDateKey(startOfToday()),
+      time: currentPost.time || undefined,
+      timezone: getScheduleTimezone(),
+      media: uploaded,
+      locale,
+      ratios:
+        currentPost.ratios && Object.keys(currentPost.ratios).length
+          ? currentPost.ratios
+          : undefined,
+    };
+    // Editing an existing draft → update it in place; otherwise create one and
+    // remember its id so the NEXT save updates the same draft (not a new one).
+    try {
+      let saved;
+      if (currentPost.draftId) {
+        try {
+          saved = await patchPost(currentPost.draftId, payload);
+        } catch (err) {
+          if (err?.status !== 404) throw err;
+        }
+        if (!saved) {
+          saved = await createPost(payload);
+        }
+      } else {
+        saved = await createPost(payload);
+      }
+      if (saved?.id) dispatch(setDraftId(saved.id));
+      dispatch(
+        addNotification({
+          messageKey: saved ? "draftSaved" : "draftSavedLocally",
+          type: saved ? "success" : "info",
+        })
+      );
+    } catch (err) {
+      dispatch(
+        addNotification({
+          message: err?.message || "Couldn't save draft.",
+          type: "error",
+        })
+      );
+    }
   };
 }
 
 export function submitForValidationThunk() {
   return async (dispatch, getState) => {
     const { currentPost } = getState().editor;
+    const locale = getState().ui.locale === "fr" ? "fr" : "en";
     try {
       const localSettings = loadSettings();
       const resp = await submitValidation({
+        post_id: currentPost.draftId || undefined,
         content: currentPost.content,
         platforms: currentPost.platforms,
         scheduledDate: currentPost.scheduledDate || undefined,
+        time: currentPost.time || undefined,
         timezone: getScheduleTimezone(),
         media: currentPost.media || [],
+        locale,
         ratios: currentPost.ratios || undefined,
         tiktok: currentPost.tiktok || undefined,
         chat_id: localSettings.telegramChatId || undefined,
       });
       dispatch(setStatus(resp?.status || "pending"));
-      dispatch(
-        addNotification({
-          message: `Submitted for Telegram validation${resp?.chat_id ? ` (${resp.chat_id})` : ""}.`,
-          type: "success",
-        })
-      );
+      // The backend writes the authoritative workspace-scoped validation
+      // event into /messages. Refresh it immediately instead of adding a
+      // second local bell item for the same submit action.
+      dispatch(loadMessagesThunk());
     } catch (err) {
       dispatch(setStatus("error"));
       dispatch(
         addNotification({
-          message: `Validation submit failed: ${err.message || "unknown error"}`,
+          messageKey: "validationFailed",
+          messageParams: { error: err.message || "unknown error" },
           type: "error",
         })
       );
@@ -185,7 +244,7 @@ export function publishNowThunk() {
     // guard, but this gives the user a clear message without a round-trip.
     if (now < cooldownUntil) {
       const wait = Math.ceil((cooldownUntil - now) / 1000);
-      dispatch(addNotification({ message: `Wait ${wait}s before publishing again.`, type: "error" }));
+      dispatch(addNotification({ messageKey: "waitBeforePublish", messageParams: { seconds: wait }, type: "error" }));
       return;
     }
 
@@ -201,7 +260,7 @@ export function publishNowThunk() {
     if (!isUploadDone()) {
       dispatch(
         addNotification({
-          message: "Waiting for upload + transcode to finish before publishing…",
+          messageKey: "uploadWaiting",
           type: "info",
         })
       );
@@ -216,7 +275,7 @@ export function publishNowThunk() {
         dispatch(setStatus("error"));
         dispatch(
           addNotification({
-            message: "Upload + transcode didn't finish in 5min. Check the file and retry.",
+            messageKey: "uploadTimeout",
             type: "error",
           })
         );
@@ -227,6 +286,7 @@ export function publishNowThunk() {
     // Re-read currentPost AFTER the upload-wait so we pick up the now-
     // populated remoteUrl on each uploaded media item.
     const { currentPost } = getState().editor;
+    const locale = getState().ui.locale === "fr" ? "fr" : "en";
 
     // Build the list of (platform, target_id) pairs from currentPost.platforms
     // crossed with the live connections list. The user's `platforms` toggle
@@ -236,7 +296,7 @@ export function publishNowThunk() {
       .filter(([, on]) => on)
       .map(([id]) => id);
     if (enabled.length === 0) {
-      dispatch(addNotification({ message: "No platform selected.", type: "error" }));
+      dispatch(addNotification({ messageKey: "noPlatformSelected", type: "error" }));
       return;
     }
 
@@ -246,21 +306,30 @@ export function publishNowThunk() {
       providers = data?.providers || {};
     } catch (err) {
       dispatch(setStatus("error"));
-      dispatch(addNotification({ message: `Connections fetch failed: ${err.message}`, type: "error" }));
+      dispatch(addNotification({ messageKey: "connectionsFetchFailed", messageParams: { error: err.message }, type: "error" }));
       return;
     }
 
     const targets = [];
     const skipped = [];
+    // Zernio targets come back from /oauth/connections tagged with the
+    // datalia-facing `platform` + provider:"zernio"; the backend routes them
+    // through the unified API. A platform is only "skipped" when NEITHER a
+    // direct account nor a Zernio account is connected for it.
+    const zernioTargets = providers?.zernio?.targets || [];
     for (const platform of enabled) {
       const picker = TARGETS_FOR_PLATFORM[platform];
-      const found = picker ? picker(providers) : [];
-      if (found.length === 0) {
+      const direct = picker ? picker(providers) : [];
+      const zern = zernioTargets.filter((t) => t.platform === platform);
+      if (direct.length === 0 && zern.length === 0) {
         skipped.push(platform);
         continue;
       }
-      for (const t of found) {
+      for (const t of direct) {
         targets.push({ platform, id: t.id, label: t.label });
+      }
+      for (const t of zern) {
+        targets.push({ platform, id: t.id, label: t.label, provider: "zernio" });
       }
     }
 
@@ -268,7 +337,8 @@ export function publishNowThunk() {
       dispatch(setStatus("error"));
       dispatch(
         addNotification({
-          message: `No connected accounts for: ${skipped.join(", ")}. Connect them in Settings.`,
+          messageKey: "noConnectedAccounts",
+          messageParams: { platforms: skipped.join(", ") },
           type: "error",
         })
       );
@@ -311,7 +381,8 @@ export function publishNowThunk() {
       dispatch(setStatus("error"));
       dispatch(
         addNotification({
-          message: `Can't publish: ${why}. Remove the failed file and re-add it.`,
+          messageKey: "cantPublish",
+          messageParams: { why },
           type: "error",
         })
       );
@@ -321,8 +392,7 @@ export function publishNowThunk() {
       dispatch(setStatus("error"));
       dispatch(
         addNotification({
-          message:
-            "Instagram and TikTok need a media file. Add an image or video before publishing.",
+          messageKey: "mediaRequired",
           type: "error",
         })
       );
@@ -353,13 +423,14 @@ export function publishNowThunk() {
         mediaUrl,
         mediaUrls,
         targets,
+        locale,
         ratios: currentPost.ratios,
         tiktok: tiktokOpts,
       });
       results = resp.results || [];
     } catch (err) {
       dispatch(setStatus("error"));
-      dispatch(addNotification({ message: `Publish failed: ${err.message}`, type: "error" }));
+      dispatch(addNotification({ messageKey: "publishError", messageParams: { error: err.message }, type: "error" }));
       return;
     }
 
@@ -376,7 +447,8 @@ export function publishNowThunk() {
     for (const r of ok) {
       dispatch(
         addNotification({
-          message: `Published to ${r.target_label} (${r.platform}).`,
+          messageKey: "publishedTo",
+          messageParams: { target: r.target_label, platform: r.platform },
           type: "success",
           url: r.permalink_url || null,
         })
@@ -385,7 +457,8 @@ export function publishNowThunk() {
     for (const r of failed) {
       dispatch(
         addNotification({
-          message: `${r.target_label} (${r.platform}) failed: ${r.error || "unknown"}`,
+          messageKey: "publishFailed",
+          messageParams: { target: r.target_label, platform: r.platform, error: r.error || "unknown" },
           type: "error",
         })
       );

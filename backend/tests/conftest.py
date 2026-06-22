@@ -33,6 +33,50 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture
+def workspace_client():
+    """A real signed-in user with a personal workspace."""
+    settings.allow_open_auth = False
+    c = TestClient(app)
+    response = c.post(
+        "/auth/register",
+        json={
+            "email": "owner@example.com",
+            "password": "secret123",
+            "name": "Owner",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return c
+
+
+@pytest.fixture
+def workspace_client_factory():
+    """Create independent signed-in clients, one workspace per client."""
+
+    counter = {"n": 0}
+
+    def _make(*, email: str | None = None, name: str | None = None, password: str = "secret123"):
+        settings.allow_open_auth = False
+        c = TestClient(app)
+        counter["n"] += 1
+        idx = counter["n"]
+        chosen_email = email or f"user{idx}@example.com"
+        chosen_name = name or f"User {idx}"
+        response = c.post(
+            "/auth/register",
+            json={
+                "email": chosen_email,
+                "password": password,
+                "name": chosen_name,
+            },
+        )
+        assert response.status_code == 200, response.text
+        return c
+
+    return _make
+
+
 @pytest.fixture(autouse=True)
 def _isolate_state():
     """Wipe per-test artefacts: posts file, messages file, AI cache."""
@@ -49,6 +93,9 @@ def _isolate_state():
             p.unlink()
     for p in TEST_CONTENT.glob("runtime_settings_user_*.json"):
         p.unlink()
+    # Wipe per-workspace media dirs (auto-increment resets to 1 each test, so a
+    # stale ws/1 would otherwise leak into the next test's workspace).
+    shutil.rmtree(TEST_CONTENT / "ws", ignore_errors=True)
     # Reset the AI cache (global slice + every per-tenant slice) and the
     # per-tenant daily rate-limit counters so tests don't leak across each other.
     _AI_CACHE.clear()
@@ -60,6 +107,7 @@ def _isolate_state():
     # Reset auth to open mode between tests; individual tests can opt in.
     settings.backend_auth_token = ""
     settings.allow_open_auth = True
+    settings.allow_open_registration = True
     settings.telegram_bot_token = ""
     settings.telegram_default_chat_id = ""
     settings.telegram_webhook_secret = ""

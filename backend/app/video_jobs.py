@@ -43,6 +43,7 @@ from .db import (
     upsert_collection_document,
 )
 from .runtime_config import resolved_settings
+from .services import _media_root
 
 log = logging.getLogger("datalia.video_jobs")
 
@@ -451,14 +452,14 @@ async def _run_replicate_job(job: dict[str, Any]) -> dict[str, Any]:
     # was previously fetched with redirects auto-followed. safe_get_async
     # validates the initial host and re-validates every redirect Location so
     # a malicious/compromised response can't bounce us into an internal IP.
-    out_path = _generated_dir() / f"ltx-{job['id']}.mp4"
+    out_path = _generated_dir(job.get("user_id")) / f"ltx-{job['id']}.mp4"
     async with httpx.AsyncClient(timeout=180.0) as client:
         d = await safe_get_async(client, output)
     if d.status_code >= 400:
         raise RuntimeError(f"Failed to download Replicate output: {d.status_code}")
     out_path.write_bytes(d.content)
 
-    public_url = _public_url_for_local(out_path.name, subdir="generated")
+    public_url = _public_url_for_local(out_path.name, workspace_id=job.get("user_id"))
     cost_usd = round(job["duration_seconds"] * cfg.video_cost_per_second_usd, 4)
 
     # 4. Persist + log cost
@@ -565,10 +566,10 @@ async def _run_ltx_job(job: dict[str, Any]) -> dict[str, Any]:
     # Persist the MP4 bytes. Lightricks sets x-request-id we stash as
     # the external id so it shows up in the job inspector.
     external_id = resp.headers.get("x-request-id")
-    out_path = _generated_dir() / f"ltx2-{job['id']}.mp4"
+    out_path = _generated_dir(job.get("user_id")) / f"ltx2-{job['id']}.mp4"
     out_path.write_bytes(resp.content)
 
-    public_url = _public_url_for_local(out_path.name, subdir="generated")
+    public_url = _public_url_for_local(out_path.name, workspace_id=job.get("user_id"))
     cost_usd = round(duration * cfg.video_cost_per_second_usd, 4)
 
     try:
@@ -1228,14 +1229,14 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
     # SSRF guard: `video_url` is taken from the fal.ai API response and was
     # previously fetched with redirects auto-followed. safe_get_async validates
     # the host and re-validates every redirect hop before following it.
-    out_path = _generated_dir() / f"falltx-{job['id']}.mp4"
+    out_path = _generated_dir(job.get("user_id")) / f"falltx-{job['id']}.mp4"
     async with httpx.AsyncClient(timeout=180.0) as client:
         d = await safe_get_async(client, video_url)
     if d.status_code >= 400:
         raise RuntimeError(f"Failed to download fal.ai output: {d.status_code}")
     out_path.write_bytes(d.content)
 
-    public_url = _public_url_for_local(out_path.name, subdir="generated")
+    public_url = _public_url_for_local(out_path.name, workspace_id=job.get("user_id"))
     # Use the per-model rate from the spec — Kling, Veo and LTX cost
     # very different amounts per second of output. Falls back to the
     # global VIDEO_COST_PER_SECOND_USD when the model isn't in the
@@ -1412,7 +1413,7 @@ async def _run_openrouter_job(job: dict[str, Any]) -> dict[str, Any]:
     # from the per-tenant base_url) and was previously fetched with redirects
     # auto-followed — and, when there are no unsigned_urls, our auth headers
     # ride along. safe_get_async validates the host and every redirect hop.
-    out_path = _generated_dir() / f"openrouter-{job['id']}.mp4"
+    out_path = _generated_dir(job.get("user_id")) / f"openrouter-{job['id']}.mp4"
     async with httpx.AsyncClient(timeout=180.0) as client:
         d = await safe_get_async(
             client, output_url, headers=None if unsigned_urls else headers
@@ -1421,7 +1422,7 @@ async def _run_openrouter_job(job: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError(f"Failed to download OpenRouter output: {d.status_code}")
     out_path.write_bytes(d.content)
 
-    public_url = _public_url_for_local(out_path.name, subdir="generated")
+    public_url = _public_url_for_local(out_path.name, workspace_id=job.get("user_id"))
     cost_usd = _openrouter_usage_cost(final)
     if cost_usd is None:
         cost_usd = round(
@@ -1492,7 +1493,9 @@ async def _run_fallback_job(job: dict[str, Any]) -> dict[str, Any]:
     _update_job(job["id"], {"started_at": time.time(), "status": "running", "progress": 0.1})
     width, height = _pick_size(job["ratio"], video=True)
     try:
-        poster, _provider = await _generate_image_file(job["prompt"], job["ratio"])
+        poster, _provider = await _generate_image_file(
+            job["prompt"], job["ratio"], user_id=job.get("user_id")
+        )
     except Exception as exc:
         # Don't take the whole job down just because the image API
         # broke — Pillow can always render a placeholder.
@@ -1501,13 +1504,13 @@ async def _run_fallback_job(job: dict[str, Any]) -> dict[str, Any]:
             exc,
         )
         payload = _render_fallback_poster(job["prompt"], width, height)
-        poster = _write_bytes(job["prompt"], ".png", payload)
+        poster = _write_bytes(job["prompt"], ".png", payload, workspace_id=job.get("user_id"))
     _update_job(job["id"], {"progress": 0.5})
-    out_path = _gen_dir() / f"kenburns-{job['id']}.mp4"
+    out_path = _gen_dir(job.get("user_id")) / f"kenburns-{job['id']}.mp4"
     await _render_motion_video(
         poster, out_path, width, height, job["duration_seconds"]
     )
-    public_url = _public_url_for_local(out_path.name, subdir="generated")
+    public_url = _public_url_for_local(out_path.name, workspace_id=job.get("user_id"))
     return _update_job(job["id"], {
         "status": "succeeded",
         "finished_at": time.time(),
@@ -1533,21 +1536,29 @@ def _estimate_progress(prediction: dict[str, Any]) -> float:
     return min(0.95, 0.1 + step_lines * 0.02)
 
 
-def _generated_dir() -> Path:
-    path = settings.content_dir / "generated"
+def _generated_dir(workspace_id: int | str | None = None) -> Path:
+    # Per-workspace (content/ws/{id}/generated) so generated videos land in the
+    # workspace's Library and stay isolated from other tenants. None = global.
+    path = _media_root(workspace_id) / "generated"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def _public_url_for_local(filename: str, *, subdir: str = "generated") -> str:
+def _public_url_for_local(
+    filename: str, *, subdir: str = "generated", workspace_id: int | str | None = None
+) -> str:
     """Resolve a content-relative filename to a public URL Replicate /
-    the frontend can hit. Mirrors the precedence used by /upload."""
+    the frontend can hit. Mirrors the precedence used by /upload. When
+    workspace_id is given the URL is prefixed with ws/{id}/ to match where the
+    per-workspace generated media is actually saved (else /content 404s)."""
     base = (
         os.environ.get("PUBLIC_BASE_URL")
         or os.environ.get("OAUTH_REDIRECT_BASE")
         or ""
     ).rstrip("/")
-    rel = f"{subdir}/{filename}" if subdir else filename
+    root_rel = _media_root(workspace_id).relative_to(settings.content_dir).as_posix()
+    parts = [p for p in (root_rel if root_rel != "." else "", subdir, filename) if p]
+    rel = "/".join(parts)
     if not base:
         return f"/content/{rel}"
     return f"{base}/content/{rel}"

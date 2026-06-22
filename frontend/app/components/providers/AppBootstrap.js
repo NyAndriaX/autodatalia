@@ -2,26 +2,48 @@
 
 import { useEffect, useRef } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { setTheme } from "../../store/uiSlice";
+import { setLocale, setTheme } from "../../store/uiSlice";
 import { hydrateScheduledPosts } from "../../store/calendarSlice";
-import { restoreSessionThunk } from "../../store/authThunks";
+import { hydrateEditorState } from "../../store/editorSlice";
+import { restoreSessionThunk, refreshUserThunk } from "../../store/authThunks";
 import { loadMessagesThunk } from "../../store/searchThunks";
 import { loadScheduledPostsThunk } from "../../store/calendarThunks";
 import { loadScheduledPosts, saveScheduledPosts } from "../../lib/calendarStorage";
+import { loadEditorState, saveEditorState } from "../../lib/editorWorkspaceStorage";
 import {
   getStoredThemePref,
   storeThemePref,
   resolveTheme,
   applyTheme,
 } from "../../lib/theme";
+import { loadWorkspaceLocale, saveWorkspaceLocale } from "../../lib/workspaceLocaleStorage";
+
+// Flip the theme with a smooth, compositor-driven crossfade where supported
+// (View Transitions API); otherwise apply it instantly (no per-element lag).
+function applyThemeAnimated(next) {
+  if (
+    typeof document !== "undefined" &&
+    typeof document.startViewTransition === "function"
+  ) {
+    document.startViewTransition(() => applyTheme(next));
+  } else {
+    applyTheme(next);
+  }
+}
 
 // Client-only bootstrap: runs once to hydrate Redux from persisted state and
 // kick off background loads. Renders nothing.
 export default function AppBootstrap() {
   const dispatch = useDispatch();
   const theme = useSelector((s) => s.ui.theme);
+  const locale = useSelector((s) => s.ui.locale);
   const scheduledPosts = useSelector((s) => s.calendar.scheduledPosts);
+  const editor = useSelector((s) => s.editor);
+  const activeWorkspaceId = useSelector((s) => s.auth.user?.workspace?.id);
   const didInit = useRef(false);
+  const hydratedWorkspaceRef = useRef(null);
+  const skipNextEditorSaveRef = useRef(null);
+  const skipNextLocaleSaveRef = useRef(null);
 
   // One-time hydration. Backend is the source of truth; localStorage is the
   // offline fallback. If the backend has no posts, we let the CalendarView
@@ -49,6 +71,43 @@ export default function AppBootstrap() {
     saveScheduledPosts(scheduledPosts);
   }, [scheduledPosts]);
 
+  useEffect(() => {
+    if (!didInit.current || !activeWorkspaceId) {
+      hydratedWorkspaceRef.current = null;
+      skipNextEditorSaveRef.current = null;
+      skipNextLocaleSaveRef.current = null;
+      return;
+    }
+    if (hydratedWorkspaceRef.current === activeWorkspaceId) return;
+    skipNextEditorSaveRef.current = activeWorkspaceId;
+    skipNextLocaleSaveRef.current = activeWorkspaceId;
+    hydratedWorkspaceRef.current = activeWorkspaceId;
+    dispatch(
+      hydrateEditorState(loadEditorState(activeWorkspaceId) || undefined)
+    );
+    dispatch(
+      setLocale(loadWorkspaceLocale(activeWorkspaceId, locale))
+    );
+  }, [activeWorkspaceId, dispatch, locale]);
+
+  useEffect(() => {
+    if (!didInit.current || !activeWorkspaceId) return;
+    if (skipNextEditorSaveRef.current === activeWorkspaceId) {
+      skipNextEditorSaveRef.current = null;
+      return;
+    }
+    saveEditorState(activeWorkspaceId, editor);
+  }, [activeWorkspaceId, editor]);
+
+  useEffect(() => {
+    if (!didInit.current || !activeWorkspaceId) return;
+    if (skipNextLocaleSaveRef.current === activeWorkspaceId) {
+      skipNextLocaleSaveRef.current = null;
+      return;
+    }
+    saveWorkspaceLocale(activeWorkspaceId, locale);
+  }, [activeWorkspaceId, locale]);
+
   // Poll /posts and /messages every 30 s so the calendar reflects scheduler
   // activity (status flips to "published"/"error") and the bell picks up
   // publish events fired from the backend without a page reload. Same
@@ -60,6 +119,8 @@ export default function AppBootstrap() {
       // a scheduler-deleted post would never disappear from the store).
       dispatch(loadScheduledPostsThunk({ refresh: true }));
       dispatch(loadMessagesThunk());
+      // Pick up role/permission changes an admin made to this account.
+      dispatch(refreshUserThunk());
     }, 30_000);
     return () => clearInterval(id);
   }, [dispatch]);
@@ -67,27 +128,19 @@ export default function AppBootstrap() {
   // Keep <html data-theme> + storage in sync with the preference, and follow
   // the OS when the preference is "system".
   //
-  // The `data-theme-transitioning` flag is set for a brief window around
-  // every theme flip so the global CSS rule in globals.css can transition
-  // colors on every element synchronously — without it the body transition
-  // raced the inline-styled surfaces and the user saw a segment-by-segment
-  // wipe.
+  // Animate the flip with the View Transitions API: the browser crossfades a
+  // snapshot of the whole page on the compositor, so it stays smooth no matter
+  // how many widgets are mounted. Browsers without it just flip instantly.
   const lastApplied = useRef(null);
   useEffect(() => {
     const next = resolveTheme(theme);
     const prev = lastApplied.current;
     lastApplied.current = next;
-    if (prev && prev !== next && typeof document !== "undefined") {
-      const html = document.documentElement;
-      html.dataset.themeTransitioning = "true";
-      const t = window.setTimeout(() => {
-        delete html.dataset.themeTransitioning;
-      }, 180);
-      applyTheme(next);
-      storeThemePref(theme);
-      return () => window.clearTimeout(t);
+    if (prev && prev !== next) {
+      applyThemeAnimated(next);
+    } else {
+      applyTheme(next); // first paint — no animation
     }
-    applyTheme(next);
     storeThemePref(theme);
 
     if (theme !== "system") return;
@@ -95,13 +148,9 @@ export default function AppBootstrap() {
     const onChange = () => {
       const resolved = resolveTheme("system");
       if (resolved !== lastApplied.current) {
-        document.documentElement.dataset.themeTransitioning = "true";
-        window.setTimeout(() => {
-          delete document.documentElement.dataset.themeTransitioning;
-        }, 180);
         lastApplied.current = resolved;
+        applyThemeAnimated(resolved);
       }
-      applyTheme(resolved);
     };
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);

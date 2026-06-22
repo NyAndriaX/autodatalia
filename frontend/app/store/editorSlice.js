@@ -1,46 +1,45 @@
 import { createSlice } from "@reduxjs/toolkit";
 
-const initialState = {
-  currentPost: {
+// A blank editor post. Used for the initial state AND by resetEditor (New post),
+// so "New post" always starts clean. `draftId` is the id of the draft/post being
+// edited (null = fresh) — saveDraftThunk uses it to UPDATE in place instead of
+// creating a new draft each save.
+function freshPost() {
+  return {
+    draftId: null,
     content: "",
-    platforms: {
-      facebook: true,
-      instagram: true,
-      tiktok: false,
-      linkedin: false,
-    },
-    mode: "free", // "free" | "template" | "scratch"
-    template: "promo", // active template id when mode === "template"
-    /* Tone is sent to the AI as generation context — null means "let the
-       model pick". The dropdown defaults to the value last used. */
+    platforms: { facebook: true, instagram: true, tiktok: false, linkedin: false },
+    // Tone: AI generation context; null = let the model pick.
     tone: null,
-    /* Per-platform aspect ratio chosen for the preview frame. Keyed by
-       platform id; missing keys fall back to the platform's defaultRatio
-       (see RATIOS_BY_PLATFORM). Empty by default so the editor displays
-       each platform's recommended ratio without the user having to choose. */
+    // Per-platform aspect ratios; empty falls back to each platform's default.
     ratios: {},
     status: "draft", // "draft" | "pending" | "approved" | "published" | "error"
     scheduledDate: null,
+    time: null,
     media: [],
-    /* TikTok-specific compose flags. TikTok's audit reviewers verify the
-       editor exposes all four of these BEFORE the publish call — they're
-       reject-on-sight if missing. We persist them on currentPost so the
-       PublishConfirmModal reads/writes one source of truth and the publish
-       thunk can forward them to the backend on every fire. */
+    // TikTok compose flags — the audit requires all four be exposed before publish.
     tiktok: {
-      privacy_level: "SELF_ONLY", // forced to SELF_ONLY by TikTok in sandbox anyway
-      disclose_video_branded: false,       // "Disclose branded content"
-      disclose_video_your_brand: false,    // "Your brand"
-      music_confirmed: false,              // gate — Publish disabled until ticked
+      privacy_level: "SELF_ONLY",
+      disclose_video_branded: false,
+      disclose_video_your_brand: false,
+      music_confirmed: false,
     },
-  },
-  aiGeneration: {
+  };
+}
+
+function freshAi() {
+  return {
     isGenerating: false,
     isApplyingAction: false,
     variants: [],
     selectedVariant: null,
     error: null,
-  },
+  };
+}
+
+const initialState = {
+  currentPost: freshPost(),
+  aiGeneration: freshAi(),
 };
 
 const editorSlice = createSlice({
@@ -53,12 +52,6 @@ const editorSlice = createSlice({
     togglePlatform: (state, action) => {
       const platform = action.payload;
       state.currentPost.platforms[platform] = !state.currentPost.platforms[platform];
-    },
-    setMode: (state, action) => {
-      state.currentPost.mode = action.payload;
-    },
-    setTemplate: (state, action) => {
-      state.currentPost.template = action.payload;
     },
     setTone: (state, action) => {
       state.currentPost.tone = action.payload || null;
@@ -79,6 +72,63 @@ const editorSlice = createSlice({
     },
     setStatus: (state, action) => {
       state.currentPost.status = action.payload;
+    },
+    // Hydrate the editor from a saved post (e.g. opening a draft from the
+    // Library). Keeps the editor's tiktok defaults for any keys the post omits.
+    loadDraft: (state, action) => {
+      const p = action.payload || {};
+      state.currentPost = {
+        ...state.currentPost,
+        draftId: p.id || null,
+        content: p.content || "",
+        platforms:
+          p.platforms && Object.keys(p.platforms).length
+            ? p.platforms
+            : state.currentPost.platforms,
+        ratios: p.ratios || {},
+        status: p.status || "draft",
+        scheduledDate: p.scheduledDate || null,
+        time: p.time || null,
+        media: Array.isArray(p.media) ? p.media : [],
+        tiktok: { ...state.currentPost.tiktok, ...(p.tiktok || {}) },
+      };
+    },
+    // Set/clear the id of the draft being edited (saveDraftThunk sets it after
+    // first persist so subsequent saves update the same draft).
+    setDraftId: (state, action) => {
+      state.currentPost.draftId = action.payload || null;
+    },
+    hydrateEditorState: (state, action) => {
+      const next = action.payload || {};
+      const post = next.currentPost || {};
+      const ai = next.aiGeneration || {};
+      state.currentPost = {
+        ...freshPost(),
+        ...post,
+        platforms:
+          post.platforms && typeof post.platforms === "object"
+            ? { ...freshPost().platforms, ...post.platforms }
+            : freshPost().platforms,
+        ratios:
+          post.ratios && typeof post.ratios === "object" ? post.ratios : {},
+        media: Array.isArray(post.media) ? post.media : [],
+        tiktok: { ...freshPost().tiktok, ...(post.tiktok || {}) },
+      };
+      state.aiGeneration = {
+        ...freshAi(),
+        ...ai,
+        isGenerating: false,
+        isApplyingAction: false,
+        variants: Array.isArray(ai.variants) ? ai.variants : [],
+        selectedVariant:
+          typeof ai.selectedVariant === "number" ? ai.selectedVariant : null,
+      };
+    },
+    // Reset the editor to a blank post — wired to the "New post" button so a
+    // fresh post never inherits a previous draft's id/content.
+    resetEditor: (state) => {
+      state.currentPost = freshPost();
+      state.aiGeneration = freshAi();
     },
     addMedia: (state, action) => {
       // payload: array of media descriptors (see lib/uploadService)
@@ -130,12 +180,14 @@ const editorSlice = createSlice({
 export const {
   setContent,
   togglePlatform,
-  setMode,
-  setTemplate,
   setTone,
   setPlatformRatio,
   setTiktokOptions,
   setStatus,
+  loadDraft,
+  setDraftId,
+  hydrateEditorState,
+  resetEditor,
   addMedia,
   updateMedia,
   removeMedia,

@@ -1542,6 +1542,23 @@ async def build_targets_from_post(
     skipped: list[dict[str, Any]] = []
     effective_urls = media_urls or ([media_url] if media_url else [])
 
+    def _apply_platform_media(target: dict[str, Any]) -> dict[str, Any]:
+        target["media_url"] = crop_for_targets(
+            media_url=target.get("media_url"),
+            ratios=ratios,
+            platform=target["platform"],
+        )
+        if target.get("media_urls"):
+            target["media_urls"] = [
+                crop_for_targets(
+                    media_url=url,
+                    ratios=ratios,
+                    platform=target["platform"],
+                )
+                for url in target["media_urls"]
+            ]
+        return target
+
     def _skip(platform: str, reason: str) -> None:
         skipped.append({
             "target_id": platform,
@@ -1673,20 +1690,47 @@ async def build_targets_from_post(
             })
 
     for r in resolved:
-        r["media_url"] = crop_for_targets(
-            media_url=r.get("media_url"),
-            ratios=ratios,
-            platform=r["platform"],
-        )
-        if r.get("media_urls"):
-            r["media_urls"] = [
-                crop_for_targets(
-                    media_url=url,
-                    ratios=ratios,
-                    platform=r["platform"],
-                )
-                for url in r["media_urls"]
-            ]
+        _apply_platform_media(r)
+
+    # Zernio fallback (Phase 3): for any enabled platform that got NO direct
+    # destination (it was skipped) but the workspace has a connected Zernio
+    # account for it, route that platform through Zernio instead. This lets
+    # scheduled / automation posts go out via the unified provider. Platforms
+    # WITH a direct connection are left untouched (no double-posting). Wrapped
+    # so a Zernio hiccup can never break the direct-path resolution above.
+    if skipped:
+        try:
+            from . import zernio
+            from .zernio import _ZERNIO_TO_PLATFORM
+
+            ws_id = int(user_id) if str(user_id or "").isdigit() else None
+            if ws_id and zernio.is_enabled(ws_id):
+                accounts = await zernio.list_accounts(ws_id)
+                by_platform: dict[str, list[dict[str, Any]]] = {}
+                for acc in accounts:
+                    plat = _ZERNIO_TO_PLATFORM.get(acc.get("platform"), acc.get("platform"))
+                    by_platform.setdefault(plat, []).append(acc)
+                still_skipped: list[dict[str, Any]] = []
+                for sk in skipped:
+                    accs = by_platform.get(sk["platform"]) or []
+                    if not accs:
+                        still_skipped.append(sk)
+                        continue
+                    for acc in accs:
+                        resolved.append(_apply_platform_media({
+                            "platform": sk["platform"],
+                            "provider": "zernio",
+                            "id": acc.get("_id") or acc.get("id"),
+                            "label": acc.get("name") or acc.get("username") or sk["platform"],
+                            "workspace_id": ws_id,
+                            "media_url": media_url,
+                            "media_urls": effective_urls,
+                            "media_kind": media_kind,
+                        }))
+                skipped = still_skipped
+        except Exception as exc:  # noqa: BLE001 — fallback must never break direct resolution
+            print(f"[build_targets] zernio fallback error: {exc}")
+
     return resolved, skipped
 
 
@@ -1737,6 +1781,28 @@ async def publish_to_targets(
                     platform=platform or "unknown",
                     ok=False,
                     error=guard,
+                )
+            if (t.get("provider") or "").lower() == "zernio":
+                # Scheduler/automation Zernio target (see build_targets_from_post).
+                # One Zernio post per target; Zernio handles the platform fan-in.
+                from . import zernio
+
+                rows = await zernio.publish(
+                    t.get("workspace_id"),
+                    content=content,
+                    targets=[{"id": t["id"], "label": t.get("label") or t["id"], "platform": platform}],
+                    media_urls=t.get("media_urls") or ([t["media_url"]] if t.get("media_url") else []),
+                    schedule=None,
+                )
+                row = rows[0] if rows else {"ok": False, "error": "zernio_no_result"}
+                return PublishResult(
+                    target_id=t["id"],
+                    target_label=t.get("label") or t["id"],
+                    platform=platform or "zernio",
+                    ok=bool(row.get("ok")),
+                    platform_post_id=row.get("platform_post_id"),
+                    permalink_url=row.get("permalink_url"),
+                    error=row.get("error"),
                 )
             if platform == "facebook":
                 # Auto-detect image vs video from URL extension if the caller

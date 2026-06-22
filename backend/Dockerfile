@@ -29,11 +29,6 @@ RUN if [ "$INSTALL_DEV_DEPS" = "true" ]; then \
 # ── runtime stage ──────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        curl \
-        ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
 # Run as a non-root user. The /home/app/content directory is created here
 # and chown'd so the runtime user can write uploads and the bundled-
 # ffmpeg cache (imageio_ffmpeg writes its binary under the user's home
@@ -64,7 +59,7 @@ ENV CONTENT_DIR=/home/app/content
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD curl -fsS http://localhost:8000/health || exit 1
+  CMD python -c "import sys, urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3); sys.exit(0)"
 
 # `--proxy-headers` lets uvicorn trust X-Forwarded-* from Caddy (and any
 # front proxy) so request.base_url, the client IP, and the OAuth redirect

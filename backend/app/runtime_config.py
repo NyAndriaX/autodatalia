@@ -61,6 +61,10 @@ EDITABLE_KEYS: dict[str, str] = {
     # var (see telegram_validation.register_webhook). Only the per-tenant
     # default chat id is editable here.
     "TELEGRAM_DEFAULT_CHAT_ID": "telegram_default_chat_id",
+    # Zernio unified social API key — per-workspace. Editable so an admin can
+    # paste their Zernio key in Settings (CEO ask: a "?" to change the key).
+    # The base URL is deliberately env-only (not editable) — see config.py.
+    "ZERNIO_API_KEY": "zernio_api_key",
 }
 
 
@@ -72,6 +76,7 @@ SECRET_KEYS: set[str] = {
     "FAL_API_KEY",
     "LTX_API_KEY",
     "REPLICATE_API_TOKEN",
+    "ZERNIO_API_KEY",
 }
 
 
@@ -79,25 +84,51 @@ _ACTIVE_USER_ID: ContextVar[int | None] = ContextVar(
     "runtime_settings_active_user_id",
     default=None,
 )
+# Settings (AI keys/models) are WORKSPACE-scoped: there is one set of provider
+# keys per workspace, set by an admin, and the automation worker bills the
+# workspace. This ContextVar carries the active workspace, set by
+# authz.require_workspace, and is the fallback scope for settings resolution.
+_ACTIVE_WORKSPACE_ID: ContextVar[int | None] = ContextVar(
+    "runtime_settings_active_workspace_id",
+    default=None,
+)
+
+
+def _pos_int(value: int | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
 
 
 def _normalize_user_id(user_id: int | None) -> int | None:
+    # Despite the legacy name, the settings scope id is now a WORKSPACE id. When
+    # no explicit scope is passed, fall back to the active workspace (NOT the
+    # active user — provider keys are shared across the workspace).
     if user_id is None:
-        user_id = _ACTIVE_USER_ID.get()
-    if user_id is None:
-        return None
-    normalized = int(user_id)
-    if normalized <= 0:
-        return None
-    return normalized
+        user_id = _ACTIVE_WORKSPACE_ID.get()
+    return _pos_int(user_id)
 
 
 def set_active_user(user_id: int | None) -> None:
-    _ACTIVE_USER_ID.set(_normalize_user_id(user_id))
+    # Retained for callers (e.g. auth.require_token); identity only, no longer
+    # the settings scope.
+    _ACTIVE_USER_ID.set(_pos_int(user_id))
 
 
 def get_active_user() -> int | None:
-    return _normalize_user_id(_ACTIVE_USER_ID.get())
+    return _pos_int(_ACTIVE_USER_ID.get())
+
+
+def set_active_workspace(workspace_id: int | None) -> None:
+    _ACTIVE_WORKSPACE_ID.set(_pos_int(workspace_id))
+
+
+def get_active_workspace() -> int | None:
+    return _pos_int(_ACTIVE_WORKSPACE_ID.get())
 
 
 def _normalize_overrides(values: dict[str, str]) -> dict[str, str]:

@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 
 from .auth import require_token
 from .config import settings
+from .i18n_backend import localized_platforms, normalize_locale, t as t_backend
 from .models import (
     TelegramStatusResponse,
     ValidationSubmitRequest,
@@ -27,6 +28,7 @@ from .services import (
     posts_update,
 )
 from .runtime_config import resolved_settings
+from .workspaces import get_active_workspace_id
 
 # fire_post lives in scheduler — re-used here so a manual Telegram
 # approval publishes immediately without waiting for the scheduler tick.
@@ -152,32 +154,36 @@ def _find_post(post_id: str) -> dict[str, Any] | None:
     return None
 
 
-def _validation_keyboard(post_id: str) -> dict[str, Any]:
+def _locale_for_post(post: dict[str, Any]) -> str:
+    return normalize_locale(post.get("locale"))
+
+
+def _validation_keyboard(post_id: str, locale: str) -> dict[str, Any]:
     return {
         "inline_keyboard": [
             [
-                {"text": "Approve", "callback_data": f"va|a|{post_id}"},
-                {"text": "Reject", "callback_data": f"va|r|{post_id}"},
+                {"text": t_backend(locale, "approve"), "callback_data": f"va|a|{post_id}"},
+                {"text": t_backend(locale, "reject"), "callback_data": f"va|r|{post_id}"},
             ],
             [
-                {"text": "Edit with AI", "callback_data": f"va|e|{post_id}"},
+                {"text": t_backend(locale, "edit_with_ai"), "callback_data": f"va|e|{post_id}"},
             ],
         ]
     }
 
 
-def _timeout_keyboard(post_id: str) -> dict[str, Any]:
+def _timeout_keyboard(post_id: str, locale: str) -> dict[str, Any]:
     """Buttons attached to the "post hit publish time without approval"
     follow-up. Mirrors the CEO requirement: never publish without explicit
     user action — the timeout prompt forces a decision."""
     return {
         "inline_keyboard": [
             [
-                {"text": "Resend card", "callback_data": f"to|s|{post_id}"},
-                {"text": "Regenerate", "callback_data": f"to|g|{post_id}"},
+                {"text": t_backend(locale, "resend_card"), "callback_data": f"to|s|{post_id}"},
+                {"text": t_backend(locale, "regenerate"), "callback_data": f"to|g|{post_id}"},
             ],
             [
-                {"text": "Cancel", "callback_data": f"to|c|{post_id}"},
+                {"text": t_backend(locale, "cancel"), "callback_data": f"to|c|{post_id}"},
             ],
         ]
     }
@@ -193,6 +199,16 @@ def _timeout_text(post: dict[str, Any]) -> str:
         "What should I do?"
     )
 
+def _localized_timeout_text(post: dict[str, Any]) -> str:
+    locale = _locale_for_post(post)
+    rule_name = post.get("source_rule_name") or "(unnamed rule)"
+    return (
+        f"{t_backend(locale, 'timeout_title')}\n"
+        f"{t_backend(locale, 'timeout_body', rule_name=rule_name)}\n"
+        f"{t_backend(locale, 'post_id', post_id=post.get('id'))}\n\n"
+        f"{t_backend(locale, 'timeout_prompt')}"
+    )
+
 
 async def send_timeout_prompt(
     post: dict[str, Any],
@@ -206,8 +222,8 @@ async def send_timeout_prompt(
         "sendMessage",
         {
             "chat_id": chat_id,
-            "text": _timeout_text(post),
-            "reply_markup": _timeout_keyboard(post["id"]),
+            "text": _localized_timeout_text(post),
+            "reply_markup": _timeout_keyboard(post["id"], _locale_for_post(post)),
         },
         user_id=user_id,
     )
@@ -227,6 +243,25 @@ def _validation_text(post: dict[str, Any]) -> str:
         f"{header}\n"
         f"Post ID: {post.get('id')}\n"
         f"Platforms: {', '.join(platforms) or 'none'}"
+        f"{schedule}\n\n"
+        f"{body}"
+    )
+
+
+def _localized_validation_text(post: dict[str, Any]) -> str:
+    locale = _locale_for_post(post)
+    platforms = [k for k, v in (post.get("platforms") or {}).items() if v]
+    schedule = ""
+    if post.get("scheduledDate"):
+        when = f"{post.get('scheduledDate')} {post.get('time') or ''}".strip()
+        schedule = f"\n{t_backend(locale, 'schedule_line', schedule=when)}"
+    body = (post.get("content") or "").strip() or t_backend(locale, "no_text")
+    if len(body) > 1200:
+        body = f"{body[:1197]}..."
+    return (
+        f"{t_backend(locale, 'validation_header')}\n"
+        f"{t_backend(locale, 'post_id', post_id=post.get('id'))}\n"
+        f"{t_backend(locale, 'platforms', platforms=localized_platforms(locale, platforms))}"
         f"{schedule}\n\n"
         f"{body}"
     )
@@ -305,8 +340,9 @@ async def _send_validation_card(
     Returns the message id of whichever message carries the buttons —
     that's the one the approve/reject/edit callbacks reference.
     """
-    text = _validation_text(post)
-    keyboard = _validation_keyboard(post["id"])
+    locale = _locale_for_post(post)
+    text = _localized_validation_text(post)
+    keyboard = _validation_keyboard(post["id"], locale)
     media = _collect_media_for_telegram(post)
 
     # No media → original text-only card.
@@ -400,15 +436,16 @@ async def _publish_manual(post: dict[str, Any], chat_id: str, fire_post) -> None
     same Telegram chat that approved it. Runs as a background task —
     exceptions are caught and reported so a failed publish becomes a
     user-visible Telegram message, not a silently swallowed error."""
+    locale = _locale_for_post(post)
     try:
         result = await fire_post(post)
         published_status = (result or {}).get("status")
         if published_status == "published":
             results = (result or {}).get("publish_results") or []
             links = [
-                f"{r.get('target_label') or r.get('platform')}: {r.get('permalink_url') or '(no link)'}"
+                f"{r.get('target_label') or r.get('platform')}: {r.get('permalink_url')}"
                 for r in results
-                if r.get("ok")
+                if r.get("ok") and r.get("permalink_url")
             ]
             failures = [
                 f"{r.get('target_label') or r.get('platform')}: {r.get('error') or 'unknown'}"
@@ -421,11 +458,28 @@ async def _publish_manual(post: dict[str, Any], chat_id: str, fire_post) -> None
             if failures:
                 lines.append("⚠ Some targets failed:\n" + "\n".join(failures))
             text = "\n\n".join(lines)
+            localized_lines = [f"OK. {t_backend(locale, 'published_ok', post_id=post['id'])}"]
+            if links:
+                localized_lines.append(
+                    f"{t_backend(locale, 'links_header')}\n" + "\n".join(links)
+                )
+            if failures:
+                localized_lines.append(
+                    f"{t_backend(locale, 'partial_failures')}\n" + "\n".join(failures)
+                )
+            text = "\n\n".join(localized_lines)
         else:
             text = (
                 f"⚠ Post {post['id']} did not publish — "
                 f"status={published_status}, error="
                 f"{(result or {}).get('error') or 'unknown'}"
+            )
+            text = "Warning: " + t_backend(
+                locale,
+                "publish_not_completed",
+                post_id=post["id"],
+                status=published_status or "unknown",
+                error=(result or {}).get("error") or "unknown",
             )
     except Exception as exc:
         posts_update(
@@ -433,7 +487,13 @@ async def _publish_manual(post: dict[str, Any], chat_id: str, fire_post) -> None
             {"status": "error", "error": f"manual_approve_publish: {exc}"[:300]},
         )
         text = f"⚠ Publishing post {post['id']} crashed: {exc}"
-    post_user_id = post.get("user_id")
+        text = "Warning: " + t_backend(
+            locale,
+            "publish_crashed",
+            post_id=post["id"],
+            error=str(exc),
+        )
+    post_user_id = post.get("workspace_id")
     if chat_id and _telegram_configured(post_user_id):
         try:
             await _telegram_call(
@@ -489,18 +549,26 @@ def _pending_post_payload(
     *,
     user_id: str | int | None = None,
 ) -> dict[str, Any]:
+    workspace_id = None
+    try:
+        if user_id not in (None, "", 0):
+            workspace_id = get_active_workspace_id(int(user_id))
+    except (TypeError, ValueError):
+        workspace_id = None
     return {
         "id": body.post_id,
         "content": body.content.strip(),
         "platforms": body.platforms or {},
-        "status": "pending",
+        "status": "awaiting_validation",
         "scheduledDate": body.scheduledDate or time.strftime("%Y-%m-%d"),
         "time": body.time,
+        "locale": normalize_locale(body.locale),
         "timezone": body.timezone,
         "media": body.media or [],
         "ratios": body.ratios,
         "tiktok": body.tiktok,
         "validation_requested_at": time.time(),
+        "workspace_id": workspace_id,
         "user_id": str(user_id) if user_id not in (None, "", 0) else None,
     }
 
@@ -589,7 +657,11 @@ async def submit_for_validation(
         {
             "kind": "validation",
             "post_id": post["id"],
-            "message": f"Submitted post {post['id']} for Telegram validation.",
+            "message": t_backend(
+                _locale_for_post(post),
+                "submitted_for_validation",
+                post_id=post["id"],
+            ),
         }
     )
     return ValidationSubmitResponse(
@@ -630,9 +702,13 @@ async def telegram_webhook(
             action, post_id = parts[1], parts[2]
             post = _find_post(post_id)
             if not post:
-                await _answer_callback(callback_id, "Post no longer exists.")
+                await _answer_callback(
+                    callback_id,
+                    t_backend("en", "post_missing_short"),
+                )
                 return {"ok": True}
-            post_user_id = post.get("user_id")
+            post_user_id = post.get("workspace_id")
+            locale = _locale_for_post(post)
             if action == "a":
                 # Two paths:
                 #   Automation-sourced (has source_rule_id + scheduled_for
@@ -641,6 +717,13 @@ async def telegram_webhook(
                 #   Manual posts → publish IMMEDIATELY. Previously these
                 #   went to status="approved" which the scheduler ignores,
                 #   so manual approvals silently never published.
+                # Two paths:
+                #   Automation-sourced (has source_rule_id + scheduled_for
+                #   epoch) -> status="scheduled" so the existing scheduler
+                #   tick fires it at the original target time.
+                #   Manual posts -> publish immediately unless they still
+                #   point at a future fire time, in which case approval keeps
+                #   them scheduled instead of sending them live right away.
                 is_automation = bool(post.get("source_rule_id"))
                 if is_automation:
                     rule = automation_get(str(post.get("source_rule_id") or ""))
@@ -664,16 +747,16 @@ async def telegram_webhook(
                             {
                                 "kind": "automation",
                                 "post_id": post_id,
-                                "message": (
-                                    f"Auto-generated post {post_id} could not be "
-                                    "approved because its rule changed after "
-                                    "generation."
+                                "message": t_backend(
+                                    locale,
+                                    "rule_changed_after_generation",
+                                    post_id=post_id,
                                 ),
                             }
                         )
                         await _answer_callback(
                             callback_id,
-                            "Rule changed. Wait for a fresh validation card.",
+                            t_backend(locale, "rule_changed_wait_fresh"),
                             user_id=post_user_id,
                         )
                         return {"ok": True}
@@ -688,43 +771,77 @@ async def telegram_webhook(
                         {
                             "kind": "validation",
                             "post_id": post_id,
-                            "message": (
-                                f"Auto-generated post {post_id} approved in "
-                                "Telegram — scheduled to fire at its target time."
+                            "message": t_backend(
+                                locale,
+                                "approved_scheduled_auto",
+                                post_id=post_id,
                             ),
                         }
                     )
                     await _answer_callback(
-                        callback_id, "Approved — scheduled.", user_id=post_user_id
+                        callback_id,
+                        t_backend(locale, "approved_scheduled_short"),
+                        user_id=post_user_id,
                     )
                 else:
-                    posts_update(
-                        post_id,
-                        {
-                            "status": "publishing",
-                            "validated_at": time.time(),
-                        },
-                    )
-                    messages_append(
-                        {
-                            "kind": "validation",
-                            "post_id": post_id,
-                            "message": (
-                                f"Post {post_id} approved in Telegram — "
-                                "publishing now."
-                            ),
-                        }
-                    )
-                    await _answer_callback(
-                        callback_id, "Approved — publishing.", user_id=post_user_id
-                    )
-                    # Fire in the background so the webhook returns fast
-                    # (Telegram expects a webhook response within ~15s,
-                    # and a publish call can take 30s+ for video). The
-                    # scheduler's fire_post handles all the persistence
-                    # bookkeeping + bell notifications on completion.
-                    from .scheduler import fire_post  # lazy: avoid circular import
-                    asyncio.create_task(_publish_manual(post, chat_id, fire_post))
+                    from .scheduler import _due_at_epoch, fire_post  # lazy: avoid circular import
+
+                    due_at = _due_at_epoch(post)
+                    should_schedule = bool(due_at and due_at > time.time())
+                    if should_schedule:
+                        posts_update(
+                            post_id,
+                            {
+                                "status": "scheduled",
+                                "validated_at": time.time(),
+                            },
+                        )
+                        messages_append(
+                            {
+                                "kind": "validation",
+                                "post_id": post_id,
+                                "message": t_backend(
+                                    locale,
+                                    "approved_scheduled_manual",
+                                    post_id=post_id,
+                                ),
+                            }
+                        )
+                        await _answer_callback(
+                            callback_id,
+                            t_backend(locale, "approved_scheduled_short"),
+                            user_id=post_user_id,
+                        )
+                    else:
+                        posts_update(
+                            post_id,
+                            {
+                                "status": "publishing",
+                                "validated_at": time.time(),
+                            },
+                        )
+                        messages_append(
+                            {
+                                "kind": "validation",
+                                "post_id": post_id,
+                                "message": t_backend(
+                                    locale,
+                                    "approved_publishing",
+                                    post_id=post_id,
+                                ),
+                            }
+                        )
+                        await _answer_callback(
+                            callback_id,
+                            t_backend(locale, "approved_publishing_short"),
+                            user_id=post_user_id,
+                        )
+                        # Fire in the background so the webhook returns fast
+                        # (Telegram expects a webhook response within ~15s,
+                        # and a publish call can take 30s+ for video). The
+                        # scheduler's fire_post handles all the persistence
+                        # bookkeeping + bell notifications on completion.
+                        asyncio.create_task(_publish_manual(post, chat_id, fire_post))
             elif action == "r":
                 # Automation-sourced rejections land as `rejected` (terminal,
                 # the worker won't regenerate for this fire). Manual-flow
@@ -745,19 +862,28 @@ async def telegram_webhook(
                     {
                         "kind": "validation",
                         "post_id": post_id,
-                        "message": f"Post {post_id} rejected in Telegram.",
+                        "message": t_backend(
+                            locale,
+                            "rejected_validation",
+                            post_id=post_id,
+                        ),
                     }
                 )
                 await _answer_callback(
-                    callback_id, "Rejected.", user_id=post_user_id
+                    callback_id,
+                    t_backend(locale, "rejected_short"),
+                    user_id=post_user_id,
                 )
             elif action == "e":
                 prompt_msg = await _telegram_call(
                     "sendMessage",
                     {
                         "chat_id": chat_id,
-                        "text": "Reply to this message with the changes you want. Datalia will rewrite the post and send it back for approval.",
-                        "reply_markup": {"force_reply": True, "input_field_placeholder": "What should change?"},
+                        "text": t_backend(locale, "edit_reply_prompt"),
+                        "reply_markup": {
+                            "force_reply": True,
+                            "input_field_placeholder": t_backend(locale, "edit_reply_placeholder"),
+                        },
                     },
                     user_id=post_user_id,
                 )
@@ -770,7 +896,7 @@ async def telegram_webhook(
                 )
                 await _answer_callback(
                     callback_id,
-                    "Send your edits as a reply.",
+                    t_backend(locale, "send_edits_short"),
                     user_id=post_user_id,
                 )
         elif len(parts) == 3 and parts[0] == "to":
@@ -780,13 +906,21 @@ async def telegram_webhook(
             action, post_id = parts[1], parts[2]
             post = _find_post(post_id)
             if not post:
-                await _answer_callback(callback_id, "Post no longer exists.")
+                await _answer_callback(
+                    callback_id,
+                    t_backend("en", "post_missing_short"),
+                )
                 return {"ok": True}
-            post_user_id = post.get("user_id")
+            post_user_id = post.get("workspace_id")
+            locale = _locale_for_post(post)
             if post.get("status") != "awaiting_validation":
                 await _answer_callback(
                     callback_id,
-                    f"Already {post.get('status')} — no action taken.",
+                    t_backend(
+                        locale,
+                        "already_status",
+                        status=post.get("status"),
+                    ),
                     user_id=post_user_id,
                 )
                 return {"ok": True}
@@ -807,10 +941,16 @@ async def telegram_webhook(
                 messages_append({
                     "kind": "automation",
                     "post_id": post_id,
-                    "message": f"Validation card for {post_id} resent after timeout.",
+                    "message": t_backend(
+                        locale,
+                        "validation_card_resent",
+                        post_id=post_id,
+                    ),
                 })
                 await _answer_callback(
-                    callback_id, "Card resent.", user_id=post_user_id
+                    callback_id,
+                    t_backend(locale, "card_resent_short"),
+                    user_id=post_user_id,
                 )
             elif action == "g":
                 # Trigger a fresh AI generation, replacing the candidate's
@@ -821,12 +961,14 @@ async def telegram_webhook(
                 try:
                     await regenerate_for_post(post)
                     await _answer_callback(
-                        callback_id, "Regenerating…", user_id=post_user_id
+                        callback_id,
+                        t_backend(locale, "regen_short"),
+                        user_id=post_user_id
                     )
                 except Exception as exc:
                     await _answer_callback(
                         callback_id,
-                        f"Regen failed: {exc}",
+                        t_backend(locale, "regen_failed_short", error=exc),
                         user_id=post_user_id,
                     )
             elif action == "c":
@@ -838,10 +980,16 @@ async def telegram_webhook(
                 messages_append({
                     "kind": "validation",
                     "post_id": post_id,
-                    "message": f"Auto-generated post {post_id} cancelled at timeout.",
+                    "message": t_backend(
+                        locale,
+                        "timeout_cancelled",
+                        post_id=post_id,
+                    ),
                 })
                 await _answer_callback(
-                    callback_id, "Cancelled.", user_id=post_user_id
+                    callback_id,
+                    t_backend(locale, "cancelled_short"),
+                    user_id=post_user_id,
                 )
         return {"ok": True}
 
@@ -894,7 +1042,11 @@ async def telegram_webhook(
                 {
                     "kind": "validation",
                     "post_id": updated["id"],
-                    "message": f"Post {updated['id']} was revised from Telegram feedback and resubmitted.",
+                    "message": t_backend(
+                        _locale_for_post(updated),
+                        "revised_and_resubmitted",
+                        post_id=updated["id"],
+                    ),
                 }
             )
     return {"ok": True}

@@ -30,6 +30,7 @@ from .db import (
     get_password_hash as _db_get_password_hash,
 )
 from .runtime_config import set_active_user
+from . import workspaces
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,12 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
+
+
+class AcceptInviteRequest(BaseModel):
+    token: str
+    name: str = ""
+    password: str = ""
 
 
 class AuthResponse(BaseModel):
@@ -188,11 +195,36 @@ def create_jwt_token(user_id: int) -> str:
 
 
 def _user_payload(user: dict[str, Any]) -> dict[str, Any]:
+    # Include the caller's active workspace + effective permissions so the
+    # frontend can gate the Team & Access UI by permission string. Resolved
+    # live (cheap) so a role change is reflected on the next /auth/me.
+    uid = int(user["id"])
+    workspace_id = workspaces.get_active_workspace_id(uid)
+    # Safety net: a real user must always have a home workspace. If somehow none
+    # (legacy data), provision their personal one so they're never locked out.
+    if not workspace_id and uid > 0:
+        workspace_id = workspaces.ensure_personal_workspace(
+            uid, user.get("full_name"), user.get("email")
+        )
+    permissions: list[str] = []
+    workspace = None
+    if workspace_id:
+        permissions = sorted(workspaces.permissions_for(uid, workspace_id))
+        ws = workspaces.get_workspace(workspace_id) or {}
+        workspace = {
+            "id": workspace_id,
+            "name": ws.get("name"),
+            "role": workspaces.role_name_for(uid, workspace_id),
+            "is_owner": workspaces.is_owner(workspace_id, uid),
+            "is_personal": bool(ws.get("is_personal")),
+        }
     return {
         "id": str(user["id"]),
         "email": user["email"],
         "name": user.get("full_name") or "",
         "role": user.get("role") or "member",
+        "permissions": permissions,
+        "workspace": workspace,
     }
 
 
@@ -281,6 +313,12 @@ async def register(
             raise HTTPException(status_code=400, detail="Email already registered.")
         raise
 
+    # Every new account owns a personal workspace (they are its Owner/admin), so
+    # a signed-in user always has a workspace to operate in and can invite others.
+    workspaces.create_workspace_with_owner(
+        workspaces.workspace_name_for(req.name, req.email), user_id
+    )
+
     user = get_user_by_id(user_id)
     token = create_jwt_token(user_id)
     _set_session_cookie(response, token)
@@ -323,6 +361,23 @@ async def logout(response: Response) -> Response:
     _clear_session_cookie(response)
     response.status_code = 204
     return response
+
+
+@router.post("/delete-account", status_code=200)
+async def delete_account(
+    response: Response, user_id: int = Depends(require_token)
+) -> dict[str, Any]:
+    """Permanently delete the caller's OWN account (self-service, irreversible).
+
+    Workspaces they solely own are deleted with all their data; co-owned ones
+    transfer ownership to the earliest other member (see workspaces.delete_user).
+    Clears the session cookie so the now-dead session can't be reused.
+    """
+    if user_id <= 0:
+        raise HTTPException(status_code=401, detail="Not signed in.")
+    workspaces.delete_user(int(user_id))
+    _clear_session_cookie(response)
+    return {"deleted": True}
 
 @router.get("/me")
 async def get_me(user_id: int = Depends(require_token)) -> dict[str, Any]:
@@ -488,3 +543,75 @@ async def reset_password(
     _set_session_cookie(response, token_jwt)
     _auth_rate_limit_reset(rate_key)
     return {"user": _user_payload(user)}
+
+
+# --- Workspace invitations (accept flow) -----------------------------------
+@router.get("/invite/{token}")
+async def invite_preview(token: str) -> dict[str, Any]:
+    """Public: preview an invitation so the accept page can show the workspace,
+    role and whether the invitee needs to create an account."""
+    inv = workspaces.get_invitation_by_token((token or "").strip())
+    if (
+        not inv
+        or inv.get("accepted_at")
+        or float(inv.get("expires_at") or 0) < time.time()
+    ):
+        raise HTTPException(status_code=400, detail="This invitation is invalid or has expired.")
+    ws = workspaces.get_workspace(int(inv["workspace_id"])) or {}
+    role = workspaces.get_role(int(inv["role_id"])) or {}
+    return {
+        "email": inv["email"],
+        "workspace_name": ws.get("name"),
+        "role_name": role.get("name"),
+        "needs_account": get_user_by_email(str(inv["email"])) is None,
+    }
+
+
+@router.post("/accept-invite", response_model=AuthResponse)
+async def accept_invite(
+    req: AcceptInviteRequest, response: Response, request: Request
+) -> dict[str, Any]:
+    """Public: accept a workspace invitation. Binds strictly to the invited
+    email (never the caller's identity), single-use, expiring. Creates the user
+    if needed, joins them to the workspace with the invited role, signs them in.
+    """
+    rate_key = _auth_rate_limit_check("accept_invite", request, (req.token or "")[:16])
+    inv = workspaces.get_invitation_by_token((req.token or "").strip())
+    if (
+        not inv
+        or inv.get("accepted_at")
+        or float(inv.get("expires_at") or 0) < time.time()
+    ):
+        _auth_rate_limit_record_failure(rate_key)
+        raise HTTPException(status_code=400, detail="This invitation is invalid or has expired.")
+
+    email = str(inv["email"]).strip().lower()
+    workspace_id = int(inv["workspace_id"])
+    role_id = int(inv["role_id"])
+
+    # Invitations only attach to people who already have a Datalia account.
+    # (The invite endpoint enforces this at creation time; this guard also
+    # rejects any stale invitation issued before that rule existed.)
+    user = get_user_by_email(email)
+    if user is None:
+        _auth_rate_limit_record_failure(rate_key)
+        raise HTTPException(
+            status_code=400,
+            detail="No Datalia account exists for that email. Please register first, then accept the invitation.",
+        )
+    user_id = int(user["id"])
+
+    workspaces.add_member(workspace_id, user_id, role_id)
+    workspaces.consume_invitation(int(inv["id"]))
+    # Land the user in the workspace they just joined.
+    workspaces.switch_workspace(user_id, workspace_id)
+
+    user_row = get_user_by_id(user_id)
+    token = create_jwt_token(user_id)
+    _set_session_cookie(response, token)
+    _auth_rate_limit_reset(rate_key)
+    return {
+        "user": _user_payload(
+            user_row or {"id": user_id, "email": email, "full_name": req.name, "role": "member"}
+        )
+    }

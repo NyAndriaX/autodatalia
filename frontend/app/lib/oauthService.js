@@ -25,13 +25,61 @@ const POPUP_FEATURES = "width=560,height=720,left=200,top=120";
 // Default TTL is 10 minutes — OAuth state doesn't change often, and any
 // real change (Connect / Disconnect, the Refresh button) blows the cache
 // explicitly via invalidateConnectionsCache().
-const CONNECTIONS_CACHE_KEY = "datalia.connections.cache";
+// The connections cache is scoped PER WORKSPACE. /oauth/connections returns the
+// connected accounts of the caller's ACTIVE workspace, so a single global cache
+// key bleeds one workspace's accounts into another after a workspace switch —
+// you'd see (and try to publish to) the previous workspace's accounts until the
+// 10-min TTL expired. We namespace the cache by active workspace id (recorded by
+// the auth layer via rememberActiveWorkspace) and reset it on switch.
+const CONNECTIONS_CACHE_PREFIX = "datalia.connections.cache";
+const ACTIVE_WS_STORAGE_KEY = "datalia.active-workspace";
 const CONNECTIONS_TTL_MS = 10 * 60 * 1000;
+
+function activeWorkspaceScope() {
+  if (typeof window === "undefined") return "anon";
+  try {
+    return window.localStorage.getItem(ACTIVE_WS_STORAGE_KEY) || "anon";
+  } catch {
+    return "anon";
+  }
+}
+
+function connectionsCacheKey() {
+  return `${CONNECTIONS_CACHE_PREFIX}.${activeWorkspaceScope()}`;
+}
+
+/** Record the caller's active workspace id so the connections cache key tracks
+ *  it. Called by the auth layer whenever the signed-in user (and thus the
+ *  active workspace) is established or cleared. null/undefined → anonymous
+ *  scope. */
+export function rememberActiveWorkspace(workspaceId) {
+  if (typeof window === "undefined") return;
+  try {
+    if (workspaceId === null || workspaceId === undefined || workspaceId === "") {
+      window.localStorage.removeItem(ACTIVE_WS_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(ACTIVE_WS_STORAGE_KEY, String(workspaceId));
+    }
+  } catch {
+    /* non-fatal */
+  }
+}
+
+function dropLegacyConnectionsCache() {
+  // Pre-workspace-scoping builds wrote a single un-namespaced key. Remove it so
+  // a stale cross-workspace snapshot from before this fix can never be read.
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(CONNECTIONS_CACHE_PREFIX);
+  } catch {
+    /* non-fatal */
+  }
+}
 
 function readConnectionsCache() {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(CONNECTIONS_CACHE_KEY);
+    const raw = window.localStorage.getItem(connectionsCacheKey());
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || !parsed.providers) return null;
@@ -45,21 +93,23 @@ function writeConnectionsCache(data) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(
-      CONNECTIONS_CACHE_KEY,
+      connectionsCacheKey(),
       JSON.stringify({ providers: data.providers, savedAt: Date.now() })
     );
+    dropLegacyConnectionsCache();
   } catch {
     /* quota / private mode — non-fatal, in-memory state still works */
   }
 }
 
-/** Wipe the cache. Call after Connect / Disconnect so the next read is
- *  guaranteed fresh, not a stale snapshot from before the user changed
- *  anything. */
+/** Wipe the cache for the active workspace. Call after Connect / Disconnect or a
+ *  workspace switch so the next read is guaranteed fresh, not a stale snapshot
+ *  from before the user changed anything. */
 export function invalidateConnectionsCache() {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.removeItem(CONNECTIONS_CACHE_KEY);
+    window.localStorage.removeItem(connectionsCacheKey());
+    dropLegacyConnectionsCache();
   } catch {
     /* non-fatal */
   }
@@ -178,7 +228,105 @@ export function startConnect(providerId, { timeoutMs = 5 * 60 * 1000 } = {}) {
   });
 }
 
+/** Connect a social account through Zernio (the unified provider).
+ *
+ * Unlike the direct providers, the popup lands on Zernio's OWN domain, so there
+ * is no `oauth:result` postMessage back to us. We open Zernio's authorize URL,
+ * wait for the popup to close, then invalidate the cache so the caller's
+ * follow-up /oauth/connections refetch picks up the newly-linked account.
+ * Resolves on popup close (success is confirmed by the account appearing in the
+ * refreshed connections), rejects on a blocked popup / timeout / config error.
+ */
+export function connectZernio(platform, { timeoutMs = 5 * 60 * 1000 } = {}) {
+  return new Promise(async (resolve, reject) => {
+    let popup = null;
+    let timer = null;
+    let pollHandle = null;
+    let settled = false;
+    let popupClosedAt = null;
+
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      if (pollHandle) clearInterval(pollHandle);
+      if (popup && !popup.closed) popup.close();
+    };
+
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      invalidateConnectionsCache();
+      callback(value);
+    };
+
+    const platformIsConnected = async () => {
+      const data = await apiFetch("/oauth/connections");
+      const targets = data?.providers?.zernio?.targets || [];
+      return targets.some((target) => target.platform === platform);
+    };
+
+    try {
+      const { authorize_url: url } = await apiFetch(
+        `/oauth/zernio/${encodeURIComponent(platform)}/start`
+      );
+      popup = window.open(url, `zernio_${platform}`, POPUP_FEATURES);
+      if (!popup) {
+        finish(reject, new Error("Popup blocked. Allow popups for this site."));
+        return;
+      }
+      timer = setTimeout(() => {
+        finish(reject, new Error("Zernio connect timed out"));
+      }, timeoutMs);
+      pollHandle = setInterval(async () => {
+        if (settled) return;
+        if (popup.closed && popupClosedAt === null) popupClosedAt = Date.now();
+        try {
+          if (await platformIsConnected()) {
+            finish(resolve, { ok: true, connected: true });
+            return;
+          }
+        } catch {
+          // Keep waiting through a transient refresh failure.
+        }
+        if (popupClosedAt && Date.now() - popupClosedAt > 8000) {
+          finish(
+            reject,
+            new Error("The Zernio window closed before the account was connected."),
+          );
+        }
+      }, 1200);
+    } catch (e) {
+      if (e.status === 503) {
+        finish(reject, new Error("Zernio is not configured — add a Zernio API key first."));
+      } else {
+        finish(reject, e);
+      }
+    }
+  });
+}
+
 /** DELETE /oauth/{provider} — forget the stored token. */
+/** Disconnect all Zernio accounts for one platform in the active workspace. */
+export async function disconnectZernio(platform) {
+  if (!config.apiBaseUrl) return { ok: false };
+  const result = await apiFetch(
+    `/oauth/zernio/${encodeURIComponent(platform)}`,
+    { method: "DELETE" },
+  );
+  invalidateConnectionsCache();
+  return result;
+}
+
+export async function disconnectZernioAccount(accountId) {
+  if (!config.apiBaseUrl) return { ok: false };
+  const result = await apiFetch(
+    `/oauth/zernio/account/${encodeURIComponent(accountId)}`,
+    { method: "DELETE" },
+  );
+  invalidateConnectionsCache();
+  return result;
+}
+
 export async function disconnect(providerId) {
   if (!config.apiBaseUrl) return { ok: false };
   const result = await apiFetch(`/oauth/${providerId}`, { method: "DELETE" });
@@ -201,6 +349,7 @@ export async function publishToTargets({
   mediaUrls = null,
   link = null,
   targets,
+  locale = null,
   ratios = null,
   tiktok = null,
 }) {
@@ -213,6 +362,7 @@ export async function publishToTargets({
       media_urls: mediaUrls,
       link,
       targets,
+      locale: locale || undefined,
       ratios: ratios || undefined,
       // TikTok compose flags (visibility, branded toggles, music
       // consent). Only sent when TikTok is in the publish set;

@@ -4,7 +4,7 @@ import { btnPrimary, btnSecondary, btnGhost, inputField, card, glassCard, fadeIn
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslations } from "next-intl";
-import { ChevronDown, Check, Frame } from "lucide-react";
+import { ChevronDown, Check, Frame, Film } from "lucide-react";
 import { RATIOS_BY_PLATFORM, parseRatio } from "../../lib/platforms";
 
 const POPOVER_WIDTH = 240;
@@ -139,6 +139,16 @@ export default function RatioPicker({ platform, value, onChange, compact = false
                 {opt.hint}
               </span>
             </span>
+            {/* Reels icon: 9:16 is the vertical Reels / Shorts format across
+                IG / FB / TikTok / YouTube (CEO #1). */}
+            {opt.value === "9:16" && (
+              <Film
+                size={12}
+                style={{ color: "var(--accent-primary)" }}
+                aria-label="Reels"
+                title="Reels / Stories"
+              />
+            )}
             {isDefault && (
               <span
                 className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded"

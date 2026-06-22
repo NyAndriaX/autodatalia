@@ -79,6 +79,13 @@ class Settings(BaseModel):
     # spend in the cost dashboard. Defaults to LTX-Video's published
     # price (≈$0.04/s). Override per provider if needed.
     video_cost_per_second_usd: float
+    # Zernio unified social API (optional abstraction layer over the direct
+    # per-platform OAuth/publish handlers). The KEY is a per-workspace runtime
+    # setting (runtime_config.EDITABLE_KEYS); the BASE URL is env-only on
+    # purpose — never tenant-editable — so the bearer key can't be sent to a
+    # tenant-controlled host (no SSRF surface). Empty key => Zernio inert.
+    zernio_api_key: str
+    zernio_api_base_url: str
 
 
 # Known-bad JWT secret. Anyone who has read this file can forge a
@@ -324,6 +331,10 @@ def load_settings() -> Settings:
         video_cost_per_second_usd=float(
             os.getenv("VIDEO_COST_PER_SECOND_USD", "0.04")
         ),
+        zernio_api_key=os.getenv("ZERNIO_API_KEY", "").strip(),
+        zernio_api_base_url=os.getenv(
+            "ZERNIO_API_BASE_URL", "https://zernio.com/api/v1"
+        ).strip().rstrip("/"),
     )
     _validate_security_settings(loaded)
     return loaded

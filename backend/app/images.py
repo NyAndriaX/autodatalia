@@ -7,6 +7,7 @@ actually changes what Meta receives, not just the preview frame.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse, unquote, quote
@@ -89,7 +90,6 @@ def crop_media_to_ratio(media_url: str, ratio_spec: str) -> str:
         w_str, h_str = ratio_spec.split(sep, 1)
         tw = int(float(w_str.strip()) * 100)
         th = int(float(h_str.strip()) * 100)
-        import math
         g = math.gcd(tw, th)
         tw //= g
         th //= g
@@ -136,10 +136,10 @@ def crop_media_to_ratio(media_url: str, ratio_spec: str) -> str:
                 elif target_ratio == (4/5):
                     target_dims = (1080, 1350)
                 elif target_ratio == (1.91/1):
-                    target_dims = (1080, 565)
+                    target_dims = (1080, 566)
                 else:
                     # Fallback standard width
-                    target_dims = (1080, int(1080 / target_ratio))
+                    target_dims = (1080, math.ceil(1080 / target_ratio))
 
                 img = img.resize(target_dims, Image.Resampling.LANCZOS)
                 img.save(out, "JPEG", quality=95, optimize=True)
