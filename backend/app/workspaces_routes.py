@@ -134,17 +134,11 @@ async def members_invite(
         label=f'role "{role.get("name") or body.role_id}"',
     )
     rate_key = _auth_rate_limit_check("invite", request, f"{ctx.workspace_id}:{email}")
-    # Invitations are restricted to people who already have a Datalia account —
-    # you can't invite an arbitrary email into existence.
     existing = get_user_by_email(email)
-    if not existing:
-        _auth_rate_limit_record_failure(rate_key)
-        raise HTTPException(
-            400, "No Datalia account exists for that email. Ask them to register first."
-        )
-    # Multi-workspace: a person may belong to many workspaces — only block
-    # re-inviting someone already in THIS one.
-    if workspaces.get_membership(int(existing["id"]), ctx.workspace_id):
+    # Multi-workspace: a person may belong to many workspaces. If the account
+    # already exists, only block re-inviting them to THIS workspace. If it does
+    # not exist yet, the invitation link is the only way to create it.
+    if existing and workspaces.get_membership(int(existing["id"]), ctx.workspace_id):
         _auth_rate_limit_record_failure(rate_key)
         raise HTTPException(400, "That person is already a member of this workspace.")
     token = workspaces.create_invitation(

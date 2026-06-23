@@ -3,7 +3,13 @@
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
 from pydantic import BaseModel
+
+# Charge automatiquement le fichier .env situé à la racine du backend
+# (dossier parent du dossier app/).  Les variables déjà définies dans
+# l'environnement système ont priorité (override=False).
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 
 
 class Settings(BaseModel):

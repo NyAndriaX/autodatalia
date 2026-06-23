@@ -285,18 +285,19 @@ def require_token(request: Request) -> int:
 async def register(
     req: RegisterRequest, response: Response, request: Request
 ) -> dict[str, Any]:
-    """Open self-registration for the internal team — no admin tier.
+    """Bootstrap-only registration.
 
-    The first account always succeeds so a fresh instance can be bootstrapped;
-    after that, sign-ups are allowed only while ALLOW_OPEN_REGISTRATION is on.
-    Everyone is created as a plain ``member``. The UNIQUE(email) index is the
-    real guard against duplicates, so no advisory lock is needed.
+    The first account always succeeds so a fresh instance can be bootstrapped.
+    After that, account creation happens only through administrator invitations.
     """
     rate_key = _auth_rate_limit_check("register", request, req.email)
 
-    if count_users() > 0 and not settings.allow_open_registration:
+    if count_users() > 0:
         _auth_rate_limit_record_failure(rate_key)
-        raise HTTPException(status_code=403, detail="Registration is closed.")
+        raise HTTPException(
+            status_code=403,
+            detail="Registration is invitation-only. Ask an administrator to invite you.",
+        )
 
     if get_user_by_email(req.email):
         _auth_rate_limit_record_failure(rate_key)
@@ -589,17 +590,42 @@ async def accept_invite(
     workspace_id = int(inv["workspace_id"])
     role_id = int(inv["role_id"])
 
-    # Invitations only attach to people who already have a Datalia account.
-    # (The invite endpoint enforces this at creation time; this guard also
-    # rejects any stale invitation issued before that rule existed.)
     user = get_user_by_email(email)
     if user is None:
+        name = (req.name or "").strip()
+        password = req.password or ""
+        if not name or not password:
+            _auth_rate_limit_record_failure(rate_key)
+            raise HTTPException(
+                status_code=422,
+                detail="Name and password are required to create your invited account.",
+            )
+        password_hash = get_password_hash(password)
+        try:
+            user_id = create_user(email, password_hash, name, role="member")
+        except Exception:
+            user = get_user_by_email(email)
+            if not user:
+                raise
+            user_id = int(user["id"])
+        else:
+            user = get_user_by_id(user_id) or {
+                "id": user_id,
+                "email": email,
+                "full_name": name,
+                "role": "member",
+            }
+            # An invited user should not get their own admin workspace by
+            # default; their workspace access comes from the administrator invite.
+    else:
+        user_id = int(user["id"])
+
+    if workspaces.get_membership(user_id, workspace_id):
         _auth_rate_limit_record_failure(rate_key)
         raise HTTPException(
             status_code=400,
-            detail="No Datalia account exists for that email. Please register first, then accept the invitation.",
+            detail="That account is already a member of this workspace.",
         )
-    user_id = int(user["id"])
 
     workspaces.add_member(workspace_id, user_id, role_id)
     workspaces.consume_invitation(int(inv["id"]))

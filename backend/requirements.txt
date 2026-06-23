@@ -1,4 +1,5 @@
 aiofiles==24.1.0
+python-dotenv>=1.0.0
 fastapi==0.115.12
 httpx==0.28.1
 # imageio-ffmpeg: bundles a static ffmpeg binary so video uploads can be
@@ -24,3 +25,6 @@ bcrypt==4.0.1
 # database used by auth, OAuth token storage, runtime settings, posts,
 # automation rules, messages, video jobs, and cost logs.
 PyMySQL==1.1.1
+# Required by PyMySQL when the local MySQL user uses sha256_password or
+# caching_sha2_password authentication.
+cryptography

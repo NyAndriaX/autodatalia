@@ -1,8 +1,12 @@
-# Environment
+# ---------- Env files ----------
 .env
-.env.production
+.env.*
+!.env.example
 
-# Python
+# ---------- Docker overrides locaux ----------
+docker-compose.override.yml
+
+# ---------- Python ----------
 __pycache__/
 *.py[cod]
 *$py.class
@@ -10,21 +14,15 @@ __pycache__/
 dist/
 build/
 
-# Docker
-docker-compose.override.yml
-
-# IDE
+# ---------- IDE ----------
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS
+# ---------- OS ----------
 .DS_Store
 Thumbs.db
 
-# Generated captions
-api/content/*.captions.json
-
-# Misc
+# ---------- Logs ----------
 *.log

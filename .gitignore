@@ -7,6 +7,8 @@
 Thumbs.db
 Desktop.ini
 ehthumbs.db
+.Spotlight-V100
+.Trashes
 
 # ---------- IDE / Editors ----------
 .vscode/
@@ -17,6 +19,7 @@ ehthumbs.db
 .project
 .settings/
 .classpath
+.history/
 
 # ---------- Tool configs (local) ----------
 .claude/
@@ -37,6 +40,7 @@ node_modules/
 frontend/.next/
 frontend/out/
 frontend/build/
+frontend/.turbo/
 
 # Debug logs
 npm-debug.log*
@@ -44,26 +48,43 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# Env files (keep examples)
+# ---------- Env files ----------
+# Règle générale : tous les .env sauf les .env.example
 .env
 .env.local
+.env.*.local
+.env.development
 .env.development.local
+.env.test
 .env.test.local
-.env.production.local
+.env.staging
 .env.production
+.env.production.local
+# Sous-dossiers explicites
+backend/.env
+backend/.env.*
 infra/.env
-infra/.env.production
+infra/.env.*
+frontend/.env
+frontend/.env.*
+# Toujours commiter les fichiers d'exemple
+!**/.env.example
 !.env.example
 
-# Vercel
+# ---------- Vercel ----------
 .vercel
 
-# TypeScript
+# ---------- TypeScript ----------
 *.tsbuildinfo
 next-env.d.ts
 
-# Testing
+# ---------- Tests & couverture ----------
 coverage/
+.nyc_output/
+htmlcov/
+.pytest_cache/
+.coverage
+.coverage.*
 
 # ---------- Python / Backend ----------
 __pycache__/
@@ -80,39 +101,53 @@ env/
 .Python
 pip-log.txt
 pip-delete-this-directory.txt
+# SQLite / bases locales de dev
+*.sqlite
+*.sqlite3
+*.db
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# ---------- Secrets & certificats ----------
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
 
 # ---------- Backend runtime content ----------
-# Keep the folder, ignore uploads + generated captions + the AI response
-# cache (the cache can contain prompt/response text — never commit it).
+# Garder le dossier, ignorer les uploads, captions générés et le cache AI
+# (le cache peut contenir des prompts/réponses — ne jamais commiter).
 backend/content/*
 !backend/content/.gitkeep
+
+# OAuth tokens — déjà couverts par backend/content/* mais listés
+# explicitement pour que ce soit évident.
+backend/content/.oauth_tokens*.json
 
 # ---------- Docker ----------
 docker-compose.override.yml
 
-# ---------- Misc ----------
-*.pem
+# ---------- Logs ----------
 *.log
-.cache/
-tmp/
-
-# Scratch / debug captures left at the repo root (logs.txt is the docker
-# compose logs dump we tail during debugging; not a build artifact, not
-# meant to ship).
+logs/
 /logs.txt
 /logs-*.txt
 
-# Test images / one-off scratch fixtures dropped at backend/ root during
-# image-conversion debugging (test.png, test_conv.jpg). Real test fixtures
-# live under backend/tests/.
+# ---------- Misc ----------
+.cache/
+tmp/
+.temp/
+
+# Test images / fixtures one-shot déposés à la racine de backend/ lors du
+# débogage de la conversion d'images. Les vraies fixtures vivent sous backend/tests/.
 backend/test.png
 backend/test.jpg
 backend/test.jpeg
 backend/test_*.png
 backend/test_*.jpg
 backend/test_*.jpeg
-
-# OAuth token store + per-user token files — already covered by
-# backend/content/* above, but listed here explicitly so it's obvious
-# why nothing in content/ is tracked.
-backend/content/.oauth_tokens*.json
