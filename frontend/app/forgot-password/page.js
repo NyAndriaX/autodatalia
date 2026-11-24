@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Form, Input, Button, Alert, Typography } from "antd";
 import { MailOutlined } from "@ant-design/icons";
 import { authService } from "../lib/authService";
@@ -109,9 +110,9 @@ export default function ForgotPasswordPage() {
           )}
 
           <div style={{ textAlign: "center", marginTop: 20 }}>
-            <a href="/" style={{ color: "#1d3fbe", fontSize: 13, fontWeight: 500 }}>
+            <Link href="/" style={{ color: "#1d3fbe", fontSize: 13, fontWeight: 500 }}>
               Back to sign in
-            </a>
+            </Link>
           </div>
         </div>
       </div>

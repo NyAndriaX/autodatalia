@@ -1,26 +1,23 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Form, Input, Button, Alert, Typography } from "antd";
 import { LockOutlined } from "@ant-design/icons";
 import { authService } from "../lib/authService";
+import { useQueryParam } from "../lib/useQueryParam";
 
 const { Title, Text } = Typography;
 
 export default function ResetPasswordPage() {
   const router = useRouter();
-  const [token, setToken] = useState("");
+  // Read the token from the URL on the client only — avoids needing a
+  // <Suspense> boundary around useSearchParams (which breaks `next build`).
+  const token = useQueryParam("token");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
-
-  // Read the token from the URL on the client only — avoids needing a
-  // <Suspense> boundary around useSearchParams (which breaks `next build`).
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    setToken(params.get("token") || "");
-  }, []);
 
   const onFinish = async (values) => {
     setLoading(true);
@@ -154,9 +151,9 @@ export default function ResetPasswordPage() {
           )}
 
           <div style={{ textAlign: "center", marginTop: 20 }}>
-            <a href="/" style={{ color: "#1d3fbe", fontSize: 13, fontWeight: 500 }}>
+            <Link href="/" style={{ color: "#1d3fbe", fontSize: 13, fontWeight: 500 }}>
               Back to sign in
-            </a>
+            </Link>
           </div>
         </div>
       </div>

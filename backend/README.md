@@ -84,8 +84,11 @@ Backend URL:
 
 ## Tests
 
-```bash
-docker compose -f infra/docker-compose.yml exec -T caption-api python -m pytest tests -q
+Runs against a dedicated `datalia_test` database (the suite wipes every table,
+so it refuses to run against the dev `datalia` database):
+
+```powershell
+./backend/run-tests.ps1
 ```
 
 ## Production notes

@@ -46,9 +46,18 @@ export default function RolesView() {
     return r;
   }, []);
 
+  // Initial load (loading already starts true). Later refreshes use reload().
   useEffect(() => {
-    reload();
-  }, [reload]);
+    let alive = true;
+    fetchRoles().then((r) => {
+      if (!alive) return;
+      setRoles(r);
+      setLoading(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // Owner permissions are immutable; any system role is read-only here.
   const locked = !!draft?.is_system || !canManage;

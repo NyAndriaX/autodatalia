@@ -51,12 +51,21 @@ export default function WorkspaceControls() {
   }, []);
 
   // Re-list workspaces whenever the active one changes (switch / accept).
+  // `alive` drops a response that lands after a newer switch or unmount.
   useEffect(() => {
-    loadWorkspaces();
-  }, [loadWorkspaces, activeWsId]);
+    let alive = true;
+    fetchMyWorkspaces().then((ws) => alive && setWorkspaces(ws));
+    return () => {
+      alive = false;
+    };
+  }, [activeWsId]);
   useEffect(() => {
-    loadInvites();
-  }, [loadInvites]);
+    let alive = true;
+    fetchMyInvitations().then((inv) => alive && setInvites(inv));
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // After switching/joining a workspace, re-hydrate everything scoped to it:
   // the user (role + permissions + active workspace), the calendar posts, and

@@ -56,9 +56,23 @@ export default function MembersView() {
     setLoading(false);
   }, [roleId]);
 
+  // Initial load (loading already starts true). Later refreshes use reload().
   useEffect(() => {
-    reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let alive = true;
+    Promise.all([fetchMembers(), fetchRoles(), fetchInvitations()]).then(([m, r, i]) => {
+      if (!alive) return;
+      setMembers(m);
+      setRoles(r);
+      setInvites(i);
+      if (r.length) {
+        const editor = r.find((x) => x.name === "Editor") || r[0];
+        setRoleId((current) => current ?? editor.id);
+      }
+      setLoading(false);
+    });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   const roleOptions = roles.map((r) => ({ value: r.id, label: r.name }));

@@ -39,6 +39,29 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    # The suite runs against a real (throwaway) MariaDB; the test DB name must
+    # contain "test" or conftest refuses to wipe it.
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_DATABASE: datalia_test
+          MARIADB_USER: datalia
+          MARIADB_PASSWORD: datalia
+          MARIADB_ROOT_PASSWORD: datalia-root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mariadb-admin ping -h 127.0.0.1 -udatalia -pdatalia --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      MARIADB_HOST: 127.0.0.1
+      MARIADB_PORT: "3306"
+      MARIADB_DATABASE: datalia_test
+      MARIADB_USER: datalia
+      MARIADB_PASSWORD: datalia
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

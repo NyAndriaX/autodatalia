@@ -6,30 +6,34 @@ import { useTranslations } from "next-intl";
 import { Form, Input, Button, Alert, Typography, Spin } from "antd";
 import { LockOutlined, UserOutlined } from "@ant-design/icons";
 import { authService } from "../lib/authService";
+import { useQueryParam } from "../lib/useQueryParam";
 
 const { Title, Text } = Typography;
 
 export default function InvitePage() {
   const router = useRouter();
   const t = useTranslations("team");
-  const [token, setToken] = useState("");
+  // Read client-side only (avoids the useSearchParams/Suspense `next build`
+  // breaker — same pattern as reset-password).
+  const token = useQueryParam("token");
   const [preview, setPreview] = useState(null); // {email, workspace_name, role_name, needs_account}
   const [checking, setChecking] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // Read the token client-side only (avoids the useSearchParams/Suspense
-  // `next build` breaker — same pattern as reset-password).
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const tok = params.get("token") || "";
-    setToken(tok);
-    (async () => {
-      const p = await authService.lookupInvite(tok);
+    // `alive` discards the result of a superseded lookup (the hydration pass
+    // renders once with the empty server-side token before the real one).
+    let alive = true;
+    authService.lookupInvite(token).then((p) => {
+      if (!alive) return;
       setPreview(p);
       setChecking(false);
-    })();
-  }, []);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [token]);
 
   const onFinish = async (values) => {
     setLoading(true);

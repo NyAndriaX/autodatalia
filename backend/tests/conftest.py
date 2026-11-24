@@ -24,8 +24,31 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.config import settings  # noqa: E402
-from app.db import reset_all_state_for_tests  # noqa: E402
+from app.db import _database_params, init_db, reset_all_state_for_tests  # noqa: E402
 from app.services import _AI_CACHE, _AI_CACHE_BY_SCOPE, _RATE  # noqa: E402
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _test_database():
+    """Guard + bootstrap the database the suite will wipe.
+
+    Every test DELETEs all users/workspaces/documents, so refuse to run against
+    a database whose name doesn't say it's for tests (e.g. the local dev
+    `datalia` DB) unless explicitly allowed. Then create the schema: the app's
+    lifespan normally does that, but TestClient isn't used as a context
+    manager here, so on a fresh database nothing would create the tables.
+    """
+    db_name = str(_database_params().get("database") or "")
+    if "test" not in db_name.lower() and os.getenv("DATALIA_ALLOW_TEST_DB_WIPE") != "1":
+        pytest.exit(
+            f"Refusing to run tests against database {db_name!r}: the suite "
+            "deletes all rows. Point MARIADB_DATABASE / DATABASE_URL at a "
+            "database whose name contains 'test', or set "
+            "DATALIA_ALLOW_TEST_DB_WIPE=1 to wipe it anyway.",
+            returncode=2,
+        )
+    init_db(retries=30, delay=1.0)
+    yield
 
 
 @pytest.fixture

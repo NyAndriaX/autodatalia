@@ -88,6 +88,10 @@ const QUICK_ACTIONS = [
   { id: "expand", icon: ArrowUpFromLine },
 ];
 
+/* Wizard step ids, in order. Module-level so the step navigation callbacks
+   can stay stable without stale-closure eslint suppressions. */
+const STEP_IDS = CREATION_STEPS.map((s) => s.id);
+
 /* Resolve "ratio for this platform on this post" using the user's pick
    first, falling back to the platform's recommended default. */
 function effectiveRatio(platformId, ratios) {
@@ -115,7 +119,6 @@ export default function CreationEditor() {
   // Wizard navigation — the left panel is a fixed, non-scrolling page per
   // step. `activeStep` is which page is shown; the stepper + the footer
   // Previous/Next buttons both drive it. Navigation is free (no gating).
-  const STEP_IDS = CREATION_STEPS.map((s) => s.id);
   const [activeStep, setActiveStep] = useState(STEP_IDS[0]);
   const activeIdx = Math.max(0, STEP_IDS.indexOf(activeStep));
   const isFirstStep = activeIdx === 0;
@@ -123,12 +126,10 @@ export default function CreationEditor() {
   const goToStep = useCallback((id) => setActiveStep(id), []);
   const goNext = useCallback(
     () => setActiveStep((s) => STEP_IDS[Math.min(STEP_IDS.indexOf(s) + 1, STEP_IDS.length - 1)]),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
   const goPrev = useCallback(
     () => setActiveStep((s) => STEP_IDS[Math.max(STEP_IDS.indexOf(s) - 1, 0)]),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
 

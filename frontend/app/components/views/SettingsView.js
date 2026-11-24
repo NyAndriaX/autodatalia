@@ -716,16 +716,19 @@ export default function SettingsView() {
     }
   }, []);
 
+  // Fetch connections on mount and whenever the active workspace changes.
+  // One effect (previously two) so mounting no longer fires a duplicate
+  // request. With a known workspace, bypass the cache so a workspace switch
+  // never shows the previous workspace's connected accounts.
   useEffect(() => {
     queueMicrotask(() => {
-      actualiserConnexions();
+      if (activeWorkspaceId == null) {
+        actualiserConnexions();
+        return;
+      }
+      invalidateConnectionsCache();
+      actualiserConnexions({ force: true });
     });
-  }, [actualiserConnexions]);
-
-  useEffect(() => {
-    if (activeWorkspaceId == null) return;
-    invalidateConnectionsCache();
-    actualiserConnexions({ force: true });
   }, [activeWorkspaceId, actualiserConnexions]);
 
   const reloadTelegramConfig = useCallback(async () => {

@@ -259,9 +259,10 @@ function LibraryPicker({ existing, onClose }) {
 
   useEffect(() => {
     let alive = true;
-    setItems(null);
     const handle = setTimeout(
       () => {
+        // Show the loading state once the debounced search actually starts.
+        setItems(null);
         listMedia(query)
           .then((rows) => alive && setItems(Array.isArray(rows) ? rows : []))
           .catch(() => alive && setItems([]));

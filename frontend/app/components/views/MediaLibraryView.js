@@ -361,14 +361,18 @@ export default function MediaLibraryView() {
   const [dragging, setDragging] = useState(false);
   const [drafts, setDrafts] = useState(null); // null = loading
 
-  const loadDrafts = useCallback(async () => {
-    const posts = await fetchPosts();
-    setDrafts(Array.isArray(posts) ? posts.filter((p) => p.status === "draft") : []);
-  }, []);
-
   useEffect(() => {
-    if (tab === "drafts") loadDrafts();
-  }, [tab, loadDrafts]);
+    if (tab !== "drafts") return;
+    let alive = true;
+    fetchPosts().then((posts) => {
+      if (alive) {
+        setDrafts(Array.isArray(posts) ? posts.filter((p) => p.status === "draft") : []);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [tab]);
 
   const onEditDraft = (d) => {
     dispatch(loadDraft(d));
