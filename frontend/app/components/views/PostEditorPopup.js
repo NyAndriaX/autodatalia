@@ -849,6 +849,7 @@ function PostMiniPreview({ platform, content, media, hashtagCount, ratio }) {
               src={hero.remoteUrl || hero.previewUrl}
               className="w-full h-full object-cover"
               muted
+              controls
               loop
               playsInline
               autoPlay

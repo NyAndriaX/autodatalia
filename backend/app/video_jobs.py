@@ -359,7 +359,7 @@ async def _run_replicate_job(job: dict[str, Any]) -> dict[str, Any]:
     # public URL the Replicate worker can fetch.
     public_image_url = None
     if job.get("image_filename"):
-        public_image_url = _public_url_for_local(job["image_filename"])
+        public_image_url = _job_image_public_url(job)
 
     inputs: dict[str, Any] = {
         "prompt": job["prompt"],
@@ -521,7 +521,7 @@ async def _run_ltx_job(job: dict[str, Any]) -> dict[str, Any]:
 
     image_url = None
     if job.get("image_filename"):
-        image_url = _public_url_for_local(job["image_filename"])
+        image_url = _job_image_public_url(job)
 
     resolution = _LTX_RESOLUTION.get(job["ratio"], "1080x1920")
     duration = max(3, min(20, int(job["duration_seconds"])))
@@ -1113,7 +1113,7 @@ async def _run_fal_job(job: dict[str, Any]) -> dict[str, Any]:
 
     public_image_url = None
     if job.get("image_filename"):
-        public_image_url = _public_url_for_local(job["image_filename"])
+        public_image_url = _job_image_public_url(job)
 
     # The job carries either an explicit model override (job["model_id"])
     # or falls back to settings.fal_video_model. Pick the spec from the
@@ -1327,7 +1327,7 @@ async def _run_openrouter_job(job: dict[str, Any]) -> dict[str, Any]:
 
     public_image_url = None
     if job.get("image_filename") and spec.get("features", {}).get("image_to_video"):
-        public_image_url = _public_url_for_local(job["image_filename"])
+        public_image_url = _job_image_public_url(job)
 
     prompt_to_use = job["prompt"]
     if "veo" in requested_model:
@@ -1490,26 +1490,40 @@ async def _run_fallback_job(job: dict[str, Any]) -> dict[str, Any]:
         _write_bytes,
         _generated_dir as _gen_dir,
     )
+    from .video_audio import add_soundtrack
+
     _update_job(job["id"], {"started_at": time.time(), "status": "running", "progress": 0.1})
     width, height = _pick_size(job["ratio"], video=True)
-    try:
-        poster, _provider = await _generate_image_file(
-            job["prompt"], job["ratio"], user_id=job.get("user_id")
-        )
-    except Exception as exc:
-        # Don't take the whole job down just because the image API
-        # broke — Pillow can always render a placeholder.
-        log.warning(
-            "[video] AI image gen failed in fallback (%s) — substituting placeholder",
-            exc,
-        )
-        payload = _render_fallback_poster(job["prompt"], width, height)
-        poster = _write_bytes(job["prompt"], ".png", payload, workspace_id=job.get("user_id"))
+    # Image-to-video: animate the user's own picture. (This path used to
+    # ignore it and animate a freshly generated image instead.)
+    poster = _job_image_path(job)
+    if poster is None:
+        try:
+            poster, _provider = await _generate_image_file(
+                job["prompt"], job["ratio"], user_id=job.get("user_id")
+            )
+        except Exception as exc:
+            # Don't take the whole job down just because the image API
+            # broke — Pillow can always render a placeholder.
+            log.warning(
+                "[video] AI image gen failed in fallback (%s) — substituting placeholder",
+                exc,
+            )
+            payload = _render_fallback_poster(job["prompt"], width, height)
+            poster = _write_bytes(job["prompt"], ".png", payload, workspace_id=job.get("user_id"))
     _update_job(job["id"], {"progress": 0.5})
     out_path = _gen_dir(job.get("user_id")) / f"kenburns-{job['id']}.mp4"
     await _render_motion_video(
         poster, out_path, width, height, job["duration_seconds"]
     )
+    _update_job(job["id"], {"progress": 0.8})
+    audio: dict[str, bool] = {"voice": False, "music": False}
+    try:
+        audio = await add_soundtrack(
+            out_path, job["prompt"], job["duration_seconds"], user_id=job.get("user_id")
+        )
+    except Exception as exc:  # keep the (silent) video rather than fail the job
+        log.warning("[video] soundtrack failed for %s: %s", job["id"], exc)
     public_url = _public_url_for_local(out_path.name, workspace_id=job.get("user_id"))
     return _update_job(job["id"], {
         "status": "succeeded",
@@ -1518,6 +1532,7 @@ async def _run_fallback_job(job: dict[str, Any]) -> dict[str, Any]:
         "output_url": public_url,
         "output_filename": out_path.name,
         "cost_usd": 0.0,
+        "audio": audio,
     }) or job
 
 
@@ -1562,6 +1577,41 @@ def _public_url_for_local(
     if not base:
         return f"/content/{rel}"
     return f"{base}/content/{rel}"
+
+
+def _job_image_path(job: dict[str, Any]) -> Path | None:
+    """Locate a job's reference image on disk, or None when it has none.
+
+    ``image_filename`` is a bare name: an upload lives at the workspace media
+    root (ws/{id}/<name>), a generated image under ws/{id}/generated/. The
+    job's ``user_id`` holds the workspace id. Only the basename is used, so
+    a crafted value can't escape the workspace directory. Raises when a name
+    was given but no such file exists: silently dropping the image would
+    turn an image-to-video request into an unrelated text-to-video one.
+    """
+    raw = (job.get("image_filename") or "").strip()
+    if not raw:
+        return None
+    name = Path(raw.replace("\\", "/")).name
+    root = _media_root(job.get("user_id"))
+    for candidate in (root / name, root / "generated" / name):
+        if name and candidate.is_file():
+            return candidate
+    raise RuntimeError(f"Reference image not found: {name}")
+
+
+def _job_image_public_url(job: dict[str, Any]) -> str | None:
+    """Public URL of the job's reference image (for external providers)."""
+    path = _job_image_path(job)
+    if path is None:
+        return None
+    base = (
+        os.environ.get("PUBLIC_BASE_URL")
+        or os.environ.get("OAUTH_REDIRECT_BASE")
+        or ""
+    ).rstrip("/")
+    rel = path.relative_to(settings.content_dir).as_posix()
+    return f"{base}/content/{rel}" if base else f"/content/{rel}"
 
 
 _PROVIDER_RUNNERS = {

@@ -1383,6 +1383,7 @@ function PlatformPreview({
                 src={hero.remoteUrl || hero.previewUrl}
                 className="w-full h-full object-cover"
                 muted
+                controls
                 loop
                 playsInline
                 autoPlay

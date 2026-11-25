@@ -405,6 +405,8 @@ class VideoJob(BaseModel):
     error: str | None = None
     cost_usd: float | None = None
     external_id: str | None = None  # Replicate prediction id, etc.
+    # Soundtrack added to locally rendered clips: {"voice": bool, "music": bool}.
+    audio: dict[str, bool] | None = None
 
 
 class VideoJobsResponse(BaseModel):

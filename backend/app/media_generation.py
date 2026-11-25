@@ -668,8 +668,26 @@ async def _render_motion_video(source: Path, dest: Path, width: int, height: int
         str(duration_seconds),
         "-r",
         "30",
+        # Bounded encoder: by default x264 spawns ~1.5 threads per host core
+        # with a deep lookahead. On a many-core host (Railway) a 1080x1920
+        # render blew the 1 GB container limit and was OOM-killed with
+        # "frame=0". These settings peak around 270 MB.
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-tune",
+        "stillimage",
+        "-x264-params",
+        "rc-lookahead=10",
+        "-threads",
+        "2",
+        "-filter_threads",
+        "1",
         "-pix_fmt",
         "yuv420p",
+        "-movflags",
+        "+faststart",
         str(dest),
     ]
     proc = await asyncio.create_subprocess_exec(
