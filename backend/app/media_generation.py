@@ -160,6 +160,8 @@ async def _call_image_api(
     cfg = resolved_settings(user_id)
     if not cfg.ai_image_model:
         return _render_fallback_poster(prompt, width, height), "fallback-poster"
+    if _is_cloudflare_model(cfg.ai_image_model):
+        return await _call_cloudflare_image_api(prompt, width, height, user_id=user_id)
     if not cfg.ai_image_api_key:
         raise HTTPException(500, "AI_IMAGE_API_KEY is not configured.")
 
@@ -213,6 +215,105 @@ async def _call_image_api(
         _log_image_cost(prompt, user_id)
         return image_resp.content, cfg.ai_image_model
     raise HTTPException(502, "Image generation returned no asset.")
+
+
+_CF_ACCOUNT_RE = re.compile(r"^[0-9a-f]{32}$")
+_CF_MODEL_RE = re.compile(r"^@cf/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)+$")
+# Workers AI models that take no width/height and always return a square.
+_CF_SQUARE_ONLY = ("flux-1-schnell",)
+
+
+def _is_cloudflare_model(model: str) -> bool:
+    return (model or "").startswith("@cf/")
+
+
+def _fit_image(raw: bytes, width: int, height: int) -> bytes:
+    """Center-crop to the requested aspect ratio, resize, re-encode as PNG.
+
+    Some Workers AI models ignore the requested size (FLUX.1 schnell always
+    returns 1024x1024 JPEG), while callers store the asset as ``.png`` at the
+    ratio the user picked, so normalise format and size here.
+    """
+    img = Image.open(io.BytesIO(raw)).convert("RGB")
+    target = width / height
+    src_w, src_h = img.size
+    if src_w / src_h > target:  # too wide -> trim the sides
+        new_w = int(src_h * target)
+        left = (src_w - new_w) // 2
+        img = img.crop((left, 0, left + new_w, src_h))
+    elif src_w / src_h < target:  # too tall -> trim top/bottom
+        new_h = int(src_w / target)
+        top = (src_h - new_h) // 2
+        img = img.crop((0, top, src_w, top + new_h))
+    if img.size != (width, height):
+        img = img.resize((width, height), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+async def _call_cloudflare_image_api(
+    prompt: str, width: int, height: int, *, user_id: str | int | None = None
+) -> tuple[bytes, str]:
+    """Generate one image with Cloudflare Workers AI.
+
+    ``POST https://api.cloudflare.com/client/v4/accounts/{id}/ai/run/{model}``.
+    FLUX.1 schnell answers JSON ``{"result": {"image": "<base64>"}}``; the
+    Stable Diffusion family answers raw ``image/png`` bytes. Both handled.
+    Errors raise HTTPException, which the caller turns into the local
+    fallback poster.
+    """
+    cfg = resolved_settings(user_id)
+    model = cfg.ai_image_model
+    account_id = (cfg.cloudflare_account_id or "").strip().lower()
+    token = (cfg.cloudflare_api_token or "").strip()
+    if not account_id or not token:
+        raise HTTPException(500, "CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN are not configured.")
+    # Both go into the URL path: validate strictly so neither can redirect
+    # the bearer token elsewhere on the API.
+    if not _CF_ACCOUNT_RE.match(account_id):
+        raise HTTPException(500, "CLOUDFLARE_ACCOUNT_ID must be a 32-character hex id.")
+    if not _CF_MODEL_RE.match(model):
+        raise HTTPException(400, "Invalid Cloudflare Workers AI model id.")
+
+    payload: dict[str, Any] = {"prompt": prompt[:2048]}
+    if any(name in model for name in _CF_SQUARE_ONLY):
+        payload["steps"] = 4
+    else:
+        # SDXL-family limits; keep the ratio, cap the long side at 1024.
+        scale = min(1.0, 1024 / max(width, height))
+        payload["width"] = max(256, int(width * scale) // 8 * 8)
+        payload["height"] = max(256, int(height * scale) // 8 * 8)
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(
+            f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/{model}",
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload,
+        )
+    if resp.status_code >= 400:
+        log.warning(
+            "[media] Cloudflare image generation failed: status=%s body=%s",
+            resp.status_code,
+            resp.text[:500],
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={"message": "Cloudflare image generation failed.", "upstream_status": resp.status_code},
+        )
+    if resp.headers.get("content-type", "").startswith("image/"):
+        raw = resp.content
+    else:
+        image_b64 = ((resp.json() or {}).get("result") or {}).get("image")
+        if not image_b64:
+            raise HTTPException(502, "Cloudflare returned no image.")
+        raw = base64.b64decode(image_b64)
+    try:
+        out = _fit_image(raw, width, height)
+    except Exception as exc:  # corrupt / non-image payload
+        raise HTTPException(502, "Cloudflare returned an unreadable image.") from exc
+    _log_image_cost(prompt, user_id)
+    return out, model
 
 
 def _is_gemini_image_model(model: str) -> bool:
@@ -368,7 +469,10 @@ def _log_image_cost(prompt: str, user_id: str | int | None) -> None:
         # Best-effort provider tag — used in the cost dashboard's
         # "by_model" breakdown. Cost per image varies wildly by provider
         # (Nano Banana is ~$0.03, DALL·E 3 ~$0.04, FLUX-schnell free).
-        if _is_gemini_image_model(model):
+        if _is_cloudflare_model(model):
+            provider = "cloudflare"
+            cost_usd = 0.0  # Workers AI free daily allowance
+        elif _is_gemini_image_model(model):
             provider = "gemini"
             cost_usd = 0.03
         elif "dall-e" in model.lower():

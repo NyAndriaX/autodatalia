@@ -86,6 +86,12 @@ class Settings(BaseModel):
     # tenant-controlled host (no SSRF surface). Empty key => Zernio inert.
     zernio_api_key: str
     zernio_api_base_url: str
+    # Cloudflare Workers AI (free daily allowance) for image generation.
+    # Used when AI_IMAGE_MODEL is a Workers AI model id ("@cf/..."). Server
+    # env only: the account id is part of the request URL, so it must never
+    # be tenant-editable.
+    cloudflare_account_id: str = ""
+    cloudflare_api_token: str = ""
 
 
 # Known-bad JWT secret. Anyone who has read this file can forge a
@@ -214,7 +220,12 @@ def load_settings() -> Settings:
     ai_image_model = os.getenv("AI_IMAGE_MODEL", "").strip()
 
     # Self-healing key & URL/model mismatch resolution for image generation!
-    if ai_image_api_key.startswith(("AIzaSy", "AQ.")):
+    # A Cloudflare Workers AI model ("@cf/...") brings its own credentials,
+    # so it must not be rewritten into a Gemini model just because the
+    # (shared) AI key happens to be a Google one.
+    if ai_image_model.startswith("@cf/"):
+        pass
+    elif ai_image_api_key.startswith(("AIzaSy", "AQ.")):
         if "openrouter.ai" in ai_image_api_base_url or not ai_image_api_base_url:
             ai_image_api_base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
         if not ai_image_model or "gemini" not in ai_image_model.lower() or "-preview" in ai_image_model:
@@ -335,6 +346,8 @@ def load_settings() -> Settings:
         zernio_api_base_url=os.getenv(
             "ZERNIO_API_BASE_URL", "https://zernio.com/api/v1"
         ).strip().rstrip("/"),
+        cloudflare_account_id=os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip(),
+        cloudflare_api_token=os.getenv("CLOUDFLARE_API_TOKEN", "").strip(),
     )
     _validate_security_settings(loaded)
     return loaded
