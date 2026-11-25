@@ -265,7 +265,7 @@ export default function CreditsView() {
             </p>
           ) : (
             <div className="overflow-x-auto -mx-2 px-2">
-              <table className="w-full min-w-[420px] text-sm" style={{ color: "var(--text-secondary)" }}>
+              <table className="w-full min-w-105 text-sm" style={{ color: "var(--text-secondary)" }}>
                 <thead>
                   <tr style={{ color: "var(--text-muted)" }} className="text-left text-xs uppercase tracking-wider">
                     <th className="pb-2 font-semibold">{t("tableModel")}</th>

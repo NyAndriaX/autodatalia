@@ -87,7 +87,7 @@ export default function DatePicker({ value, onChange, minKey = null }) {
         <div
           role="dialog"
           aria-label={t("chooseDate")}
-          className={`absolute z-[110] mt-1 rounded-xl p-3 shadow-lg ${fadeIn}`}
+          className={`absolute z-110 mt-1 rounded-xl p-3 shadow-lg ${fadeIn}`}
           style={{
             background: "var(--bg-card)",
             border: "1px solid var(--border-default)",

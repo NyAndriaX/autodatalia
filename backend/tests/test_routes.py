@@ -783,6 +783,70 @@ def test_validation_submit_uses_saved_user_telegram_settings(workspace_client, m
     assert body["message_id"] == 654
 
 
+def test_validation_submit_reads_settings_of_active_workspace(workspace_client, monkeypatch):
+    """Settings are saved per WORKSPACE; validation must read them by
+    workspace id, not by user id. Switching to a second workspace makes the
+    two ids differ (on a fresh DB they otherwise coincide and hide the bug)."""
+    settings.telegram_bot_token = "telegram-test"
+    settings.telegram_webhook_secret = _TG_SECRET
+    created = workspace_client.post("/workspaces", json={"name": "Second"})
+    assert created.status_code == 200, created.text
+    me = workspace_client.get("/auth/me").json()
+    assert str(created.json()["workspace_id"]) != str(me["id"])
+
+    save = workspace_client.patch(
+        "/settings/keys", json={"updates": {"TELEGRAM_DEFAULT_CHAT_ID": "777"}}
+    )
+    assert save.status_code == 200
+    assert workspace_client.get("/telegram/status").json()["default_chat_configured"] is True
+
+    sent = {}
+
+    async def fake_send_validation_card(post, chat_id, *, user_id=None):
+        sent["chat_id"] = chat_id
+        return 1
+
+    monkeypatch.setattr(tg, "_send_validation_card", fake_send_validation_card)
+    r = workspace_client.post(
+        "/validation/submit",
+        json={"content": "Need approval", "platforms": {"linkedin": True}},
+    )
+    assert r.status_code == 200, r.text
+    assert sent["chat_id"] == "777"
+
+
+def test_validation_submit_cannot_overwrite_other_workspace_post(
+    workspace_client_factory, monkeypatch
+):
+    settings.telegram_bot_token = "telegram-test"
+    settings.telegram_default_chat_id = "12345"
+    settings.telegram_webhook_secret = _TG_SECRET
+    owner = workspace_client_factory()
+    attacker = workspace_client_factory()
+
+    victim = owner.post(
+        "/posts", json={"scheduledDate": "2026-06-01", "content": "Original"}
+    ).json()
+
+    async def fake_send_validation_card(post, chat_id, *, user_id=None):
+        return 1
+
+    monkeypatch.setattr(tg, "_send_validation_card", fake_send_validation_card)
+    r = attacker.post(
+        "/validation/submit",
+        json={
+            "post_id": victim["id"],
+            "content": "Hijacked",
+            "platforms": {"linkedin": True},
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["post_id"] != victim["id"]
+
+    owner_posts = {p["id"]: p for p in owner.get("/posts").json()["posts"]}
+    assert owner_posts[victim["id"]]["content"] == "Original"
+
+
 def test_validation_submit_requires_webhook_secret_when_telegram_enabled(workspace_client):
     settings.telegram_bot_token = "telegram-test"
     settings.telegram_default_chat_id = "12345"

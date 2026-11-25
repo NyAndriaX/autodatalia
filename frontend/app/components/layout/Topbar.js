@@ -346,7 +346,7 @@ export default function Topbar() {
                 {navMatches.map((n) => (
                   <li key={`nav-${n.key}`}>
                     <button
-                      className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-200 hover:bg-[var(--bg-card-hover)]"
+                      className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-200 hover:bg-(--bg-card-hover)"
                       onClick={() => onNavClick(n.key)}
                       onMouseDown={(e) => e.preventDefault()}
                     >
@@ -388,7 +388,7 @@ export default function Topbar() {
                     return (
                       <li key={r.id}>
                         <button
-                          className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-200 hover:bg-[var(--bg-card-hover)]"
+                          className="w-full flex items-center gap-3 px-4 py-3 text-left transition-colors duration-200 hover:bg-(--bg-card-hover)"
                           onClick={() => onResultClick(r)}
                           onMouseDown={(e) => e.preventDefault()}
                         >
@@ -463,7 +463,7 @@ export default function Topbar() {
       {/* Center: Search — desktop inline; on mobile it collapses to an
           icon that opens a full-width overlay (never just disappears). */}
       {!isMobile && (
-        <div className="relative z-[55] flex-1 max-w-lg mx-8" ref={searchRef}>
+        <div className="relative z-55 flex-1 max-w-lg mx-8" ref={searchRef}>
           {searchPanel}
         </div>
       )}
@@ -471,7 +471,7 @@ export default function Topbar() {
       {isMobile && mobileSearchOpen && (
         <div
           ref={searchRef}
-          className="absolute left-0 right-0 z-[60] flex items-center gap-2 px-3"
+          className="absolute left-0 right-0 z-60 flex items-center gap-2 px-3"
           style={{
             top: 0,
             height: "var(--topbar-height)",

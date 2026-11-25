@@ -16,7 +16,7 @@ export default function WorkflowSteps({
 
   return (
     <nav
-      className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--bg-card)] px-3 py-2.5"
+      className="w-full rounded-xl border border-(--border-default) bg-(--bg-card) px-3 py-2.5"
       aria-label={ariaLabel}
     >
       <ol className="m-0 flex list-none items-start p-0">
@@ -31,8 +31,8 @@ export default function WorkflowSteps({
             <li key={step.id} className="relative flex min-w-0 flex-1 items-center">
               {idx > 0 && (
                 <span
-                  className={`absolute left-0 right-1/2 top-[18px] z-0 mr-[50%] h-0.5 -translate-y-1/2 ${
-                    isPast ? "bg-[var(--accent-primary)]" : "bg-[var(--border-default)]"
+                  className={`absolute left-0 right-1/2 top-4.5 z-0 mr-[50%] h-0.5 -translate-y-1/2 ${
+                    isPast ? "bg-(--accent-primary)" : "bg-(--border-default)"
                   }`}
                   aria-hidden="true"
                 />
@@ -50,11 +50,11 @@ export default function WorkflowSteps({
                     compact ? "h-8 w-8 text-xs" : "h-8.5 w-8.5 text-sm"
                   } ${
                     isCurrent
-                      ? "border-transparent text-white shadow-[var(--accent-glow)] bg-[image:var(--accent-gradient)]"
+                      ? "border-transparent text-white shadow-(--accent-glow) bg-(image:--accent-gradient)"
                       : isPast && !isCurrent
-                      ? "border-[var(--status-approved)] bg-green-500/15 text-[var(--status-approved)]"
-                      : "border-[var(--border-default)] bg-[var(--bg-tertiary)] text-[var(--text-muted)]"
-                  } ${clickable && !isCurrent ? "hover:scale-105 hover:shadow-[var(--accent-glow)]" : ""}`}
+                      ? "border-(--status-approved) bg-green-500/15 text-(--status-approved)"
+                      : "border-(--border-default) bg-(--bg-tertiary) text-(--text-muted)"
+                  } ${clickable && !isCurrent ? "hover:scale-105 hover:shadow-(--accent-glow)" : ""}`}
                 >
                   {isComplete && !isCurrent ? (
                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -76,13 +76,13 @@ export default function WorkflowSteps({
                   <span className="flex min-w-0 flex-col gap-0.5">
                     <span
                       className={`max-w-full truncate text-[11px] font-bold ${
-                        isCurrent ? "text-[var(--accent-primary)]" : "text-[var(--text-primary)]"
+                        isCurrent ? "text-(--accent-primary)" : "text-(--text-primary)"
                       }`}
                     >
                       {step.label}
                     </span>
                     {step.hint && (
-                      <span className="max-w-full truncate text-[10px] leading-tight text-[var(--text-muted)] max-sm:hidden">
+                      <span className="max-w-full truncate text-[10px] leading-tight text-(--text-muted) max-sm:hidden">
                         {step.hint}
                       </span>
                     )}

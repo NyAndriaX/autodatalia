@@ -12,7 +12,7 @@ export default function PageHero({
 }) {
   return (
     <header
-      className={`relative mb-6 overflow-hidden rounded-2xl border border-[var(--border-default)] bg-[var(--bg-card)] px-7 py-7 ${fadeIn} ${className}`.trim()}
+      className={`relative mb-6 overflow-hidden rounded-2xl border border-(--border-default) bg-(--bg-card) px-7 py-7 ${fadeIn} ${className}`.trim()}
     >
       <div
         className="pointer-events-none absolute inset-0 opacity-100"
@@ -25,16 +25,16 @@ export default function PageHero({
       <div className="relative z-10 flex flex-wrap items-end justify-between gap-6">
         <div>
           {eyebrow && (
-            <p className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-widest text-[var(--accent-primary)]">
-              <span className="h-1.5 w-1.5 rounded-full bg-[var(--status-approved)] shadow-[0_0_8px_var(--status-approved)]" />
+            <p className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-widest text-(--accent-primary)">
+              <span className="h-1.5 w-1.5 rounded-full bg-(--status-approved) shadow-[0_0_8px_var(--status-approved)]" />
               {eyebrow}
             </p>
           )}
-          <h1 className="m-0 text-[clamp(1.5rem,3vw,1.875rem)] font-extrabold leading-tight tracking-tight text-[var(--text-primary)]">
+          <h1 className="m-0 text-[clamp(1.5rem,3vw,1.875rem)] font-extrabold leading-tight tracking-tight text-(--text-primary)">
             {title}
           </h1>
           {subtitle && (
-            <p className="mt-2.5 max-w-lg text-sm leading-relaxed text-[var(--text-muted)]">
+            <p className="mt-2.5 max-w-lg text-sm leading-relaxed text-(--text-muted)">
               {subtitle}
             </p>
           )}
@@ -55,7 +55,7 @@ export default function PageHero({
                 >
                   {s.value}
                 </span>
-                <span className="mt-1.5 block text-[11px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                <span className="mt-1.5 block text-[11px] font-semibold uppercase tracking-wider text-(--text-muted)">
                   {s.label}
                 </span>
               </div>

@@ -84,7 +84,7 @@ function MediaTile({
     <div
       className={`group relative overflow-hidden flex items-center justify-center transition-all duration-200 ${
         canSelect ? "cursor-pointer" : ""
-      } ${selected ? "ring-2 ring-[var(--accent-primary)] ring-offset-2 ring-offset-[var(--bg-primary)]" : ""}`}
+      } ${selected ? "ring-2 ring-(--accent-primary) ring-offset-2 ring-offset-(--bg-primary)" : ""}`}
       style={{
         aspectRatio: "1 / 1",
         borderRadius: 14,

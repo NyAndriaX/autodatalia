@@ -394,7 +394,7 @@ export default function CreationEditor() {
             <div className={`h-full flex flex-col min-h-0 px-4 sm:px-6 py-3 gap-2.5 ${fadeIn}`}>
               {/* Tone + Transforms */}
               <div className="grid shrink-0 gap-2.5 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
-                <div className="flex-1 min-w-[200px]">
+                <div className="flex-1 min-w-50">
                   <p
                     className="text-xs font-semibold uppercase tracking-wider mb-1.5"
                     style={{ color: "var(--text-tertiary)" }}
@@ -575,7 +575,7 @@ export default function CreationEditor() {
                     onClick={() => dispatch(generateContentThunk())}
                     disabled={aiGeneration.isGenerating}
                     aria-busy={aiGeneration.isGenerating}
-                    className={`${btnPrimary} flex min-w-[220px] flex-1 items-center justify-center gap-2 px-5 py-2.5 text-sm sm:flex-none`}
+                    className={`${btnPrimary} flex min-w-55 flex-1 items-center justify-center gap-2 px-5 py-2.5 text-sm sm:flex-none`}
                     style={{
                       opacity: aiGeneration.isGenerating ? 0.7 : 1,
                       cursor: aiGeneration.isGenerating ? "not-allowed" : "pointer",
@@ -616,10 +616,10 @@ export default function CreationEditor() {
                     ))}
                   </div>
                 )}
-                <div className="mt-1 min-h-[24px]">
+                <div className="mt-1 min-h-6">
                   {aiGeneration.error ? (
                     <p
-                      className="px-2 text-center text-xs leading-tight break-words"
+                      className="px-2 text-center text-xs leading-tight wrap-break-word"
                       style={{ color: "var(--status-error)" }}
                       role="alert"
                     >
@@ -829,7 +829,7 @@ export default function CreationEditor() {
       {/* ═══ RIGHT PANEL — Live Multi-Platform Preview ═══ */}
       <div
         className={`relative z-10 flex shrink-0 flex-col overflow-hidden ${
-          isMobile ? "w-full" : "w-[clamp(340px,38vw,430px)] min-w-[340px]"
+          isMobile ? "w-full" : "w-[clamp(340px,38vw,430px)] min-w-85"
         }`}
         style={{
           background: "var(--bg-elevated)",
@@ -957,7 +957,7 @@ export default function CreationEditor() {
           onClick={() => setShowTikTokOptions(false)}
         >
           <div
-            className={`w-full max-w-[560px] rounded-[24px] p-4 sm:p-5 ${fadeIn}`}
+            className={`w-full max-w-140 rounded-3xl p-4 sm:p-5 ${fadeIn}`}
             style={{
               background: "var(--bg-card)",
               border: "1px solid var(--border-default)",

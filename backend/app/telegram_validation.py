@@ -24,6 +24,7 @@ from .services import (
     automation_get,
     messages_append,
     posts_create,
+    posts_get,
     posts_list,
     posts_update,
 )
@@ -145,6 +146,20 @@ def _require_webhook_secret() -> str:
 
 def _telegram_configured(user_id: str | int | None = None) -> bool:
     return bool(resolved_settings(user_id).telegram_bot_token)
+
+
+def _caller_workspace_id(user_id: int | None) -> int | None:
+    """Map a request's authenticated USER id to its active WORKSPACE id.
+
+    Runtime settings (Telegram chat id, AI keys...) and posts are stored per
+    workspace, and every helper below takes ``user_id`` as that workspace id
+    (the webhook passes ``post["workspace_id"]``). HTTP handlers receive a raw
+    user id from ``require_token`` and must convert it first; passing it
+    straight through only works by accident when the two ids happen to match.
+    """
+    if not user_id or int(user_id) <= 0:
+        return None
+    return get_active_workspace_id(int(user_id))
 
 
 def _find_post(post_id: str) -> dict[str, Any] | None:
@@ -577,7 +592,7 @@ def _pending_post_payload(
 async def telegram_status(
     user_id: int = Depends(require_token),
 ) -> TelegramStatusResponse:
-    cfg = resolved_settings(user_id)
+    cfg = resolved_settings(_caller_workspace_id(user_id))
     return TelegramStatusResponse(
         configured=bool(cfg.telegram_bot_token),
         default_chat_configured=bool(cfg.telegram_default_chat_id),
@@ -591,7 +606,8 @@ async def telegram_test_message(
     user_id: int = Depends(require_token),
 ) -> dict[str, Any]:
     """Send a one-shot test message to confirm the bot can reach a chat."""
-    cfg = resolved_settings(user_id)
+    ws = _caller_workspace_id(user_id)
+    cfg = resolved_settings(ws)
     if not cfg.telegram_bot_token:
         raise HTTPException(409, "Telegram bot is not configured (TELEGRAM_BOT_TOKEN missing).")
     target = (chat_id or cfg.telegram_default_chat_id or "").strip()
@@ -610,7 +626,7 @@ async def telegram_test_message(
                 "You can now wire it as the validation_chat_id on automation rules."
             ),
         },
-        user_id=user_id,
+        user_id=ws,
     )
     return {
         "ok": True,
@@ -628,7 +644,8 @@ async def submit_for_validation(
     body: ValidationSubmitRequest,
     user_id: int = Depends(require_token),
 ) -> ValidationSubmitResponse:
-    cfg = resolved_settings(user_id)
+    ws = _caller_workspace_id(user_id)
+    cfg = resolved_settings(ws)
     _require_webhook_secret()
     if not cfg.telegram_bot_token:
         raise HTTPException(409, "Telegram bot is not configured.")
@@ -636,14 +653,20 @@ async def submit_for_validation(
     if not chat_id:
         raise HTTPException(409, "No Telegram chat ID provided or configured.")
 
-    existing = _find_post(body.post_id) if body.post_id else None
+    # SECURITY: resolve an existing post within the caller's workspace only.
+    # An all-scopes lookup here would let any user overwrite another
+    # workspace's post just by knowing its id.
+    existing = posts_get(body.post_id, user_id=ws, scoped=True) if body.post_id else None
     payload = _pending_post_payload(body, user_id=user_id)
     if existing:
-        post = posts_update(existing["id"], payload) or existing
+        post = posts_update(existing["id"], payload, user_id=ws, scoped=True) or existing
     else:
+        # Unknown id in this workspace (e.g. a stale draft id): create a fresh
+        # post rather than reusing an id that may belong to someone else.
+        payload["id"] = None
         post = posts_create(payload)
 
-    message_id = await _send_validation_card(post, chat_id, user_id=user_id)
+    message_id = await _send_validation_card(post, chat_id, user_id=ws)
     post = posts_update(
         post["id"],
         {
@@ -1011,7 +1034,7 @@ async def telegram_webhook(
             rewritten = await _regenerate_from_feedback(
                 target.get("content", ""),
                 text,
-                user_id=target.get("user_id"),
+                user_id=target.get("workspace_id"),
             )
             updated = posts_update(
                 target["id"],
@@ -1030,7 +1053,7 @@ async def telegram_webhook(
             new_message_id = await _send_validation_card(
                 updated,
                 chat_id,
-                user_id=updated.get("user_id"),
+                user_id=updated.get("workspace_id"),
             )
             posts_update(
                 updated["id"],

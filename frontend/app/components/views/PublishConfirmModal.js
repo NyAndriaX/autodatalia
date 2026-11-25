@@ -208,7 +208,7 @@ export default function PublishConfirmModal({
                         )}
                         <span style={{ color: "var(--text-secondary)" }}>{platform?.label || platformId}</span>
                         <span style={{ color: "var(--text-muted)" }}>·</span>
-                        <span className="break-words min-w-0" style={{ color: "var(--text-primary)" }}>{t.label}</span>
+                        <span className="wrap-break-word min-w-0" style={{ color: "var(--text-primary)" }}>{t.label}</span>
                         {t.via === "zernio" && (
                           <span
                             className="ml-auto rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide shrink-0"

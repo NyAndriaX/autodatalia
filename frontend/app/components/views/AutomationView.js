@@ -344,7 +344,7 @@ export default function AutomationView() {
         <div className="flex flex-col md:flex-row gap-4" style={{ minHeight: 560 }}>
 
           {/* ── Liste des règles ─────────────────────────────────────── */}
-          <aside className="w-full md:w-[300px] md:shrink-0">
+          <aside className="w-full md:w-75 md:shrink-0">
             <div className="rounded-2xl p-4 h-full"
               style={{ background:"var(--bg-card)", border:"1px solid var(--border-default)" }}>
               <p className="mb-3 text-[11px] font-bold uppercase tracking-widest" style={{ color:"var(--text-muted)" }}>

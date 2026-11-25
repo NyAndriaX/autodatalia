@@ -664,7 +664,7 @@ function CalendarPostDetailsModal({ post, onClose, onEdit }) {
 
   return (
     <div
-      className="fixed inset-0 z-[120] flex items-center justify-center p-4"
+      className="fixed inset-0 z-120 flex items-center justify-center p-4"
       style={{ background: "rgba(8, 12, 24, 0.45)", backdropFilter: "blur(4px)" }}
       onClick={onClose}
       role="dialog"
@@ -774,7 +774,7 @@ function CalendarPostDetailsModal({ post, onClose, onEdit }) {
               {t("contentLabel")}
             </div>
             <div
-              className="mt-2 rounded-2xl p-3 text-sm whitespace-pre-wrap break-words"
+              className="mt-2 rounded-2xl p-3 text-sm whitespace-pre-wrap wrap-break-word"
               style={{
                 background: "var(--bg-secondary)",
                 border: "1px solid var(--border-default)",

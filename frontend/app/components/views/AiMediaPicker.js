@@ -68,7 +68,7 @@ export default function AiMediaPicker({ kind, onClose }) {
 
   return (
     <div
-      className="fixed inset-0 z-[110] flex items-center justify-center p-4"
+      className="fixed inset-0 z-110 flex items-center justify-center p-4"
       style={{ background: "rgba(15,23,42,0.5)" }}
       onClick={onClose}
       role="dialog"

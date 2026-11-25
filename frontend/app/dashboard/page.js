@@ -97,7 +97,7 @@ export default function Home() {
       {/* Dim backdrop behind the mobile drawer */}
       {isMobile && mobileNavOpen && (
         <div
-          className={`fixed inset-0 z-[45] ${fadeIn}`}
+          className={`fixed inset-0 z-45 ${fadeIn}`}
           style={{ background: "rgba(15, 23, 42, 0.5)" }}
           onClick={() => dispatch(setMobileNav(false))}
           aria-hidden="true"

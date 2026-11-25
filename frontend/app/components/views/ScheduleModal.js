@@ -46,7 +46,7 @@ export default function ScheduleModal({
 
   return (
     <div
-      className={`fixed inset-0 z-[100] flex items-center justify-center p-4 ${fadeIn}`}
+      className={`fixed inset-0 z-100 flex items-center justify-center p-4 ${fadeIn}`}
       style={{ background: "rgba(15, 23, 42, 0.45)" }}
       onClick={onClose}
     >

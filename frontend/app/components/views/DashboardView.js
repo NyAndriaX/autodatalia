@@ -241,7 +241,7 @@ function RecentPost({ post, onClick }) {
           onClick(post);
         }
       }}
-      className="flex w-full items-start gap-3 px-5 py-3.5 text-left transition-all duration-150 hover:bg-[var(--bg-card-hover)]"
+      className="flex w-full items-start gap-3 px-5 py-3.5 text-left transition-all duration-150 hover:bg-(--bg-card-hover)"
       style={{
         borderBottom:"1px solid var(--border-default)",
         background: "transparent",

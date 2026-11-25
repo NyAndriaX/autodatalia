@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import ssl
 import time
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,24 @@ log = logging.getLogger("datalia.db")
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 _DOC_TABLE = "app_documents"
+
+
+def _verified_ssl_context(ca_file: str = "") -> ssl.SSLContext:
+    """TLS context for managed databases (TiDB Cloud, Aiven, ...).
+
+    Verifies the server certificate AND hostname. PyMySQL, given an ssl dict
+    without a CA, silently falls back to CERT_NONE (encrypted but
+    unauthenticated, so open to MITM), hence an explicit context. Uses the
+    `ssl_ca` file from the DSN when given, else certifi's public CA bundle.
+    """
+    if not ca_file:
+        import certifi
+
+        ca_file = certifi.where()
+    ctx = ssl.create_default_context(cafile=ca_file)
+    ctx.check_hostname = True
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    return ctx
 
 
 def _database_params(*, database_override: str | None = None) -> dict[str, Any]:
@@ -58,7 +77,7 @@ def _database_params(*, database_override: str | None = None) -> dict[str, Any]:
             "charset": charset,
         }
         if use_ssl:
-            params["ssl"] = {"ssl": {}}
+            params["ssl"] = _verified_ssl_context((query.get("ssl_ca") or [""])[0])
         return params
     return {
         "host": os.getenv("MARIADB_HOST", "mariadb"),

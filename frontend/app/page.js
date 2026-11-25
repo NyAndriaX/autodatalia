@@ -133,7 +133,7 @@ export default function AuthPage() {
 
   return (
     <div
-      className="flex h-[100dvh] min-h-[100dvh] max-w-full min-w-0 flex-col overflow-x-hidden md:h-screen md:flex-row"
+      className="flex h-dvh min-h-dvh max-w-full min-w-0 flex-col overflow-x-hidden md:h-screen md:flex-row"
       style={{
         fontFamily:
           "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -444,7 +444,7 @@ function AuthPanel({ isDark, dispatch, resolved }) {
 
   return (
     <div
-      className="h-[100dvh] w-full min-w-0 overflow-x-hidden overflow-y-auto px-4 py-6 sm:px-6 md:h-full md:px-8"
+      className="h-dvh w-full min-w-0 overflow-x-hidden overflow-y-auto px-4 py-6 sm:px-6 md:h-full md:px-8"
       style={{
         flex: 1,
         minWidth: 0,
@@ -488,7 +488,7 @@ function AuthPanel({ isDark, dispatch, resolved }) {
         <div style={{ marginBottom: 24, textAlign: "center" }}>
           <Title
             level={2}
-            className="!text-2xl sm:!text-[28px]"
+            className="!text-2xl sm:text-[28px]!"
             style={{
               margin: 0,
               fontWeight: 800,
