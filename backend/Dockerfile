@@ -40,7 +40,12 @@ WORKDIR /home/app
 # Copy the user-site packages from the builder stage. The `--from`
 # pattern keeps the runtime image free of pip / build-essential / etc.
 COPY --from=builder --chown=app:app /root/.local /home/app/.local
-ENV PATH=/home/app/.local/bin:$PATH \
+# PYTHONUSERBASE pins the user-site to /home/app/.local whatever user runs
+# the container. Some hosts (e.g. Railway with RAILWAY_RUN_UID=0, needed to
+# write to a root-owned volume) run it as root, whose default user-site is
+# /root/.local — without this, `uvicorn` and every dependency go missing.
+ENV PYTHONUSERBASE=/home/app/.local \
+    PATH=/home/app/.local/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 

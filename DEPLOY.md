@@ -159,3 +159,62 @@ If you want the shortest possible explanation:
 5. Fill env secrets and API keys.
 6. Deploy.
 7. Test login, one manual publish, one scheduled post, one Telegram validation flow.
+
+## 11. Alternative: Vercel (frontend) + Railway (backend) + TiDB Cloud (database)
+
+Live instance:
+
+- Frontend: https://autodatalia.vercel.app (Vercel project `autodatalia`, root `frontend/`)
+- Backend: https://api-production-0f20f7df.up.railway.app (Railway project `autodatalia`, service `api`)
+- Database: TiDB Cloud Serverless (MySQL-compatible), database `datalia`
+
+How it fits together:
+
+- The browser only talks to Vercel. Next.js rewrites `/api/backend/*` to the
+  Railway backend, so the session cookie is first-party on the Vercel domain.
+- Only the frontend runs on Vercel. The backend needs an always-on process
+  (scheduler + automation worker), a persistent volume (media) and MySQL,
+  which Vercel functions don't provide.
+
+Vercel (`frontend/vercel.json` pins the Next.js preset). Production env:
+
+```env
+NEXT_PUBLIC_API_BASE_URL=/api/backend
+INTERNAL_API_BASE_URL=https://<railway-backend-domain>
+```
+
+Both are read at build time: redeploy the frontend after changing them.
+
+Railway service `api` (deployed from `backend/` with `railway up --service api`):
+
+- builds `backend/Dockerfile`
+- volume mounted at `/home/app/content`
+- service settings (stored in Railway): healthcheck `/health`, 1 replica,
+  restart on failure. Keep exactly one replica (check every region with
+  `railway service scale`: a stray replica in another region doubles the
+  scheduler and publishes posts twice).
+- region `southeast-asia`, same as the TiDB cluster (`ap-southeast-1`). The
+  backend opens a TLS connection per query, so a cross-ocean hop made each
+  request take 2-8 s instead of ~1 s.
+- variables:
+
+```env
+ENV=production
+PORT=8000
+RAILWAY_RUN_UID=0          # the volume is root-owned
+DATABASE_URL=mysql://USER:PASSWORD@HOST:4000/datalia?ssl=true
+JWT_SECRET=<openssl rand -hex 32>
+BACKEND_AUTH_TOKEN=<openssl rand -hex 32>
+TELEGRAM_WEBHOOK_SECRET=<random>
+ALLOW_OPEN_AUTH=false
+CORS_ALLOW_ORIGINS=https://autodatalia.vercel.app
+PUBLIC_APP_URL=https://autodatalia.vercel.app
+OAUTH_REDIRECT_BASE=https://<railway-backend-domain>
+PUBLIC_BASE_URL=https://<railway-backend-domain>
+```
+
+`?ssl=true` verifies the database certificate and hostname (certifi CA
+bundle, or `&ssl_ca=/path/ca.pem`). The schema is created on first boot.
+
+Add the optional provider keys (`AI_API_KEY`, `META_*`, `TIKTOK_*`,
+`TELEGRAM_BOT_TOKEN`, ...) as Railway variables to enable those features.
