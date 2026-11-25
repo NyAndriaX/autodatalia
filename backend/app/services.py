@@ -552,6 +552,29 @@ def model_for_tier(tier: str, user_id: str | int | None = None) -> str:
     return cfg.ai_model
 
 
+def _with_google_thinking_disabled(payload: dict[str, Any], base_url: str) -> dict[str, Any]:
+    """Turn off "thinking" for Gemini *flash* models on Google's endpoint.
+
+    On Google's OpenAI-compatible API, reasoning tokens count against
+    ``max_tokens``. Our callers size ``max_tokens`` for the visible answer
+    only (e.g. 600 for one post variant), so a thinking model such as
+    gemini-3.5-flash burns the budget reasoning and returns truncated JSON
+    (finish_reason="length") -> "Could not parse AI response". Copywriting
+    doesn't need reasoning, so flash models get ``reasoning_effort="none"``.
+    Pro models can't disable thinking (they'd 400) and OpenRouter has its
+    own semantics, so both are left untouched, as is an explicit caller value.
+    """
+    model = str(payload.get("model") or "").lower()
+    if (
+        "generativelanguage.googleapis.com" in (base_url or "")
+        and "flash" in model
+        and "image" not in model
+        and "reasoning_effort" not in payload
+    ):
+        return {**payload, "reasoning_effort": "none"}
+    return payload
+
+
 async def _post_chat(
     payload: dict[str, Any],
     *,
@@ -569,6 +592,8 @@ async def _post_chat(
     cfg = resolved_settings(user_id)
     if not cfg.ai_api_key:
         raise HTTPException(status_code=500, detail="AI_API_KEY is not configured.")
+
+    payload = _with_google_thinking_disabled(payload, cfg.ai_api_base_url)
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(

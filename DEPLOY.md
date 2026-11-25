@@ -218,3 +218,20 @@ bundle, or `&ssl_ca=/path/ca.pem`). The schema is created on first boot.
 
 Add the optional provider keys (`AI_API_KEY`, `META_*`, `TIKTOK_*`,
 `TELEGRAM_BOT_TOKEN`, ...) as Railway variables to enable those features.
+
+AI is configured server-wide (every workspace uses it unless it saves its
+own key under Settings -> AI keys), with a Google AI Studio key:
+
+```env
+AI_API_KEY=<Google AI Studio key>
+AI_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+AI_MODEL=gemini-3.5-flash
+AI_MODEL_FAST=gemini-3.5-flash-lite
+AI_MODEL_PREMIUM=gemini-3.5-flash
+AI_IMAGE_MODEL=gemini-3.1-flash-image
+```
+
+Set the models explicitly: the code's built-in Google defaults
+(`gemini-2.5-*`) are closed to new Google accounts. On the free tier, Pro
+and image models have no quota; image generation then falls back to a
+locally rendered poster until billing is enabled on the Google project.
