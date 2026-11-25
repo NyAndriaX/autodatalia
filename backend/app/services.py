@@ -563,11 +563,13 @@ def _with_google_thinking_disabled(payload: dict[str, Any], base_url: str) -> di
     doesn't need reasoning, so flash models get ``reasoning_effort="none"``.
     Pro models can't disable thinking (they'd 400) and OpenRouter has its
     own semantics, so both are left untouched, as is an explicit caller value.
+    "lite" models don't think by default and reject "none" with a 400.
     """
     model = str(payload.get("model") or "").lower()
     if (
         "generativelanguage.googleapis.com" in (base_url or "")
         and "flash" in model
+        and "lite" not in model
         and "image" not in model
         and "reasoning_effort" not in payload
     ):
@@ -593,19 +595,23 @@ async def _post_chat(
     if not cfg.ai_api_key:
         raise HTTPException(status_code=500, detail="AI_API_KEY is not configured.")
 
-    payload = _with_google_thinking_disabled(payload, cfg.ai_api_base_url)
-
+    sent = _with_google_thinking_disabled(payload, cfg.ai_api_base_url)
+    headers = {
+        "Authorization": f"Bearer {cfg.ai_api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://caption-api.local",
+        "X-Title": "Caption API",
+    }
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
-            f"{cfg.ai_api_base_url}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {cfg.ai_api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://caption-api.local",
-                "X-Title": "Caption API",
-            },
-            json=payload,
+            f"{cfg.ai_api_base_url}/chat/completions", headers=headers, json=sent
         )
+        if response.status_code == 400 and sent is not payload:
+            # A model we didn't anticipate rejects the injected
+            # reasoning_effort: retry exactly as the caller asked.
+            response = await client.post(
+                f"{cfg.ai_api_base_url}/chat/completions", headers=headers, json=payload
+            )
 
     if response.status_code >= 400:
         raise HTTPException(

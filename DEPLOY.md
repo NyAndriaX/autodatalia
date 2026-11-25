@@ -228,10 +228,16 @@ AI_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
 AI_MODEL=gemini-3.5-flash
 AI_MODEL_FAST=gemini-3.5-flash-lite
 AI_MODEL_PREMIUM=gemini-3.5-flash
-AI_IMAGE_MODEL=gemini-3.1-flash-image
+AI_IMAGE_MODEL=@cf/black-forest-labs/flux-1-schnell
+CLOUDFLARE_ACCOUNT_ID=<32-hex account id>
+CLOUDFLARE_API_TOKEN=<Workers AI token>
 ```
 
+Images use Cloudflare Workers AI (FLUX.1 schnell, free daily allowance).
+Prompts are first rewritten by the fast text model into a purely visual
+description (no proper nouns): FLUX draws any name it reads as lettering.
+
 Set the models explicitly: the code's built-in Google defaults
-(`gemini-2.5-*`) are closed to new Google accounts. On the free tier, Pro
-and image models have no quota; image generation then falls back to a
-locally rendered poster until billing is enabled on the Google project.
+(`gemini-2.5-*`) are closed to new Google accounts, and the free tier has
+no quota for Pro or Gemini image models. If image generation fails it
+falls back to a locally rendered poster.

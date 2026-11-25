@@ -536,40 +536,75 @@ async def _refine_image_prompt(prompt: str, user_id: str | int | None = None) ->
                     "into a clean, concise, highly-detailed visual description for a text-to-image generator.\n"
                     "CRITICAL RULES:\n"
                     "1. Focus ONLY on describing the physical scene, subject, setting, colors, and lighting.\n"
-                    "2. The description must be completely text-free. Do NOT include any words, letters, logos, labels, captions, or typography.\n"
-                    "3. Remove all emojis, hashtags, links, and direct calls to action.\n"
-                    "4. Keep the output under 100 words. Return ONLY the refined visual prompt without any intro or outro."
+                    # Image models (FLUX especially) render any name they read as
+                    # lettering, so names must become visual descriptions.
+                    "2. Image models draw any name they read as text, so NEVER write proper nouns: no city, "
+                    "country, brand, company, product or person names. Describe them visually instead "
+                    "(e.g. a hillside city with red-brick houses under a bright sky).\n"
+                    "3. Never mention text-bearing objects (signs, posters, banners, maps, screens with words, "
+                    "labels, logos) and never use the words text, letters, words, typography or title.\n"
+                    "4. Remove all emojis, hashtags, links, and direct calls to action.\n"
+                    "5. Keep the output under 100 words. Return ONLY the refined visual prompt without any intro or outro."
                 ),
             },
             {"role": "user", "content": cleaned},
         ],
     }
 
+    from .services import _with_google_thinking_disabled
+
+    refiner_log = logging.getLogger("datalia.media")
     try:
         # Defense in depth: ai_api_base_url is a per-tenant override. Re-validate
         # the resolved URL before attaching the API key and calling out, in case
         # a value predates runtime_config's write-time SSRF check.
         assert_safe_url(f"{cfg.ai_api_base_url}/chat/completions")
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                f"{cfg.ai_api_base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {cfg.ai_api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://caption-api.local",
-                    "X-Title": "Caption API - Image Prompt Refiner",
-                },
-                json=payload,
-            )
-        if response.status_code == 200:
-            data = response.json()
-            choices = data.get("choices") or []
-            if choices:
-                refined = choices[0].get("message", {}).get("content", "").strip()
-                if refined:
-                    return refined
-    except Exception as exc:
-        logging.getLogger("datalia.media").warning("[media] Failed to refine image prompt: %s", exc)
+    except ValueError as exc:
+        refiner_log.warning("[media] Failed to refine image prompt: %s", exc)
+        return cleaned
+
+    # The raw prompt is a social caption (brand / city names...) that image
+    # models render as garbled lettering, so a refined prompt matters. Google
+    # often answers 503 "high demand": retry, then try the main model.
+    models = list(dict.fromkeys(m for m in (cfg.ai_model_fast, cfg.ai_model) if m))
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for model in models:
+            body = _with_google_thinking_disabled({**payload, "model": model}, cfg.ai_api_base_url)
+            for attempt in range(2):
+                try:
+                    response = await client.post(
+                        f"{cfg.ai_api_base_url}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {cfg.ai_api_key}",
+                            "Content-Type": "application/json",
+                            "HTTP-Referer": "https://caption-api.local",
+                            "X-Title": "Caption API - Image Prompt Refiner",
+                        },
+                        json=body,
+                    )
+                except Exception as exc:
+                    refiner_log.warning("[media] Image prompt refiner %s failed: %s", model, exc)
+                    status = None
+                else:
+                    status = response.status_code
+                    if status == 200:
+                        choices = (response.json() or {}).get("choices") or []
+                        refined = (
+                            (choices[0].get("message") or {}).get("content") or ""
+                        ).strip() if choices else ""
+                        if refined:
+                            return refined
+                        break  # empty answer: no point retrying this model
+                    refiner_log.warning("[media] Image prompt refiner %s returned HTTP %s", model, status)
+                    if status == 400 and "reasoning_effort" in body:
+                        # Model rejects the injected option: retry without it.
+                        body = {**payload, "model": model}
+                        continue
+                    if status not in (429, 500, 502, 503, 504):
+                        break  # auth / bad request: retrying won't help
+                if attempt == 0:
+                    await asyncio.sleep(1.0)
+    refiner_log.warning("[media] Image prompt refinement failed; using the raw prompt")
 
     return cleaned
 
@@ -579,8 +614,13 @@ async def _generate_image_file(
 ) -> tuple[Path, str]:
     width, height = _pick_size(ratio)
     refined = await _refine_image_prompt(prompt, user_id=user_id)
-    # Append clear, strong negative instructions to guarantee text-free generation across all models
-    final_prompt = f"{refined}. High-quality professional image, clean background, completely text-free with absolutely no words, letters, captions, logos, or typography."
+    # Positive phrasing only. Diffusion models have no negation: listing
+    # "no words, letters, typography" primes them to draw lettering (FLUX
+    # rendered misspelled captions with the previous suffix).
+    final_prompt = (
+        f"{refined}. High-quality professional illustration, purely visual scene "
+        "made only of shapes, objects, light and color, clean uncluttered composition."
+    )
 
     try:
         payload, provider = await _call_image_api(

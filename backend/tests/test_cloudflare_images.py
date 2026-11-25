@@ -98,3 +98,63 @@ def test_cloudflare_model_not_rewritten_by_google_key(monkeypatch):
     loaded = config_module.load_settings()
     assert loaded.ai_image_model == FLUX
     assert loaded.cloudflare_account_id == ACCOUNT
+
+
+LONG_PROMPT = "Affiche moderne pour une formation en marketing digital a Antananarivo"
+
+
+def _refiner_and_flux(monkeypatch, chat_statuses):
+    """Fake Google/OpenRouter chat (statuses consumed in order) + FLUX."""
+    from app import media_generation
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(media_generation.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(settings, "ai_image_model", FLUX)
+    monkeypatch.setattr(settings, "cloudflare_account_id", ACCOUNT)
+    monkeypatch.setattr(settings, "cloudflare_api_token", "cf-token")
+    monkeypatch.setattr(settings, "ai_model_fast", "fast-model")
+    monkeypatch.setattr(settings, "ai_model", "main-model")
+    statuses = list(chat_statuses)
+    chat_models, flux_prompts = [], []
+    b64 = base64.b64encode(_img_bytes("JPEG")).decode()
+
+    async def fake_post(self, url, *args, **kwargs):
+        req = httpx.Request("POST", url)
+        body = kwargs.get("json") or {}
+        if "api.cloudflare.com" in url:
+            flux_prompts.append(body["prompt"])
+            return httpx.Response(200, json={"result": {"image": b64}}, request=req)
+        chat_models.append(body["model"])
+        status = statuses.pop(0) if statuses else 200
+        if status != 200:
+            return httpx.Response(status, json={"error": {"message": "busy"}}, request=req)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "Blue and orange abstract shapes"}}]}, request=req)
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    return chat_models, flux_prompts
+
+
+def test_refiner_retries_503_then_uses_refined_prompt(workspace_client, monkeypatch):
+    chat_models, flux_prompts = _refiner_and_flux(monkeypatch, [503])
+    r = workspace_client.post("/media/generate/image", json={"prompt": LONG_PROMPT})
+    assert r.status_code == 200 and r.json()["provider"] == FLUX
+    assert chat_models == ["fast-model", "fast-model"]
+    assert flux_prompts[-1].startswith("Blue and orange abstract shapes")
+    assert "Antananarivo" not in flux_prompts[-1]
+
+
+def test_refiner_falls_back_to_main_model_when_fast_is_overloaded(workspace_client, monkeypatch):
+    chat_models, flux_prompts = _refiner_and_flux(monkeypatch, [503, 503])
+    workspace_client.post("/media/generate/image", json={"prompt": LONG_PROMPT})
+    assert chat_models == ["fast-model", "fast-model", "main-model"]
+    assert flux_prompts[-1].startswith("Blue and orange abstract shapes")
+
+
+def test_refiner_gives_up_and_uses_raw_prompt(workspace_client, monkeypatch):
+    chat_models, flux_prompts = _refiner_and_flux(monkeypatch, [503, 503, 503, 503])
+    r = workspace_client.post("/media/generate/image", json={"prompt": LONG_PROMPT})
+    assert r.json()["provider"] == FLUX
+    assert len(chat_models) == 4
+    assert flux_prompts[-1].startswith(LONG_PROMPT)
