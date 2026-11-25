@@ -171,6 +171,11 @@ function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconn
   const targets     = wantedKind
     ? (provider?.targets || []).filter((t) => t.kind === wantedKind)
     : provider?.targets || [];
+  // No direct developer app, but the workspace has Zernio: point there
+  // instead of showing a red "add env keys to the server" error.
+  const zernio          = connections?.zernio;
+  const viaZernio       = !configured && !!zernio?.configured;
+  const zernioConnected = viaZernio && (zernio?.targets || []).some((tg) => tg.platform === p.id);
 
   return (
     <div className="overflow-hidden rounded-2xl transition-all duration-150"
@@ -187,8 +192,13 @@ function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconn
         <div className="flex-1 min-w-0">
           <p className="text-sm font-bold leading-tight" style={{ color:"var(--text-primary)" }}>{p.label}</p>
           {providerLoaded && !configured && connections !== null && (
-            <p className="mt-0.5 text-[11px]" style={{ color:"var(--status-error)" }}>
-              {t("platformNotConfigured")}
+            <p className="mt-0.5 text-[11px]"
+              style={{ color: viaZernio ? "var(--text-muted)" : "var(--status-error)" }}>
+              {zernioConnected
+                ? t("platformConnectedViaZernio")
+                : viaZernio
+                  ? t("platformUseZernio")
+                  : t("platformNotConfigured")}
             </p>
           )}
           {providerLoaded && connected && targets.length > 0 && (
@@ -201,10 +211,19 @@ function CartePlateforme({ p, connections, pendingProvider, onConnect, onDisconn
           )}
         </div>
         {providerLoaded && !configured ? (
-          <span className="shrink-0 rounded-lg px-2.5 py-1 text-[11px] font-semibold"
-            style={{ background:"rgba(239,68,68,.1)", color:"var(--status-error)" }}>
-            {t("platformConfigRequired")}
-          </span>
+          zernioConnected ? (
+            <span className="flex shrink-0 items-center gap-1.5 text-xs font-semibold"
+              style={{ color:"var(--status-approved)" }}>
+              <Check size={13} /> {t("platformViaZernioBadge")}
+            </span>
+          ) : (
+            <span className="shrink-0 rounded-lg px-2.5 py-1 text-[11px] font-semibold"
+              style={viaZernio
+                ? { background:"rgba(29,63,190,.1)", color:"var(--accent-primary)" }
+                : { background:"rgba(239,68,68,.1)", color:"var(--status-error)" }}>
+              {viaZernio ? t("platformUseZernioBadge") : t("platformConfigRequired")}
+            </span>
+          )
         ) : connected ? (
           <div className="flex items-center gap-2 shrink-0">
             <span className="flex items-center gap-1.5 text-xs font-semibold"
