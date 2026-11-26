@@ -645,7 +645,10 @@
     "uploadAudio": "Upload audio",
     "prefilledFromEditor": "Prompt & reference image pulled from the editor.",
     "ugcPromptHint": "Describe the action — e.g. 'a person unboxing the product, soft natural light, vertical shot'",
-    "estCost": "Est. cost ~€{eur}"
+    "estCost": "Est. cost ~€{eur}",
+    "modeTalk": "Make it talk",
+    "modeTalkDesc": "The person in the image says your text (AI voice, lip-synced)",
+    "talkPromptHint": "What the person should say — e.g. “Hi! Discover our new digital marketing course.”"
   },
   "analytics": {
     "title": "Analytics",

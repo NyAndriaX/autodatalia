@@ -814,10 +814,16 @@ async def video_models_list() -> VideoModelsResponse:
     """
     from .video_jobs import list_video_models
     from .config import settings as _settings
+    from .video_jobs import HF_FREE_MODEL_ID, _openrouter_video_config
+
     models = list_video_models()
     default_model = _settings.fal_video_model
     if default_model not in {model["id"] for model in models}:
         default_model = _settings.ai_video_model or models[0]["id"]
+    paid_ready = bool(_settings.fal_api_key or _settings.ltx_api_key or _openrouter_video_config()[0])
+    if _settings.hf_token and not paid_ready:
+        # Only the free provider can run: preselect it in the picker.
+        default_model = HF_FREE_MODEL_ID
     return VideoModelsResponse(
         models=[VideoModel(**m) for m in models],
         default=default_model,

@@ -17,6 +17,7 @@ import {
   Type,
   Image as ImageIcon,
   Sparkles,
+  MessageCircle,
   X,
 } from "lucide-react";
 import {
@@ -45,7 +46,11 @@ const MODES = [
   { id: "text", icon: Type, labelKey: "modeText" },
   { id: "image", icon: ImageIcon, labelKey: "modeImage" },
   { id: "ugc", icon: Sparkles, labelKey: "modeUgc", descKey: "modeUgcDesc" },
+  { id: "talk", icon: MessageCircle, labelKey: "modeTalk", descKey: "modeTalkDesc" },
 ];
+
+// Modes that animate a reference image (it's required for these).
+const IMAGE_MODES = new Set(["image", "ugc", "talk"]);
 
 // Session-storage key the Creation editor stashes the prefill into.
 // Popped once on mount so a soft refresh doesn't re-apply stale state.
@@ -113,21 +118,22 @@ export default function VideoJobsView() {
     audio: false,
     max_duration_seconds: 15,
     supports_ugc: false,
+    supports_talk: false,
     supported_aspect_ratios: RATIOS,
   };
 
   // Auto-flip mode when the model doesn't support what's selected.
   useEffect(() => {
     queueMicrotask(() => {
-      if (!features.image_to_video && (mode === "image" || mode === "ugc")) {
+      if (!features.image_to_video && IMAGE_MODES.has(mode)) {
         setMode("text");
         setReferenceImage(null);
       }
-      if (mode === "ugc" && !features.supports_ugc) {
+      if ((mode === "ugc" && !features.supports_ugc) || (mode === "talk" && !features.supports_talk)) {
         setMode(features.image_to_video ? "image" : "text");
       }
     });
-  }, [features.image_to_video, features.supports_ugc, mode]);
+  }, [features.image_to_video, features.supports_ugc, features.supports_talk, mode]);
 
   // Clamp duration to model max.
   useEffect(() => {
@@ -192,7 +198,7 @@ export default function VideoJobsView() {
   async function handleCreate(e) {
     e.preventDefault();
     if (!prompt.trim() || submitting) return;
-    if ((mode === "image" || mode === "ugc") && !referenceImage) {
+    if (IMAGE_MODES.has(mode) && !referenceImage) {
       setError(t("referenceImageHint"));
       return;
     }
@@ -307,12 +313,13 @@ export default function VideoJobsView() {
           <label className="text-[11px] uppercase tracking-wider block mb-1" style={{ color: "var(--text-muted)" }}>
             {t("modeLabel")}
           </label>
-          <div className="grid grid-cols-3 gap-1.5 mb-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 mb-3">
             {MODES.map((m) => {
               const ModeIcon = m.icon;
               const disabled =
                 (m.id === "image" && !features.image_to_video) ||
-                (m.id === "ugc" && !features.supports_ugc);
+                (m.id === "ugc" && !features.supports_ugc) ||
+                (m.id === "talk" && !features.supports_talk);
               return (
                 <button
                   key={m.id}
@@ -336,7 +343,7 @@ export default function VideoJobsView() {
             })}
           </div>
 
-          {(mode === "image" || mode === "ugc") && (
+          {IMAGE_MODES.has(mode) && (
             <div className="mb-3">
               <label className="text-[11px] uppercase tracking-wider block mb-1" style={{ color: "var(--text-muted)" }}>
                 {t("referenceImage")}
@@ -397,7 +404,9 @@ export default function VideoJobsView() {
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder={mode === "ugc" ? t("ugcPromptHint") : t("promptPlaceholder")}
+            placeholder={
+              mode === "ugc" ? t("ugcPromptHint") : mode === "talk" ? t("talkPromptHint") : t("promptPlaceholder")
+            }
             rows={5}
             className="w-full p-2 rounded-lg text-sm mb-3"
             style={{
@@ -468,7 +477,7 @@ export default function VideoJobsView() {
 
           <button
             type="submit"
-            disabled={submitting || !prompt.trim() || ((mode === "image" || mode === "ugc") && !referenceImage)}
+            disabled={submitting || !prompt.trim() || (IMAGE_MODES.has(mode) && !referenceImage)}
             className={`${btnPrimary} w-full inline-flex items-center justify-center gap-2`}
           >
             {submitting ? <Loader2 size={14} className="animate-spin" /> : <Film size={14} />}

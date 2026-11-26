@@ -422,6 +422,8 @@ class VideoModelFeatures(BaseModel):
     audio: bool = False
     max_duration_seconds: int = 10
     supports_ugc: bool = False
+    # "Make it talk": the reference image speaks the prompt text (lip-synced).
+    supports_talk: bool = False
     supported_aspect_ratios: list[str] = []
 
 

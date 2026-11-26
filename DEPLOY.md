@@ -237,6 +237,23 @@ Images use Cloudflare Workers AI (FLUX.1 schnell, free daily allowance).
 Prompts are first rewritten by the fast text model into a purely visual
 description (no proper nouns): FLUX draws any name it reads as lettering.
 
+Free video animation uses public Hugging Face ZeroGPU Spaces through
+`gradio_client` (free account token, daily GPU quota of a few clips):
+
+```env
+HF_TOKEN=<Hugging Face read token>
+# optional overrides
+HF_ANIMATE_SPACE=Upsampler/wan-2-2-14b-image-to-video
+HF_TALK_SPACE=multimodalart/MoDA-fast-talking-head
+```
+
+- "Image -> video": Wan 2.2 animates the image (max 5 s), then a voice-over
+  and music bed are added.
+- "Make it talk": Gemini TTS reads the text and MoDA lip-syncs the image.
+- Quota errors, queues or a Space being down fall back to the local ffmpeg
+  render (zoom + voice + music). Images are sent to third-party public
+  Spaces: no sensitive pictures or real people without consent.
+
 Set the models explicitly: the code's built-in Google defaults
 (`gemini-2.5-*`) are closed to new Google accounts, and the free tier has
 no quota for Pro or Gemini image models. If image generation fails it

@@ -645,7 +645,10 @@
     "uploadAudio": "Téléverser audio",
     "prefilledFromEditor": "Prompt et image de référence pré-remplis depuis l'éditeur.",
     "ugcPromptHint": "Décrivez l'action — ex. « une personne déballe le produit, lumière naturelle, format vertical »",
-    "estCost": "Coût estimé ~{eur} €"
+    "estCost": "Coût estimé ~{eur} €",
+    "modeTalk": "Faire parler",
+    "modeTalkDesc": "La personne de l'image prononce votre texte (voix IA, lèvres synchronisées)",
+    "talkPromptHint": "Texte que la personne doit dire — ex. « Bonjour ! Découvrez notre nouvelle formation en marketing digital. »"
   },
   "analytics": {
     "title": "Analytique",

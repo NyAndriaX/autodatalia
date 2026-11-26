@@ -242,18 +242,24 @@ def _pick_provider(
             # replicate as "configured" once that hash is set.
             and bool(cfg.replicate_video_version)
         ),
+        "huggingface": bool(settings.hf_token),
         "fallback": True,
     }
-    if requested in configured:
+    # Honour an explicit provider / model only when it can actually run.
+    # The UI sends the default model's provider (fal) even with no fal key:
+    # that used to queue a job doomed to fail before falling back.
+    if configured.get(requested):
         return requested
-    if model_id in OPENROUTER_MODEL_SPECS:
+    if model_id in OPENROUTER_MODEL_SPECS and configured["openrouter"]:
         return "openrouter"
-    if model_id in FAL_MODEL_SPECS:
+    if model_id in FAL_MODEL_SPECS and configured["fal"]:
         return "fal"
-    # Auto / unsupported / unconfigured request — fal.ai first (team has
-    # a topped-up balance there), then LTX official (100 free credits),
-    # then the ffmpeg Ken Burns fallback.
-    for p in ("fal", "ltx", "fallback"):
+    if model_id in HF_MODEL_SPECS and configured["huggingface"]:
+        return "huggingface"
+    # Auto / unconfigured request: paid providers first (fal has a topped-up
+    # balance, LTX free credits), then the free Hugging Face Spaces, then the
+    # local ffmpeg renderer.
+    for p in ("fal", "ltx", "huggingface", "fallback"):
         if configured[p]:
             return p
     return "fallback"
@@ -269,6 +275,8 @@ def _model_for_provider(provider: str, *, user_id: str | int | None = None) -> s
         return cfg.ai_video_model or "google/veo-3.1-lite"
     if provider == "fal":
         return cfg.fal_video_model
+    if provider == "huggingface":
+        return HF_FREE_MODEL_ID
     return "ken-burns-ffmpeg"
 
 
@@ -308,7 +316,17 @@ def create_job(
     # Resolve the effective model label shown on the job record. For
     # providers with a selectable registry this prefers the per-job
     # override; for others it falls back to the provider default.
-    effective_model = requested_model or _model_for_provider(chosen, user_id=user_id)
+    owned = {
+        "openrouter": OPENROUTER_MODEL_SPECS,
+        "fal": FAL_MODEL_SPECS,
+        "huggingface": HF_MODEL_SPECS,
+    }.get(chosen, {})
+    if requested_model and (requested_model in owned or (chosen == "fal" and requested_model not in OPENROUTER_MODEL_SPECS and requested_model not in HF_MODEL_SPECS)):
+        effective_model = requested_model
+    else:
+        # The requested model's provider isn't configured: label the job with
+        # what will really render it.
+        effective_model = _model_for_provider(chosen, user_id=user_id)
     job = {
         "id": f"vid-{uuid.uuid4().hex[:10]}",
         "user_id": str(user_id) if user_id is not None else None,
@@ -1046,6 +1064,10 @@ def list_video_models() -> list[dict[str, Any]]:
             _catalog_entry(model_id, spec, provider="openrouter")
             for model_id, spec in OPENROUTER_MODEL_SPECS.items()
         ],
+        *[
+            _catalog_entry(model_id, spec, provider="huggingface")
+            for model_id, spec in HF_MODEL_SPECS.items()
+        ],
     ]
 
 
@@ -1614,7 +1636,182 @@ def _job_image_public_url(job: dict[str, Any]) -> str | None:
     return f"{base}/content/{rel}" if base else f"/content/{rel}"
 
 
+# ── Free provider: Hugging Face ZeroGPU Spaces ────────────────────────────
+
+HF_FREE_MODEL_ID = "huggingface/wan-2.2-moda"
+HF_MODEL_SPECS: dict[str, dict[str, Any]] = {
+    HF_FREE_MODEL_ID: {
+        "label": "Gratuit · Wan 2.2 + MoDA (Hugging Face)",
+        # Not used by the runner; kept for the catalogue shape.
+        "endpoints": {"image_to_video": "/generate_video", "talking_head": "/generate_motion"},
+        "cost_per_second_usd": 0.0,
+        "features": {
+            "image_to_video": True,
+            "audio": True,  # voice-over + music are added afterwards
+            "max_duration_seconds": 5,  # Wan 2.2 Space slider maximum
+            "supports_ugc": False,
+            "supports_talk": True,
+        },
+    },
+}
+_HF_TIMEOUT_SECONDS = 420  # ZeroGPU queue + inference
+_TALK_MAX_WORDS = 70
+_HF_SQUARE_RATIOS = {"1:1": 1.0, "4:5": 0.8, "9:16": 9 / 16, "16:9": 16 / 9}
+
+
+def _hf_output_path(result: Any) -> Path:
+    """Unwrap a gradio_client result into the generated file's path."""
+    if isinstance(result, (list, tuple)):
+        result = result[0]
+    if isinstance(result, dict):
+        result = result.get("video") or result.get("path") or result.get("value")
+    if not result or not Path(str(result)).is_file():
+        raise RuntimeError("Hugging Face Space returned no video")
+    return Path(str(result))
+
+
+def _hf_predict(
+    space: str, token: str, api_name: str, *, files: dict[str, Path], **inputs: Any
+) -> Path:
+    """Blocking gradio_client call (run it in a thread). ``files`` are uploaded."""
+    from gradio_client import Client, handle_file
+
+    client = Client(space, token=token or None, verbose=False)
+    payload = {**inputs, **{name: handle_file(str(path)) for name, path in files.items()}}
+    job = client.submit(api_name=api_name, **payload)
+    return _hf_output_path(job.result(timeout=_HF_TIMEOUT_SECONDS))
+
+
+def _crop_to_ratio(src: Path, ratio: str, dest: Path) -> Path:
+    """Center-crop the source to the job ratio (Wan keeps the input aspect)."""
+    from PIL import Image
+
+    target = _HF_SQUARE_RATIOS.get(ratio, 1.0)
+    with Image.open(src) as opened:
+        img = opened.convert("RGB")
+    w, h = img.size
+    if w / h > target:
+        new_w = int(h * target)
+        img = img.crop(((w - new_w) // 2, 0, (w - new_w) // 2 + new_w, h))
+    elif w / h < target:
+        new_h = int(w / target)
+        img = img.crop((0, (h - new_h) // 2, w, (h - new_h) // 2 + new_h))
+    img.save(dest, format="PNG")
+    return dest
+
+
+async def _english_motion_prompt(prompt: str, *, user_id: Any = None) -> str:
+    """Wan 2.2 follows English best: turn the brief into a short motion prompt."""
+    from .services import _post_chat
+
+    cfg = resolved_settings(user_id)
+    try:
+        text, _ = await _post_chat(
+            {
+                "model": cfg.ai_model_fast or cfg.ai_model,
+                "temperature": 0.3,
+                "max_tokens": 120,
+                "messages": [
+                    {"role": "system", "content": (
+                        "Rewrite the request as one short English prompt for an image-to-video "
+                        "model: describe only the motion of the subject and the camera "
+                        "(e.g. 'the woman smiles and dances, slow camera push-in'). "
+                        "Return only the prompt."
+                    )},
+                    {"role": "user", "content": prompt.strip()},
+                ],
+            },
+            workflow="video_prompt",
+            tier="fast",
+            user_id=user_id,
+        )
+        return (text or "").strip() or prompt
+    except Exception as exc:  # translation is a nicety, never a blocker
+        log.warning("[video] motion prompt rewrite failed: %s", exc)
+        return prompt
+
+
+async def _run_huggingface_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Free real animation via Hugging Face ZeroGPU Spaces.
+
+    * mode "talk": Gemini TTS reads the prompt text, MoDA lip-syncs the
+      reference image to it (the Space returns the video with that audio).
+    * otherwise: Wan 2.2 animates the image (or a FLUX still generated from
+      the prompt in text mode), then the voice-over + music bed is added.
+
+    Quota errors, queue timeouts or a Space being down raise, and run_job
+    falls back to the local ffmpeg renderer.
+    """
+    import shutil
+    import tempfile
+
+    from .media_generation import _generate_image_file, _generated_dir as _gen_dir
+    from .video_audio import _clean_script, add_soundtrack, media_duration, synthesize_speech
+
+    token = settings.hf_token
+    if not token:
+        raise RuntimeError("HF_TOKEN not configured")
+    workspace = job.get("user_id")
+    _update_job(job["id"], {"started_at": time.time(), "status": "running", "progress": 0.1})
+    workdir = Path(tempfile.mkdtemp(prefix="datalia-hf-"))
+    try:
+        image = _job_image_path(job)
+        if image is None:
+            image, _provider = await _generate_image_file(job["prompt"], job["ratio"], user_id=workspace)
+        _update_job(job["id"], {"progress": 0.25})
+
+        if job.get("mode") == "talk":
+            text = _clean_script(job["prompt"], _TALK_MAX_WORDS)
+            voice = await synthesize_speech(text, workdir, user_id=workspace)
+            if voice is None:
+                raise RuntimeError("Text-to-speech unavailable for the talking video")
+            _update_job(job["id"], {"progress": 0.4})
+            produced = await asyncio.to_thread(
+                _hf_predict, settings.hf_talk_space, token, "/generate_motion",
+                files={"source_image_path": image, "driving_audio_path": voice},
+                emotion_name="Happiness",
+                cfg_scale=1.2,
+            )
+            audio = {"voice": True, "music": False}
+        else:
+            source = _crop_to_ratio(image, job["ratio"], workdir / "source.png")
+            motion = await _english_motion_prompt(job["prompt"], user_id=workspace)
+            seconds = max(1.0, min(float(job["duration_seconds"]), 5.0))
+            _update_job(job["id"], {"progress": 0.4})
+            produced = await asyncio.to_thread(
+                _hf_predict, settings.hf_animate_space, token, "/generate_video",
+                files={"input_image": source},
+                prompt=motion,
+                duration_seconds=seconds,
+            )
+            audio = None
+
+        out_path = _gen_dir(workspace) / f"hf-{job['id']}.mp4"
+        shutil.copyfile(produced, out_path)
+        _update_job(job["id"], {"progress": 0.85})
+        if audio is None:  # Wan clips are silent
+            audio = {"voice": False, "music": False}
+            try:
+                seconds = await media_duration(out_path) or float(job["duration_seconds"])
+                audio = await add_soundtrack(out_path, job["prompt"], seconds, user_id=workspace)
+            except Exception as exc:
+                log.warning("[video] soundtrack failed for %s: %s", job["id"], exc)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+    return _update_job(job["id"], {
+        "status": "succeeded",
+        "finished_at": time.time(),
+        "progress": 1.0,
+        "output_url": _public_url_for_local(out_path.name, workspace_id=workspace),
+        "output_filename": out_path.name,
+        "cost_usd": 0.0,
+        "audio": audio,
+    }) or job
+
+
 _PROVIDER_RUNNERS = {
+    "huggingface": "_run_huggingface_job",
     "fal": "_run_fal_job",
     "openrouter": "_run_openrouter_job",
     "replicate": "_run_replicate_job",
@@ -1633,6 +1830,8 @@ async def _dispatch_provider(provider: str, job: dict[str, Any]) -> dict[str, An
         return await _run_openrouter_job(job)
     if provider == "replicate":
         return await _run_replicate_job(job)
+    if provider == "huggingface":
+        return await _run_huggingface_job(job)
     return await _run_fallback_job(job)
 
 
@@ -1679,7 +1878,7 @@ async def run_job(job_id: str) -> dict[str, Any] | None:
     # Build the candidate chain — primary first, then fallback if the
     # primary is an external provider that might fail at runtime.
     candidates = [primary]
-    if primary in ("ltx", "fal", "openrouter", "replicate"):
+    if primary in ("ltx", "fal", "openrouter", "replicate", "huggingface"):
         candidates.append("fallback")
 
     attempts: list[dict[str, Any]] = list(job.get("attempts") or [])

@@ -24,3 +24,6 @@ bcrypt==4.0.1
 # database used by auth, OAuth token storage, runtime settings, posts,
 # automation rules, messages, video jobs, and cost logs.
 PyMySQL==1.1.1
+# gradio_client: calls free Hugging Face ZeroGPU Spaces (Wan 2.2 image-to-video,
+# MoDA talking head) for the free video provider.
+gradio_client==2.7.2

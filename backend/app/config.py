@@ -92,6 +92,11 @@ class Settings(BaseModel):
     # be tenant-editable.
     cloudflare_account_id: str = ""
     cloudflare_api_token: str = ""
+    # Free video provider: Hugging Face ZeroGPU Spaces called with this token
+    # (a free account's token raises the daily GPU quota). Env only.
+    hf_token: str = ""
+    hf_animate_space: str = "Upsampler/wan-2-2-14b-image-to-video"
+    hf_talk_space: str = "multimodalart/MoDA-fast-talking-head"
 
 
 # Known-bad JWT secret. Anyone who has read this file can forge a
@@ -348,6 +353,9 @@ def load_settings() -> Settings:
         ).strip().rstrip("/"),
         cloudflare_account_id=os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip(),
         cloudflare_api_token=os.getenv("CLOUDFLARE_API_TOKEN", "").strip(),
+        hf_token=os.getenv("HF_TOKEN", "").strip(),
+        hf_animate_space=os.getenv("HF_ANIMATE_SPACE", "Upsampler/wan-2-2-14b-image-to-video").strip(),
+        hf_talk_space=os.getenv("HF_TALK_SPACE", "multimodalart/MoDA-fast-talking-head").strip(),
     )
     _validate_security_settings(loaded)
     return loaded
