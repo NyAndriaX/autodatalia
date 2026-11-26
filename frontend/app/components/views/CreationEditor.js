@@ -1013,9 +1013,13 @@ export default function CreationEditor() {
           onSchedule={async (post) => {
             // Carry the draft/post id so editing an existing post schedules it
             // in place instead of creating a duplicate (see schedulePostThunk).
+            // "Schedule for later" means publish at that date/time: mark it
+            // "scheduled" (the server's scheduler only fires that status).
+            // Without it the thunk defaulted to "draft" and nothing ever
+            // went out at the chosen time.
             const saved = await dispatch(
               schedulePostThunk({
-                post: { ...post, id: currentPost.draftId || undefined },
+                post: { ...post, id: currentPost.draftId || undefined, status: "scheduled" },
                 date: post.scheduledDate,
               })
             );
