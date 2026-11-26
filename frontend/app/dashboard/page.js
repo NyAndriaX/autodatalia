@@ -9,6 +9,8 @@ import { hasPermission } from "../lib/permissions";
 import { useIsMobile } from "../lib/useIsMobile";
 import Sidebar from "../components/layout/Sidebar";
 import Topbar from "../components/layout/Topbar";
+import Toaster from "../components/ui/Toaster";
+import PublishResultModal from "../components/views/PublishResultModal";
 import CreationEditor from "../components/views/CreationEditor";
 import AutomationView from "../components/views/AutomationView";
 import CalendarView from "../components/views/CalendarView";
@@ -93,6 +95,8 @@ export default function Home() {
     <div className="h-screen overflow-hidden">
       <Sidebar />
       <Topbar />
+      <Toaster />
+      <PublishResultModal />
 
       {/* Dim backdrop behind the mobile drawer */}
       {isMobile && mobileNavOpen && (

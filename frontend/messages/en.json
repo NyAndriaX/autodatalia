@@ -1178,5 +1178,21 @@
     "createWorkspacePrompt": "Name your new workspace",
     "workspaceCreated": "Workspace created",
     "createFailed": "Couldn't create the workspace"
+  },
+  "publishResult": {
+    "publishing": "Publishing…",
+    "publishingDesc": "Sending to {platforms}. This takes a few seconds.",
+    "success": "Published successfully 🎉",
+    "successDesc": "Your post is live on {count, plural, one {# account} other {# accounts}}.",
+    "partial": "Partially published",
+    "partialDesc": "{ok, plural, one {# account published} other {# accounts published}}, {failed, plural, one {# issue} other {# issues}}.",
+    "failed": "Publishing failed",
+    "failedDesc": "No account could be published.",
+    "published": "Published",
+    "viewPost": "View post",
+    "notConnected": "No connected account for this network",
+    "errorReason": "Error: {error}",
+    "newPost": "New post",
+    "close": "Close"
   }
 }

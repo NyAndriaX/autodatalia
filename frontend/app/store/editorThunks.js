@@ -15,6 +15,7 @@ import {
   recordCacheHit,
   recordPublishHash,
   setPublishCooldownUntil,
+  setPublishResult,
 } from "./uiSlice";
 import { generateContent, applyQuickAction, isGenerationCached } from "../lib/aiService";
 import { fetchConnections, publishToTargets } from "../lib/oauthService";
@@ -416,6 +417,9 @@ export function publishNowThunk() {
         }
       : null;
 
+    // Open the result dialog right away so the user sees progress.
+    dispatch(setPublishResult({ phase: "publishing", platforms: [...new Set(targets.map((t) => t.platform))] }));
+
     let results;
     try {
       const resp = await publishToTargets({
@@ -430,7 +434,9 @@ export function publishNowThunk() {
       results = resp.results || [];
     } catch (err) {
       dispatch(setStatus("error"));
-      dispatch(addNotification({ messageKey: "publishError", messageParams: { error: err.message }, type: "error" }));
+      dispatch(setPublishResult({ phase: "done", ok: [], failed: [], skipped, error: err.message || "unknown" }));
+      // Already shown in the result dialog: keep it in the bell only.
+      dispatch(addNotification({ messageKey: "publishError", messageParams: { error: err.message }, type: "error", toast: false }));
       return;
     }
 
@@ -451,6 +457,7 @@ export function publishNowThunk() {
           messageParams: { target: r.target_label, platform: r.platform },
           type: "success",
           url: r.permalink_url || null,
+          toast: false, // detailed in the result dialog
         })
       );
     }
@@ -460,10 +467,12 @@ export function publishNowThunk() {
           messageKey: "publishFailed",
           messageParams: { target: r.target_label, platform: r.platform, error: r.error || "unknown" },
           type: "error",
+          toast: false, // detailed in the result dialog
         })
       );
     }
 
+    dispatch(setPublishResult({ phase: "done", ok, failed, skipped }));
     dispatch(setStatus(ok.length > 0 ? "published" : "error"));
   };
 }

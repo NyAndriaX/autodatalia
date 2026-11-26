@@ -9,6 +9,9 @@ const initialState = {
   mobileNavOpen: false, // off-canvas sidebar drawer on small screens
   activeView: "dashboard", // "dashboard" | "creation" | "automation" | "calendar" | "library" | "videos" | "analytics" | "credits" | "settings"
   notifications: [], // local in-app events (pushed by thunks)
+  // Live "publish now" outcome shown in the result dialog:
+  // null | { phase: "publishing", platforms } | { phase: "done", ok, failed, skipped }
+  publishResult: null,
   searchQuery: "",
   // "light" | "dark" | "system" — the *preference*; resolved value lives on <html>
   theme: "system",
@@ -90,6 +93,12 @@ const uiSlice = createSlice({
        which opened the link in a new tab. */
     markAllNotificationsRead: (state) => {
       for (const n of state.notifications) n.read = true;
+    },
+    setPublishResult: (state, action) => {
+      state.publishResult = action.payload;
+    },
+    clearPublishResult: (state) => {
+      state.publishResult = null;
     },
     clearNotifications: (state) => {
       state.notifications = [];
@@ -192,6 +201,8 @@ export const {
   markNotificationRead,
   markAllNotificationsRead,
   clearNotifications,
+  setPublishResult,
+  clearPublishResult,
   setSearchQuery,
   setSearchStatus,
   setSearchResults,

@@ -1178,5 +1178,21 @@
     "createWorkspacePrompt": "Nom de votre nouvel espace",
     "workspaceCreated": "Espace créé",
     "createFailed": "Échec de la création de l'espace"
+  },
+  "publishResult": {
+    "publishing": "Publication en cours…",
+    "publishingDesc": "Envoi vers {platforms}. Cela prend quelques secondes.",
+    "success": "Publié avec succès 🎉",
+    "successDesc": "Votre post est en ligne sur {count, plural, one {# compte} other {# comptes}}.",
+    "partial": "Publication partielle",
+    "partialDesc": "{ok, plural, one {# compte publié} other {# comptes publiés}}, {failed, plural, one {# problème} other {# problèmes}}.",
+    "failed": "Échec de la publication",
+    "failedDesc": "Aucun compte n'a pu être publié.",
+    "published": "Publié",
+    "viewPost": "Voir le post",
+    "notConnected": "Aucun compte connecté pour ce réseau",
+    "errorReason": "Erreur : {error}",
+    "newPost": "Nouveau post",
+    "close": "Fermer"
   }
 }
