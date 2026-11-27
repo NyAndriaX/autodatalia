@@ -447,10 +447,45 @@ def _save_cache(user_id: str | int | None = None) -> None:
         pass  # cache is best-effort; never break a request over it
 
 
+def _today_local():
+    """Today's date in the team's configured timezone (DATALIA_DEFAULT_TZ)."""
+    from datetime import datetime
+
+    from .timezones import resolve_zoneinfo
+
+    return datetime.now(resolve_zoneinfo(None))
+
+
 def _cache_key(*parts: Any) -> str:
+    # Prompts now carry today's date (see _with_current_date), so a cached
+    # answer is only reused on the day it was produced.
     return hashlib.sha256(
-        json.dumps(parts, sort_keys=True, default=str).encode("utf-8")
+        json.dumps((*parts, _today_local().date().isoformat()), sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()
+
+
+def _with_current_date(payload: dict[str, Any]) -> dict[str, Any]:
+    """Tell the model what today's date is.
+
+    Models only know their training cut-off, so generated posts said things
+    like "in 2024" in 2026. The date goes into the system message (or a new
+    one is prepended), so every text generation path gets it.
+    """
+    now = _today_local()
+    note = (
+        f"Today's date is {now.strftime('%A %d %B %Y')} ({now.date().isoformat()}). "
+        "When a year, date, season or period matters, use this date and never "
+        "assume an earlier year."
+    )
+    messages = list(payload.get("messages") or [])
+    first = messages[0] if messages else {}
+    if first.get("role") == "system" and isinstance(first.get("content"), str):
+        if note in first["content"]:
+            return payload
+        messages[0] = {**first, "content": first["content"].rstrip() + "\n\n" + note}
+    else:
+        messages.insert(0, {"role": "system", "content": note})
+    return {**payload, "messages": messages}
 
 
 def _cache_get(key: str, *, user_id: str | int | None = None) -> Any | None:
@@ -595,6 +630,7 @@ async def _post_chat(
     if not cfg.ai_api_key:
         raise HTTPException(status_code=500, detail="AI_API_KEY is not configured.")
 
+    payload = _with_current_date(payload)
     sent = _with_google_thinking_disabled(payload, cfg.ai_api_base_url)
     headers = {
         "Authorization": f"Bearer {cfg.ai_api_key}",

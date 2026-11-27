@@ -111,6 +111,9 @@ def _refiner_and_flux(monkeypatch, chat_statuses):
         return None
 
     monkeypatch.setattr(media_generation.asyncio, "sleep", no_sleep)
+    # assert_safe_url resolves DNS for real: offline/flaky DNS would make the
+    # refiner bail out before any (mocked) call, so stub it in these tests.
+    monkeypatch.setattr(media_generation, "assert_safe_url", lambda url: None)
     monkeypatch.setattr(settings, "ai_image_model", FLUX)
     monkeypatch.setattr(settings, "cloudflare_account_id", ACCOUNT)
     monkeypatch.setattr(settings, "cloudflare_api_token", "cf-token")
